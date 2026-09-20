@@ -23,6 +23,8 @@ import type {
   ListMcpToolsRequest,
   ListMcpToolsResult,
   McpMutationResult,
+  ScanClaudeMcpRequest,
+  ScanClaudeMcpResult,
 } from '../types.ts'
 import type { PluginInventorySnapshot } from '@deepseek-ai/dsh-host-plugin-inventory/types'
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
@@ -111,6 +113,8 @@ export interface McpAuthoringActions {
   describeMcp: (request: DescribeMcpRequest) => Promise<DescribeMcpResult>
   /** Connect once with a spec and report the tools it publishes. */
   listMcpTools: (request: ListMcpToolsRequest) => Promise<ListMcpToolsResult>
+  /** Read the MCP servers the Claude Code configuration files declare. */
+  scanClaudeMcp: (request: ScanClaudeMcpRequest) => Promise<ScanClaudeMcpResult>
 }
 
 /** Snapshot the section renders. */
@@ -152,6 +156,8 @@ export interface McpSectionFace {
   describeMcp: (request: DescribeMcpRequest) => Promise<DescribeMcpResult>
   /** List the tools a connection spec publishes through the Host Remote. */
   listMcpTools: (request: ListMcpToolsRequest) => Promise<ListMcpToolsResult>
+  /** Read the MCP servers the Claude Code configuration files declare. */
+  scanClaudeMcp: (request: ScanClaudeMcpRequest) => Promise<ScanClaudeMcpResult>
   /**
    * Keys of the allowed rows the Host holds unmounted because the loading mode
    * does not preload. The list uses them to tell "disabled by the user" apart
@@ -241,6 +247,7 @@ export class McpSettingsController {
       disableMcp: this.authoring.disableMcp,
       describeMcp: this.authoring.describeMcp,
       listMcpTools: this.authoring.listMcpTools,
+      scanClaudeMcp: this.authoring.scanClaudeMcp,
       suppressedMcps: this.suppressed,
       mcps: this.mcps,
       presets: this.presets,

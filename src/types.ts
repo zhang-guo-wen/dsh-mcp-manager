@@ -138,8 +138,77 @@ export interface McpGateStateResult {
   readonly suppressed: readonly string[]
 }
 
-/** Failure details owned by the MCP authoring Remote. */
-declare module '@deepseek-ai/dsh-typert-protocol' {
+/** Request the MCP servers the Claude Code configuration files declare. */
+export interface ScanClaudeMcpRequest {
+  /**
+   * Working directory whose project scope should be read from the user file's
+   * `projects` map and from `<cwd>/.mcp.json`. Omitted means the Host's own
+   * working directory.
+   */
+  readonly cwd?: string
+}
+
+/** Which configuration file an imported entry was read from. */
+export type ClaudeMcpSourceLabel = 'user' | 'projectScope' | 'settings' | 'projectFile'
+
+/** Why a scanned source or entry could not be offered for import. */
+export type ClaudeMcpProblem =
+  | 'missing'
+  | 'unreadable'
+  | 'malformed'
+  | 'too-large'
+  | 'unsupported'
+  | 'unsupported-name'
+
+/** One MCP server found in a Claude Code configuration file. */
+export interface ClaudeMcpEntry {
+  /** The server's name as its configuration file declares it. */
+  readonly serverName: string
+  /** Id of the source this entry came from. */
+  readonly sourceId: string
+  /** Which kind of file it was read from. */
+  readonly sourceLabel: ClaudeMcpSourceLabel
+  /** Absolute path of the file it was read from. */
+  readonly sourcePath: string
+  /** The `projects` key this entry came from, for a per-directory scope. */
+  readonly sourceDetail?: string
+  /** The parsed transport, ready to hand to `addMcp`. */
+  readonly spec: McpSpec
+  /**
+   * Names of the `env`/`headers` keys the entry declares, so the dialog can say
+   * which secrets an import would carry without printing their values. The
+   * values themselves live in `spec`, which the import writes verbatim.
+   */
+  readonly envKeys: readonly string[]
+  /** Another entry earlier in the scan already used this server name. */
+  readonly duplicate: boolean
+  /** Set when the entry cannot be imported; `spec` is then a placeholder. */
+  readonly problem?: ClaudeMcpProblem
+}
+
+/** One configuration file that was read, or skipped. */
+export interface ClaudeMcpSource {
+  /** Stable id addressing this source within one scan result. */
+  readonly id: string
+  /** Which kind of file this is. */
+  readonly label: ClaudeMcpSourceLabel
+  /** Absolute path that was inspected. */
+  readonly path: string
+  /** The `projects` key, for a per-directory scope. */
+  readonly sourceDetail?: string
+  /** Servers this source declares, in the file's own order. */
+  readonly entries: readonly ClaudeMcpEntry[]
+  /** Set when the file could not be read at all. */
+  readonly problem?: ClaudeMcpProblem
+}
+
+/** Every MCP server the Claude Code configuration files declare. */
+export interface ScanClaudeMcpResult {
+  /** Sources that exist and were readable, in scan order. */
+  readonly sources: readonly ClaudeMcpSource[]
+}
+
+/** Failure details owned by the MCP authoring Remote. */declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
     /** The requested composition or MCP row does not exist. */
     'mcp/not-found': { readonly target: McpTarget; readonly entryId?: string }

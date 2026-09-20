@@ -79,5 +79,6 @@ export const TYPERT_REMOTE: TypertRemoteContribution = {
     descriptor('describeMcp'),
     descriptor('listMcpTools'),
     descriptor('gateState'),
+    descriptor('scanClaudeMcp'),
   ],
 }

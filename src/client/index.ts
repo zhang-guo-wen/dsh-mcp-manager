@@ -49,6 +49,8 @@ import type {
   McpGateStateRequest,
   McpGateStateResult,
   McpMutationResult,
+  ScanClaudeMcpRequest,
+  ScanClaudeMcpResult,
 } from '../types.ts'
 
 export type { McpSectionProps } from './McpSection.tsx'
@@ -73,6 +75,7 @@ interface McpManagerNamespace {
   describeMcp(request: DescribeMcpRequest): Promise<RemoteResult<DescribeMcpResult>>
   listMcpTools(request: ListMcpToolsRequest): Promise<RemoteResult<ListMcpToolsResult>>
   gateState(request: McpGateStateRequest): Promise<RemoteResult<McpGateStateResult>>
+  scanClaudeMcp(request: ScanClaudeMcpRequest): Promise<RemoteResult<ScanClaudeMcpResult>>
 }
 
 /** Unwrap a Typert `RemoteResult` or surface the Host failure. */
@@ -112,6 +115,7 @@ export async function apply(ctx: Context): Promise<void> {
     disableMcp: request => unwrapRemote(() => mcpMgr().disableMcp(request)),
     describeMcp: request => unwrapRemote(() => mcpMgr().describeMcp(request)),
     listMcpTools: request => unwrapRemote(() => mcpMgr().listMcpTools(request)),
+    scanClaudeMcp: request => unwrapRemote(() => mcpMgr().scanClaudeMcp(request)),
   }
   const presets = async (): Promise<readonly McpPresetOption[]> => {
     const result = await ctx.remote.pluginInventory.list()

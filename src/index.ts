@@ -33,6 +33,8 @@ import {
 
 export { McpManager } from './mcp-remote.ts'
 export { assertServerName, mcpEntryConfig, specFromEntryConfig } from './mcp-config.ts'
+export { flattenSpec, parseSpecText, parseSpecValue, secretKeys, serverNameFromCommand, specFromObject } from './mcp-spec.ts'
+export { scanClaudeMcp } from './claude-import.ts'
 export { MCP_LOADING_MODES, parseMcpLoadingMode, registerMcpTools } from './lazy-mcp.ts'
 export type { McpLoadingMode } from './lazy-mcp.ts'
 export { admits, filterHidesAnything, filterMcpTools, parseMcpToolFilter, toolRuleEntries } from './mcp-tool-filter.ts'
@@ -42,6 +44,15 @@ export type { McpPreloadGate, McpRowGateState } from './mcp-gate.ts'
 export { MCP_SETTINGS_NAMESPACE, registerMcpSettings } from './settings.ts'
 export type { McpSettingsConfig, McpSettingsFlags, McpSettingsSource } from './settings.ts'
 export type { McpSpec, McpTarget } from './types.ts'
+export type {
+  ClaudeMcpEntry,
+  ClaudeMcpProblem,
+  ClaudeMcpSource,
+  ClaudeMcpSourceLabel,
+  ScanClaudeMcpRequest,
+  ScanClaudeMcpResult,
+} from './types.ts'
+export type { AnyRecord as McpSpecRecord } from './mcp-spec.ts'
 export type { McpEntryConfig, McpTransportConfig } from './mcp-config.ts'
 
 /** Cordis plugin name used by loader diagnostics. */

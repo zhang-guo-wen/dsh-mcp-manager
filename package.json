@@ -41,6 +41,7 @@
   ],
   "scripts": {
     "build": "tsdown -c tsdown.config.ts && node build-client.mjs",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "peerDependencies": {

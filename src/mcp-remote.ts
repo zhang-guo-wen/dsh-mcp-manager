@@ -18,6 +18,7 @@ import {
   writePresetComposition,
 } from './mcp-authoring.ts'
 import { assertServerName, mcpEntryConfig, specFromEntryConfig, type McpEntryConfig } from './mcp-config.ts'
+import { scanClaudeMcp } from './claude-import.ts'
 import { connectLazy } from './lazy-mcp.ts'
 import type {
   AddMcpRequest,
@@ -32,6 +33,8 @@ import type {
   McpMutationResult,
   McpSpec,
   McpTarget,
+  ScanClaudeMcpRequest,
+  ScanClaudeMcpResult,
 } from './types.ts'
 import type { McpPreloadGate } from './mcp-gate.ts'
 
@@ -238,6 +241,21 @@ export class McpManager extends TypertRemoteService {
       // failure must not replace the tools it already read.
       await connection.client.close().catch(() => {})
     }
+  }
+
+  /**
+   * Report the MCP servers the Claude Code configuration files declare, so the
+   * settings page can offer them for import. Reads only: nothing is mounted and
+   * no composition is touched, so a scan is safe to run on every dialog open.
+   * @param request - working directory whose project scope should be read.
+   * @returns every readable source and the servers it declares, including the
+   *   ones that cannot be imported and why.
+   */
+  @Remote('scanClaudeMcp')
+  async scanClaudeMcp(request: ScanClaudeMcpRequest): Promise<ScanClaudeMcpResult> {
+    // The scan is a plain read of user-owned files, so it answers even when the
+    // gate or the Loader is mid-reconcile; only the import behind it mutates.
+    return await scanClaudeMcp(request.cwd ?? process.cwd())
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {

@@ -18,6 +18,8 @@ kind: "plugin-readme"
 - **MCP tool filters.** The edit dialog lists the methods a server publishes with every one checked; an unchecked
   method never enters context — neither listed nor callable. Wildcards are available by writing `mcp-manager.tools`
   yourself.
+- **Import an existing Claude Code setup.** One button reads the MCP servers your Claude Code configuration files
+  already declare and imports the ones you tick as global rows — no retyping commands, arguments, and API keys.
 
 MCP management was split out of
 [`dsh-claude-compat`](https://github.com/zhang-guo-wen/dsh-claude-compat) into its own plugin. The two do not depend on
@@ -132,6 +134,29 @@ What to expect:
   warns at startup when rules are configured for it.
 - **A malformed rule set hides nothing**: an unparsable value filters nothing, so a typo never empties a server.
 
+### Importing your Claude Code MCP configuration
+
+**设置 → Harness 兼容 → MCP 管理 → 导入 Claude 配置** reads the configuration files Claude Code writes and offers
+every server it finds as a checklist. Selected servers are imported as **global** rows.
+
+| Source | File |
+|---|---|
+| Claude Code user config | `~/.claude.json` → `mcpServers` |
+| Per-directory scope inside it | `~/.claude.json` → `projects["<working directory>"].mcpServers` |
+| Claude Code settings | `~/.claude/settings.json`, `settings.local.json` |
+| Project scope | `<project root>/.mcp.json` |
+
+`type` may be omitted, as Claude Code itself writes it: a `command` means stdio and a `url` means streamable HTTP.
+
+- **Nothing is modified.** The scan only reads; only the rows you tick are written, through the same path as a manually
+  added server (same validation, conflict check, and atomic write).
+- **A server whose name is already taken is not pre-selected**, and one that cannot be imported is labelled with the
+  reason instead of failing silently.
+- **A server is imported on its own.** If one fails, the rest still go through, and the failures are listed with their
+  reasons.
+- **Credentials come along.** An entry's `env` / `headers` are imported verbatim so the server can connect; the dialog
+  only shows the *names* of those keys, never their values.
+
 ## Configuration
 
 | Field | Default | Meaning |
@@ -153,14 +178,22 @@ What to expect:
 - **A preset's first mount starts and then kills each server once.** On-demand loading works by unmounting rows at
   runtime, which cannot beat the child process's spawn, so the first session to use a preset after a host restart pays
   one short start-up.
+- **Import reads Claude Code and the project `.mcp.json` only.** Cursor, Cline, Roo, and VS Code configuration files
+  are not scanned, and an import always targets the global plane; move a row into a preset afterwards if you want it
+  on-demand.
 
 ## Development
 
 Build, Cordis/Typert plugin contract, the traps, and the MCP lifecycle details live in [AGENTS.md](AGENTS.md).
+The loading decisions — why three modes, which alternatives were rejected, and how Claude's tool search compares —
+live in [docs/design-decisions.md](docs/design-decisions.md), maintained in Chinese like AGENTS.md. The comparison
+against other DSH MCP plugins and the feature roadmap it produces live in
+[docs/competitive-landscape.md](docs/competitive-landscape.md).
 
 ```sh
 npm run build      # host (tsdown) + client (rolldown ModuleLoader handoff)
 npm run typecheck
+npm test           # vitest; the repository-local vitest.config.ts is required
 ```
 
 ## License

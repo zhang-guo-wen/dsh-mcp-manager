@@ -16,6 +16,7 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 import type { AddMcpRequest, EditMcpRequest } from '../types.ts'
 import { toolRuleEntries } from '../mcp-tool-filter.ts'
 import { McpEditor, type McpEditorMode, type McpEditorRequest } from './McpEditor.tsx'
+import { ClaudeImportDialog } from './ClaudeImportDialog.tsx'
 import {
   MCP_LOADING_OPTIONS,
   mcpRowKey,
@@ -210,11 +211,12 @@ function McpRow({ server, description, suppressed, pending, onEditDescription, o
 export function McpSection(props: McpSectionProps): ReactNode {
   const {
     useMcpSettings, t, setMcpLoading, addMcp, editMcp, disableMcp, describeMcp, listMcpTools,
-    suppressedMcps, mcps, presets, updateMcpDescription, updateMcpTools,
+    suppressedMcps, mcps, presets, updateMcpDescription, updateMcpTools, scanClaudeMcp,
   } = props
   const state = useMcpSettings(snapshot => snapshot)
   const [mcpView, setMcpView] = useState<McpView>({ status: 'loading' })
   const [mcpRequest, setMcpRequest] = useState(0)
+  const [importerOpen, setImporterOpen] = useState(false)
   const [editor, setEditor] = useState<{ mode: McpEditorMode; server: McpServer | undefined; open: boolean }>({
     mode: 'add', server: undefined, open: false,
   })
@@ -272,6 +274,12 @@ export function McpSection(props: McpSectionProps): ReactNode {
   const openEdit = (server: McpServer): void => {
     setEditor({ mode: 'edit', server, open: true })
     setEditorError(null)
+    setMcpActionError(null)
+    setNotice(null)
+  }
+
+  const openImport = (): void => {
+    setImporterOpen(true)
     setMcpActionError(null)
     setNotice(null)
   }
@@ -346,9 +354,14 @@ export function McpSection(props: McpSectionProps): ReactNode {
         />
         <div className={css.mcpToolbar}>
           <p className={css.mcpSub}>{t('mcp.subtitle')}</p>
-          <Button variant="outline" size="sm" onClick={openAdd} disabled={editorBusy}>
-            {t('mcp.add')}
-          </Button>
+          <span className={css.mcpActions}>
+            <Button variant="outline" size="sm" onClick={openImport} disabled={disabled || editorBusy}>
+              {t('mcp.import')}
+            </Button>
+            <Button variant="outline" size="sm" onClick={openAdd} disabled={editorBusy}>
+              {t('mcp.add')}
+            </Button>
+          </span>
         </div>
         {mcpView.status === 'loading' ? <p className={css.mcpStatus}>{t('mcp.loading')}</p> : null}
         {mcpView.status === 'error' ? (
@@ -404,6 +417,27 @@ export function McpSection(props: McpSectionProps): ReactNode {
           t={t}
           onClose={closeEditor}
           onSubmit={(request) => { void submitEditor(request) }}
+        />
+        <ClaudeImportDialog
+          open={importerOpen}
+          busy={editorBusy}
+          error={editorError}
+          scanClaudeMcp={scanClaudeMcp}
+          addMcp={async (request) => {
+            setEditorBusy(true)
+            try {
+              return await addMcp(request)
+            } finally {
+              setEditorBusy(false)
+            }
+          }}
+          servers={mcpView.status === 'ready' ? mcpView.servers : []}
+          t={t}
+          onClose={() => { setImporterOpen(false) }}
+          onImported={() => {
+            setNotice(t('mcp.notice.added'))
+            refreshMcps()
+          }}
         />
       </div>
     </div>

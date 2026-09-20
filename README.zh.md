@@ -16,6 +16,8 @@ kind: "plugin-readme"
   建立的连接会自动关闭。
 - **MCP 工具过滤。** 在 MCP 的编辑弹窗里列出这台服务器提供的方法，**默认全部勾选**；取消勾选的方法不会进上下文 ——
   既不列出也不能调用。需要通配符时也可以手写 `mcp-manager.tools`。
+- **导入已有的 Claude Code 配置。** 一个按钮读取你的 Claude Code 配置文件里已经声明的 MCP 服务器，勾选后导入为
+  全局行 —— 不用重新敲一遍命令、参数和 API key。
 
 MCP 服务器管理是从 [`dsh-claude-compat`](https://github.com/zhang-guo-wen/dsh-claude-compat) 拆出来的独立插件：
 两者互不依赖，可以只装其中一个。两个都装时，设置页会出现「Claude 兼容」与「MCP 管理」两个独立区块。
@@ -120,6 +122,27 @@ mcp-manager:
 - **`eager` 下规则不生效**，因为该模式由 harness 的 mcp-client 直接挂载整台服务器；启动时会记一条警告说明。
 - **写坏的规则不隐藏任何东西**：无法解析的值按"不过滤"处理，拼错不会让一台服务器的工具凭空消失。
 
+### 导入已有的 Claude Code 配置
+
+**设置 → Harness 兼容 → MCP 管理 → 导入 Claude 配置** 会读取 Claude Code 自己写的配置文件，把找到的服务器列成
+勾选清单，勾中的导入为**全局**行。
+
+| 来源 | 文件 |
+|---|---|
+| Claude Code 用户配置 | `~/.claude.json` 的 `mcpServers` |
+| 其中的按目录分区 | `~/.claude.json` 的 `projects["<工作目录>"].mcpServers` |
+| Claude Code 设置 | `~/.claude/settings.json`、`settings.local.json` |
+| 项目级 | `<项目根>/.mcp.json` |
+
+`type` 可以省略（Claude Code 自己就是这么写的）：有 `command` 即 stdio，有 `url` 即 streamable HTTP。
+
+- **不改动任何来源文件。** 扫描只读；只有你勾中的行会被写入，且走的是与手工新增**完全相同**的路径
+  （同样的校验、冲突检测与原子写）。
+- **名字已被占用的服务器默认不勾选**；无法导入的会直接标出原因，而不是静默失败。
+- **每台独立导入。** 其中一台失败不影响其余，失败项会在结束时连同原因一起列出。
+- **凭据会一并带过来。** 条目里的 `env` / `headers` 原样导入，服务器才连得上；弹窗只显示这些键的**名字**，
+  不显示值。
+
 ## 配置
 
 | 字段 | 默认 | 含义 |
@@ -140,14 +163,20 @@ mcp-manager:
 - **全局平面的行不受加载模式管辖**：它们总是挂载。
 - **预设首次挂载时会有一次"启动后又杀掉"**：按需加载靠运行时摘行实现，抢在子进程启动之前拦不住，所以每次
   宿主重启后第一次使用某个 preset 时会有这一下。
+- **导入只读 Claude Code 与项目的 `.mcp.json`**：不扫 Cursor / Cline / Roo / VS Code 的配置文件；且导入一律落在
+  全局平面，想要按需加载请在导入后把该行移进 preset。
 
 ## 开发
 
 构建方式、Cordis/Typert 插件契约、各处的坑与 MCP 生命周期细节见 [AGENTS.md](AGENTS.md)。
+加载相关的设计决策(为什么是三种模式、否决过哪些替代方案、Claude 的 tool search 对照)见
+[docs/design-decisions.md](docs/design-decisions.md)。同类插件的对比与下一步功能路线图见
+[docs/competitive-landscape.md](docs/competitive-landscape.md)。
 
 ```sh
 npm run build      # host（tsdown）+ client（rolldown ModuleLoader handoff）
 npm run typecheck
+npm test           # vitest；必须带仓根自带的 vitest.config.ts
 ```
 
 ## 许可

@@ -254,6 +254,20 @@
   gap: 12px;
 }
 
+/* Modal content budget: the dialogs scroll internally instead of growing the
+   page, and the action row keeps its own separator. */
+.mcpEditorContent {
+  max-height: min(70vh, 640px);
+  overflow: auto;
+}
+
+.formActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .formField {
   display: flex;
   flex-direction: column;
@@ -372,4 +386,117 @@
   color: var(--dsw-alias-label-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ---- Claude configuration import ---- */
+
+.importToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.importList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 340px;
+  overflow: auto;
+  padding: 4px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.importSource {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.importSourceHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 4px;
+}
+
+.importSourceLabel {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.importSourcePath {
+  overflow: hidden;
+  font-family: var(--ds-font-family-code);
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.importProblem {
+  margin: 0;
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--dsw-alias-state-danger, #e5484d);
+}
+
+.importRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.importRow:hover {
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.importMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.importName {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--ds-font-family-code);
+  font-size: 12.5px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.importTag {
+  font-family: var(--dsw-alias-font-family, inherit);
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  corner-shape: round;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.importTagWarn {
+  font-family: var(--dsw-alias-font-family, inherit);
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  corner-shape: round;
+  border: 0.5px solid var(--dsw-alias-state-warning-primary, #f5a524);
+  color: var(--dsw-alias-state-warning-primary, #f5a524);
+}
+
+.importMeta {
+  overflow-wrap: anywhere;
+  font-size: 11.5px;
+  color: var(--dsw-alias-label-tertiary);
 }

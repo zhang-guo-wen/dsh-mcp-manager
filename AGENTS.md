@@ -20,6 +20,10 @@ Codex 兼容与 `/btw`,这边负责 MCP。两者各有自己的设置命名空�
   这样别人可以直接从 git 安装。改完源码**记得 `npm run build` 并把 `lib/` 一起提交**。
 - `cordis.patch.yml` —— 把插件行插入组合的 bundle 层。
 - `src/remote.ts` —— 手写的客户端 `TYPERT_REMOTE` 贡献对象。
+- `docs/design-decisions.md` —— 加载相关决策的参考页(为什么这样设计、否决过什么、Claude 先例对照)。
+  改加载模式、闸门、工具过滤的语义时先读它,并把新决策补进去。
+- `docs/competitive-landscape.md` —— 同类插件对比与功能路线图(社区三簇做法、逐维度差距、P0-P3 待办)。
+  决定"下一步做什么"前先读它,做完一条就地更新。
 
 ## 构建
 
@@ -37,8 +41,8 @@ Codex 兼容与 `/btw`,这边负责 MCP。两者各有自己的设置命名空�
 
 - host 插件导出 `{ name, inject, Config, apply }`;`apply(ctx, config)` 里注册能力,注册一律走 `ctx.effect(...)` 收口。
 - 依赖的服务用 `ctx.get('x')` 取,**不要** `ctx.x` 属性访问 —— 未 inject 的服务属性在 Cordis 的 inject guard 下会抛错。
-- client 半边必须打成 `window.__ModuleLoader__.load({ id, factory })` 手接格式;id 与 `build-client.mjs`
-  里的 `HANDOFF_ID` 一致。改动 client 后要 bump 它或强刷浏览器,否则浏览器一直跑旧 bundle。
+- client 半边必须打成 `window.__ModuleLoader__.load({ id, factory })` 手接格式;`HANDOFF_ID` 必须始终等于
+  `package.json` 的包名。Host 用内容 revision 更新 bundle URL;不要通过修改 handoff id 做缓存失效,否则 Web 启动图找不到该插件。
 
 ## Typert Remote(前后端通信)
 
@@ -103,6 +107,17 @@ await mount?.tree.refresh?.()
   的作用域**,原生注册工具。
 - `lazy`:允许的行**默认不挂载**;**用 MCP SDK 直连、完全不注册工具**;`mcp_load` 把工具 schema 作为结果
   返回,模型用固定的 `mcp_call` 代理调用 → **工具列表永不变,请求缓存前缀零失效**。
+
+三种模式的取舍、否决过的替代方案,以及 Claude Code / Messages API 的延迟加载先例对照,见
+[docs/design-decisions.md](docs/design-decisions.md);本节只讲实现契约。
+
+**作用域语义(preset 行 vs `mcp_load`):** preset 平面的行是 standing mount,服务的是**该 preset 的所有会话,
+以及它们的子代理** —— 子代理加入的是父的 **preset** 而不是父 agent(`applyChildComposition` 调
+`agentPresets.composeFrom(childCtx, parent.ctx)`,后者落成 `bindScopeParent(agentKey, standing.key)`),
+所以 preset 行的工具会顺着 preset 继承下去。反过来,`mcp_load` 挂进的是**调用方那一个 agent 的 ctx**,
+父会话加载的服务器不会漏给子代理(父的 `restrict()` 同理到不了子代理 —— AllenLogo 的 README 记过同一条实测)。
+要"绑到 agent 且它的子代理也能用",用 preset 行;要"只给这一个会话",用 `mcp_load`。
+同类插件的做法对比见 [docs/competitive-landscape.md](docs/competitive-landscape.md) 的「作用域分层」。
 
 `mcp_list` / `mcp_load` / `mcp_unload` / `mcp_call` 让一个会话**按需启动**某台 MCP,省掉工具 schema 的 token
 (`mcp_call` 在 `dynamic` 与 `lazy` 下都注册,见"工具过滤";`eager` 下一个按需工具都不注册):
@@ -190,16 +205,58 @@ standing 作用域里 `ctx.tools.register`),结果 **preset 每 ~5 秒被重挂�
 - **连不上就不动规则。** `tools === null` 时保存只提交连接配置 —— 否则一次连接抖动会清掉用户已有的过滤。
 - **每次打开弹窗会真起一个 MCP 连接**(stdio 是新的子进程,`npx -y` 那种 1-3 秒)。edit 模式自动拉,add 模式靠按钮,
   因为新增时表单里的 spec 常常还是空的。
-- **改 client 后必须重建 `lib/client.js` 并在浏览器强刷**(`HANDOFF_ID` 没 bump,浏览器会继续跑旧 bundle)。
+- **改 client 后必须重建 `lib/client.js`**;Host 用内容 revision 让浏览器加载新 bundle,`HANDOFF_ID` 不得改变。
   改了 CSS module 要核对类名两边都在:JSX 引用了 CSS 里没有的类只得到 `undefined`,静默无样式。
 
 ## MCP JSON 兼容
 
-编辑器的 JSON 框接受多种写法,缺省要能推断:
+### 解析器只有一份(src/mcp-spec.ts)
+
+编辑器的 JSON 框与 Claude 配置导入读的是同一批形状,所以**推断规则只实现一次**:
 
 - 省略 `type`:有 `command` → stdio;有 `url` → streamable-http。
 - `{ "<name>": { … } }` 单键映射、`{ "mcpServers": { … } }` 包装 → 用 key 当 `serverName`(标题字段为空时)。
 - 裸 spec `{ type, command, args }` → 从参数推断 `serverName`(如 `@upstash/context7-mcp` → `context7-mcp`)。
+
+`McpEditor.tsx` 曾经自带一份 `parseSpec`/`specFromObject`;导入功能需要同样的规则,两份实现必然漂移
+(表现为"弹窗收得下、导入却拒绝"),所以提取成了共享模块。**改推断规则只改 `src/mcp-spec.ts`。**
+
+## 导入 Claude 配置(src/claude-import.ts)
+
+设置页工具栏的「导入 Claude 配置」按 `scanClaudeMcp` Remote 读 Claude Code 自己的配置文件:
+
+| 来源 | 路径 | 取法 |
+|---|---|---|
+| 用户级 | `~/.claude.json` | 顶层 `mcpServers` |
+| 用户配置里的项目分区 | 同上 | `projects[<cwd>].mcpServers`,只取 cwd 命中的那条 |
+| 设置 | `~/.claude/settings.json`、`settings.local.json` | `mcpServers` |
+| 项目级 | `<cwd>/.mcp.json` | `mcpServers`,也兼容裸单键映射 |
+
+六条实现约束:
+
+1. **只读,且只写全局。** 扫描不挂载任何东西、不碰任何 composition;导入逐条调**现有的 `addMcp`**
+   (`target: { scope: 'global' }`),因此校验、冲突检测、原子写、`tree.refresh()` 与手工新增完全同一条路径。
+   **不要为导入新写一条写入路径** —— 那会绕开上面的每一项。
+2. **一个来源坏掉不能拖垮其它来源。** 文件不存在 → 整个来源不出现;存在但读不出/不是 JSON → 该来源带
+   `problem` 返回(`missing`/`unreadable`/`malformed`/`too-large`),其余来源照常导入。
+3. **名称先按 composition 规范预检。** `mcp-client` 的 `serverName` 必须匹配 `/^[A-Za-z0-9_-]{1,32}$/`,
+   所以带空格或超长的名字标成 `problem: 'unsupported-name'` 并**预先不勾选**,而不是等导入时报一句
+   "serverName must match …"。实测真实 `~/.claude.json` 里 `MiniMax` 合法、`my server` 不合法。
+4. **分批导入,单条失败不中断。** 每台各调一次 `addMcp`,失败记在自己名下,结束时汇总
+   「已导入 N 台,M 台失败」。一台重名不能让其余全部白导。
+5. **`env`/`headers` 的值必须跟着 `spec` 走**(否则导进去的服务器连不上),但 UI 只显示键名
+   (`envKeys`)。所以**不要往诊断里打 spec** —— 它带着明文凭据。
+6. **导入只写全局是有意为之**(用户选定的范围)。要导入到 preset 需要在弹窗里加 scope 选择并复用
+   `addMcp` 的 preset 分支,`writePresetComposition` + `refreshPreset` 那套已经就绪。
+
+`scanClaudeMcp(cwd, home?)` 的 `home` 可注入,`tests/claude-import.spec.ts` 就是靠它跑临时 fixtures;
+默认取真实 `homedir()`。
+
+## 测试
+
+`npm test` 跑 `vitest run`,配置在仓根 `vitest.config.ts`。**必须带这份本地配置**:本仓是 harness checkout
+的**兄弟目录**而不是它的 workspace,裸 `vitest run` 会继承 harness 根配置,一个 spec 都收不到
+(`No test files found`)。配置把 `root` 钉在本仓、只收 `tests/**/*.spec.ts`。
 
 ## 部署
 
@@ -212,7 +269,7 @@ dsh plugin --profile web add github:zhang-guo-wen/dsh-mcp-manager               
 
 本地目录安装时 pnpm 建的是 **symlink(记作 `link:`)** —— 所以重建 `lib/` 后**重启即生效,无需重装**。
 `file:` 依赖则可能退化成物理拷贝,那时改源码不会影响正在跑的 dsh,要重装或手动同步 `lib/`。
-client 产物变了还要强刷浏览器(或 bump `HANDOFF_ID`)。
+client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏览器,不要修改 `HANDOFF_ID`。
 
 它与 `@zhang-guo-wen/dsh-claude-compat` 互相独立:可以只装其中一个。两个都装时,设置页会出现
 「Claude 兼容」与「MCP 管理」两个独立区块。
@@ -241,8 +298,10 @@ client 产物变了还要强刷浏览器(或 bump `HANDOFF_ID`)。
 5. **新 Remote 方法漏掉 `src/remote.ts` 的 descriptor** → 客户端调用失败,浏览器可能只显示
    "Failed to load plugins",不打印原因。
 6. CSS module 里 JSX 引用但 CSS 未定义的类 → `undefined`,静默无样式(改样式后核对类名齐全)。
-7. 改 client 不 bump `HANDOFF_ID` / 不硬刷新 → 浏览器跑旧 bundle(表现为"改动没生效/开关不变")。
+7. `HANDOFF_ID` 不等于包名 → bundle 加载后没有注册启动图等待的 factory,Web 汇总为 `import failed`。
 8. 用 `standingKeyFor` 做实时更新 → 每次整棵重组、重启所有 MCP、3-4 秒。
 9. 直接用模块级 `livePresetMounts` 而不经 loader 解析 → 模块实例不同、返回空、更新无效。
 10. 编辑 preset 后不调 `tree.refresh()` → 文件写了但运行态不变、UI 开关不动。
 11. **在设置 schema 里校验 `tools` 值** → 一个写错的规则让整个命名空间回退,用户所有 MCP 设置静默失效。
+12. **把 `env`/`headers` 的值打进日志或错误消息** → 明文凭据落进会话与日志文件;导入的服务器恰恰都是带 token 的。
+13. **给导入单写一条写入路径** → 绕开 `addMcp` 的冲突检测与原子写,重名会写出重复行。
