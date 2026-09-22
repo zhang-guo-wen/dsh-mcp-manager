@@ -4,19 +4,15 @@ import { access, constants } from 'node:fs/promises'
 import { Context } from '@deepseek-ai/cordis'
 import type { Entry, EntryOptions, EntryTree } from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
-import type {} from '@deepseek-ai/dsh-agent-presets'
-import { livePresetMounts } from '@deepseek-ai/dsh-agent-presets'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import {
   entryIds,
   findEntryRows,
   MCP_CLIENT_MODULE,
   presetLeafId,
-  readEntryRows,
-  type PresetFile,
   writeEntryListFile,
-  writePresetComposition,
 } from './mcp-authoring.ts'
+import { findPresetDeclaration, writePresetRows, type PresetDeclaration } from './preset-source.ts'
 import { assertServerName, mcpEntryConfig, specFromEntryConfig, type McpEntryConfig } from './mcp-config.ts'
 import { scanClaudeMcp } from './claude-import.ts'
 import { connectLazy } from './lazy-mcp.ts'
@@ -62,9 +58,9 @@ async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   }
 }
 
-/** Minimal optional surface read from the agent-preset service. */
+/** Minimal optional surface read from the agent-preset registry. */
 interface AgentPresetResolver {
-  resolve(id: string): Promise<PresetFile>
+  resolve(id: string): Promise<{ readonly broken?: string }>
 }
 
 /** The file-backed Include fields needed to guard global persistence. */
@@ -186,7 +182,7 @@ export class McpManager extends TypertRemoteService {
 
     const preset = await this.resolvePreset(target)
     const entryId = presetLeafId(request.entryId)
-    const rows = await readEntryRows(preset.path)
+    const rows = preset.rows
     const row = this.presetMcpRow(rows, entryId, target)
     const serverName = serverNameOf(row) ?? entryId
     if (row.config === undefined || typeof row.config !== 'object' || row.config === null) {
@@ -299,7 +295,7 @@ export class McpManager extends TypertRemoteService {
 
     const preset = await this.resolvePreset(target)
     const patch = { insert: [{ id: entryId, name: MCP_CLIENT_MODULE, config }] }
-    await writePresetComposition(preset, target, patch, (rows) => {
+    await writePresetRows(this.ctx, preset, patch, (rows) => {
       if (entryIds(rows).has(entryId)) {
         throw conflict(target, entryId, undefined, 'the row id is already in use')
       }
@@ -307,7 +303,6 @@ export class McpManager extends TypertRemoteService {
         throw conflict(target, entryId, request.serverName, 'the serverName is already in use')
       }
     }, this.warnPatch)
-    await this.refreshPreset(preset.id)
     return { target, entryId, serverName: request.serverName, disabled: false }
   }
 
@@ -335,12 +330,11 @@ export class McpManager extends TypertRemoteService {
     const entryId = presetLeafId(request.entryId)
     let disabled = false
     const patch = { id: entryId, name: MCP_CLIENT_MODULE, config }
-    await writePresetComposition(preset, target, patch, (rows) => {
+    await writePresetRows(this.ctx, preset, patch, (rows) => {
       const row = this.presetMcpRow(rows, entryId, target)
       disabled = row.disabled === true
       this.assertServerNameAvailable(rows, entryId, request.serverName, target)
     }, this.warnPatch)
-    await this.refreshPreset(preset.id)
     return { target, entryId, serverName: request.serverName, disabled }
   }
 
@@ -367,87 +361,45 @@ export class McpManager extends TypertRemoteService {
     const preset = await this.resolvePreset(target)
     const entryId = presetLeafId(request.entryId)
     let serverName = entryId
-    await writePresetComposition(preset, target, { id: entryId, name: MCP_CLIENT_MODULE, disabled: request.disabled }, (rows) => {
+    await writePresetRows(this.ctx, preset, { id: entryId, name: MCP_CLIENT_MODULE, disabled: request.disabled }, (rows) => {
       const row = this.presetMcpRow(rows, entryId, target)
       serverName = serverNameOf(row) ?? entryId
     }, this.warnPatch)
-    await this.refreshPreset(preset.id)
     return { target, entryId, serverName, disabled: request.disabled }
   }
 
-  private async resolvePreset(target: Extract<McpTarget, { scope: 'preset' }>): Promise<PresetFile> {
-    const presets = this.ctx.get('agentPresets') as AgentPresetResolver | undefined
-    if (presets === undefined) {
-      throw new RemoteError('mcp/unavailable', 'agent preset MCP authoring is unavailable', {
-        reason: 'agentPresets is not mounted in this composition',
-      })
-    }
-    try {
-      return await presets.resolve(target.agentPreset)
-    } catch (cause) {
-      if (cause instanceof RemoteError) throw cause
-      throw new RemoteError('mcp/not-found', `MCP preset "${target.agentPreset}" was not found`, {
-        target,
-      }, { cause })
-    }
-  }
-
   /**
-   * Apply a just-written preset composition to its live standing mount.
+   * Resolve one preset's declaration, refusing an activation failure before any
+   * edit is attempted.
    *
-   * Re-reads the file through the mount's own `Include` tree (`refresh()`),
-   * which diffs child entries and mounts/unmounts only what changed. A full
-   * `standingKeyFor` recompose would start a new generation and remount every
-   * row — restarting every MCP child process in the preset — so the targeted
-   * refresh is the difference between a sub-second toggle and several seconds.
-   * A preset that is not mounted has nothing live to update; a failure is
-   * logged rather than thrown so a committed file write still reports success.
-   * @param agentPreset - preset id whose composition was just written.
+   * The registry answers whether the declaration currently activates; the
+   * declaration row itself comes from the profile patch, which is also where a
+   * write goes. A composition without the registry still authors fine — only the
+   * activation diagnostic is unavailable then.
+   * @param target - the preset-scoped MCP target being authored.
+   * @returns the declaration row and its current child rows.
+   * @throws an MCP Remote error when the preset is unknown or broken.
    */
-  private async refreshPreset(agentPreset: string): Promise<void> {
-    try {
-      const mountsFor = await this.mountRegistry()
-      if (mountsFor !== undefined) {
-        const mount = mountsFor().filter(candidate => candidate.presetId === agentPreset).at(-1)
-        const refresh = (mount?.tree as { refresh?: () => Promise<void> } | undefined)?.refresh
-        if (refresh !== undefined && mount !== undefined) {
-          await refresh.call(mount.tree)
-          return
-        }
-      }
-      // Fallback: no reachable standing tree, so recompose through the service
-      // so the change still goes live (correct, but restarts the whole preset).
-      const presets = this.ctx.get('agentPresets') as { standingKeyFor?(id?: string): Promise<unknown> } | undefined
-      if (presets?.standingKeyFor !== undefined) {
-        await presets.standingKeyFor(agentPreset)
-      }
-    } catch (error) {
-      this.warnPatch(`mcp-manager: preset "${agentPreset}" refresh failed after edit: ${String(error)}`)
-    }
-  }
-
-  /**
-   * Resolve the `livePresetMounts` reader from the agent-presets instance the
-   * Loader actually uses. A plain import can land on a second copy of the
-   * package (the harness resolves the roster from its own graph), so this goes
-   * through the Loader's internal resolver with the harness base first, then
-   * falls back to the statically imported reader.
-   * @returns the mount reader, or undefined when neither path is available.
-   */
-  private async mountRegistry(): Promise<(() => readonly { presetId: string; tree: unknown }[]) | undefined> {
-    const loader = this.ctx.get('loader') as { internal?: { import(spec: string, base: string, options: object): Promise<unknown> } } | undefined
-    const base = (this.ctx as unknown as { baseUrl?: string }).baseUrl
-    if (loader?.internal !== undefined && base !== undefined) {
+  private async resolvePreset(target: Extract<McpTarget, { scope: 'preset' }>): Promise<PresetDeclaration> {
+    const presets = this.ctx.get('agentPresets') as AgentPresetResolver | undefined
+    if (presets !== undefined) {
+      let broken: string | undefined
       try {
-        const mod = await loader.internal.import('@deepseek-ai/dsh-agent-presets', base, {}) as { livePresetMounts?: () => readonly { presetId: string; tree: unknown }[] }
-        if (mod.livePresetMounts !== undefined) return mod.livePresetMounts
-      } catch {
-        // Swallows only the internal-resolver failure; the static reader below
-        // is the fallback, and the outer call treats an empty registry as
-        // "nothing to refresh" rather than an error.
+        broken = (await presets.resolve(target.agentPreset)).broken
+      } catch (cause) {
+        if (cause instanceof RemoteError) throw cause
+        throw new RemoteError('mcp/not-found', `MCP preset "${target.agentPreset}" was not found`, {
+          target,
+        }, { cause })
+      }
+      if (broken !== undefined) {
+        throw new RemoteError('mcp/invalid', `MCP preset "${target.agentPreset}" is broken: ${broken}`, {
+          target,
+          reason: broken,
+        })
       }
     }
-    return () => livePresetMounts()
+    return findPresetDeclaration(this.ctx, target.agentPreset)
   }
 
   private async globalInclude(target: Extract<McpTarget, { scope: 'global' }>): Promise<{ entry: Entry; tree: WritableIncludeTree }> {

@@ -2,25 +2,19 @@
  * MCP manager user settings: the loading policy, the row descriptions, and the
  * per-row tool filters the management surface persists.
  *
- * One namespace (`mcp-manager`) owns every field this plugin exposes to the
- * settings UI. Values resolve through `ctx.settings` (the settings seam) so they
- * are user-editable in a local document and persist across restarts, falling
- * back to a composition `base` (from the plugin `config`) when the user has not
- * overridden them. The settings service is optional: without one mounted, the
- * reader stays pinned to the composition `base`.
- *
- * This file deliberately accesses `ctx.settings` through a small local interface
- * rather than a hard dependency on the settings package, so this package stays
- * composable in trees that do not mount the settings provider.
+ * The namespace is this plugin's Loader row Config, so the profile entry id
+ * (`mcp-manager`) is what the settings page addresses and the schema below is
+ * the live form it renders. Every field is volatile: a committed change reaches
+ * the running plugin without a remount, and the reader below always observes
+ * the value as it stands at call time.
  *
  * @module @zhang-guo-wen/dsh-mcp-manager/settings
  */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type Schema from '@deepseek-ai/schemastery'
 
-/** Settings namespace owned by this plugin. */
+/** Settings namespace owned by this plugin: its Loader row id. */
 export const MCP_SETTINGS_NAMESPACE = 'mcp-manager'
 
 /** Every field the MCP management surface persists. */
@@ -46,17 +40,32 @@ export interface McpSettingsFlags {
   tools: Record<string, unknown>
 }
 
-/** Schema served to settings clients for this namespace. */
-export const MCP_SETTINGS_SCHEMA: Schema<McpSettingsFlags> = z.object({
-  loading: z.string().default('dynamic'),
-  descriptions: z.dict(String).default({}),
-  // Values stay unvalidated by the schema on purpose: the settings document is
-  // hand-editable, and a malformed entry must fail that one row's filter at
-  // read time instead of rejecting the whole namespace's stored section.
-  tools: z.dict(z.any()).default({}),
+/** The same fields as live configuration. */
+export interface Config {
+  /** Loading mode, read fresh on every commit. */
+  loading: Volatile<string>
+  /** Authoring descriptions, keyed by row. */
+  descriptions: Volatile<Record<string, string>>
+  /** Per-row tool filters, keyed by row. */
+  tools: Volatile<Record<string, unknown>>
+}
+
+/** Schema served to settings clients for this namespace.
+ * The inferred type is the source of truth: `.volatile()` produces the `Volatile` accessors above. */
+export const Config = z.object({
+  // Deliberately a plain string rather than an enum: the settings document is
+  // hand-editable, and a rejected value rolls the whole namespace back to its
+  // last good section. `parseMcpLoadingMode` converges an unrecognized mode at
+  // the read site instead.
+  loading: z.string().default('dynamic').volatile(),
+  descriptions: z.dict(String).default({}).volatile(),
+  // Values stay unvalidated by the schema on purpose, for the same reason: a
+  // malformed entry must fail that one row's filter at read time rather than
+  // rejecting the whole namespace.
+  tools: z.dict(z.any()).default({}).volatile(),
 })
 
-/** Composition-layer defaults for this namespace. */
+/** Composition-layer defaults accepted under the row's `config:`. */
 export interface McpSettingsConfig {
   /** Initial loading mode inherited when the user document does not override it. */
   loading?: string
@@ -66,69 +75,17 @@ export interface McpSettingsConfig {
 export type McpSettingsSource = () => McpSettingsFlags
 
 /**
- * Minimal local shape of the `settings.register` owner scope we consume. The
- * value types are the same as `@deepseek-ai/dsh-settings` exposes; declaring
- * them here keeps this package free of a hard reference to that service so it
- * can be composed even where the provider is absent.
- */
-interface SettingsScopeLike<T> {
-  get(): T
-  watch(callback: (next: T, prev: T) => void): () => void
-}
-
-interface SettingsRegisterOptionsLike<T> {
-  base?: Partial<T>
-  applies?: 'live' | 'restart'
-}
-
-interface SettingsProviderLike {
-  register<T>(
-    namespace: string,
-    schema: unknown,
-    options?: SettingsRegisterOptionsLike<T>,
-  ): SettingsScopeLike<T>
-}
-
-/**
- * Register the `mcp-manager` namespace and return a live reader.
+ * Read the namespace's fields as plain values.
  *
- * When the settings service is mounted, the namespace is registered and the
- * reader follows committed changes. Without a settings service the reader stays
- * pinned to the composition `base`. A namespace already owned by another plugin
- * keeps that owner's reader — we never throw.
- *
- * @param ctx - plugin context (uses `ctx.get('settings')` when present).
- * @param config - composition defaults for the loading mode.
- * @param onCommitted - observer invoked after each committed change.
- * @returns a thunk returning the current flags.
+ * The gate and the tool filter call the returned thunk at their own commit
+ * points, so a committed change needs no listener here.
+ * @param config - the plugin's resolved configuration.
+ * @returns a thunk returning the flags as they stand at call time.
  */
-export function registerMcpSettings(
-  ctx: Context,
-  config: McpSettingsConfig = {},
-  onCommitted?: (flags: McpSettingsFlags) => void,
-): McpSettingsSource {
-  const base: McpSettingsFlags = {
-    loading: config.loading ?? 'dynamic',
-    descriptions: {},
-    tools: {},
-  }
-  let source: McpSettingsSource = () => ({ ...base })
-  ctx.inject(['settings'], (settingsCtx) => {
-    const provider = (settingsCtx as unknown as { settings: SettingsProviderLike }).settings
-    try {
-      const scope = provider.register<McpSettingsFlags>(
-        MCP_SETTINGS_NAMESPACE,
-        MCP_SETTINGS_SCHEMA,
-        { base, applies: 'live' },
-      )
-      source = () => ({ ...scope.get() })
-      scope.watch((next) => {
-        source = () => ({ ...next })
-        onCommitted?.({ ...next })
-      })
-    } catch {
-      // Another owner already registered this namespace; keep our base.
-    }
+export function readMcpSettings(config: Config): McpSettingsSource {
+  return () => ({
+    loading: config.loading.get(),
+    descriptions: { ...config.descriptions.get() },
+    tools: { ...config.tools.get() },
   })
-  return () => ({ ...source() })
 }

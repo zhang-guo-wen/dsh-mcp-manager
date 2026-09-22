@@ -1,7 +1,7 @@
-/** File-backed MCP row mutations for Claude-compatible preset compositions. */
+/** File-backed MCP row mutations for the global composition. */
 
 import { lstat, readFile } from 'node:fs/promises'
-import { dirname, extname, isAbsolute, resolve } from 'node:path'
+import { dirname, extname, resolve } from 'node:path'
 import { dump, load } from 'js-yaml'
 import { applyEntryPatches, entryListSchema, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
@@ -11,14 +11,6 @@ import type { McpTarget } from './types.ts'
 
 /** Module specifier of the MCP client bridge these helpers author. */
 export const MCP_CLIENT_MODULE = '@deepseek-ai/dsh-mcp-client'
-
-/** A resolved preset file with the fields needed by the authoring operation. */
-export interface PresetFile {
-  readonly id: string
-  readonly trust: string
-  readonly path: string
-  readonly broken?: string
-}
 
 /** Callback used for diagnostics emitted by the Loader patch dialect. */
 export type PatchWarning = (message: string, ...args: unknown[]) => void
@@ -139,70 +131,6 @@ export async function writeEntryListFile(
       : dump(next, { schema: entryListSchema })
     await writeFileAtomic(filename, content, { mode: 0o600, dirMode: 0o700 })
   })
-}
-
-/**
- * Apply one Loader patch to a user preset and replace the YAML file atomically.
- * `entryListSchema` preserves `!!js` disabled expressions, while the lock
- * serializes the complete read-validate-patch-write cycle across processes.
- * @param preset - the roster record resolved for the requested preset.
- * @param target - the Remote target used in actionable failure details.
- * @param patch - one Loader patch to apply.
- * @param validate - target and duplicate checks run against locked disk state.
- * @param warn - sink for skipped-patch diagnostics.
- * @returns a promise resolving after the atomic replacement is committed.
- * @throws an MCP Remote error when the preset cannot be authored or parsed.
- */
-export async function writePresetComposition(
-  preset: PresetFile,
-  target: McpTarget,
-  patch: PatchOptions,
-  validate: (rows: EntryOptions[]) => void,
-  warn: PatchWarning,
-): Promise<void> {
-  if (preset.trust !== 'user') {
-    throw new RemoteError('mcp/read-only', `MCP preset "${preset.id}" is not user-writable`, {
-      target,
-      reason: 'the preset ships with the deployment',
-    })
-  }
-  if (!isAbsolute(preset.path)) {
-    throw new RemoteError('mcp/invalid', `MCP preset "${preset.id}" has a non-absolute composition path`, {
-      target,
-      reason: 'the resolved composition path is not absolute',
-    })
-  }
-  if (preset.broken !== undefined) {
-    throw new RemoteError('mcp/invalid', `MCP preset "${preset.id}" is broken: ${preset.broken}`, {
-      target,
-      reason: preset.broken,
-    })
-  }
-
-  await writeEntryListFile(preset.path, target, patch, validate, warn)
-}
-
-/**
- * Read and validate one entry-list composition file, returning its rows.
- * Used by the read-only describe path; the write helpers (entry-list and preset
- * composition) keep their own locked/full validation.
- * @param filename - YAML or JSON entry-list path.
- * @returns the parsed entry rows.
- * @throws when the file cannot be read or is not a valid entry list.
- */
-export async function readEntryRows(filename: string): Promise<EntryOptions[]> {
-  let parsed: unknown
-  try {
-    parsed = load(await readFile(filename, 'utf8'), { schema: entryListSchema })
-  } catch (cause) {
-    const reason = String(cause)
-    throw new RemoteError('mcp/invalid', 'MCP entry-list file could not be read', { reason }, { cause })
-  }
-  const problem = entryListProblem(parsed)
-  if (problem !== undefined) {
-    throw new RemoteError('mcp/invalid', 'MCP entry-list file is not valid', { reason: problem })
-  }
-  return parsed as EntryOptions[]
 }
 
 /**

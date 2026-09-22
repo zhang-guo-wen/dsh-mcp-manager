@@ -9,26 +9,29 @@
  * the gate unmounts it, so its tool schemas stay out of the request until
  * `mcp_load` pulls the server into one session.
  *
- * The unmount is runtime state only. A preset is composed through `PresetTree`,
- * whose `write()` is a deliberate no-op (`agent-presets` owns that contract: a
- * preset is an input, never a persistence target), so toggling a row here
- * cannot rewrite the user's composition file. Global rows are left alone on
- * purpose — their tree is a file-backed `Include` whose `write()` would persist
- * whatever this gate did to them.
+ * The gate reads enablement from the preset's DECLARATION, never from the live
+ * tree: the live tree is what this gate itself disables, so reading it back
+ * would latch every row it had ever held out. A preset is declared in the
+ * profile patch, so the declaration is the profile editor's view of it.
+ *
+ * The unmount is runtime state only. A preset is composed through the
+ * registry's in-memory tree, whose `write()` is a deliberate no-op, so toggling
+ * a row here cannot rewrite the user's declaration. Global rows are left alone
+ * on purpose — their tree is a file-backed `Include` whose `write()` would
+ * persist whatever this gate did to them.
  *
  * @module @zhang-guo-wen/dsh-mcp-manager/mcp-gate
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-agent-presets'
+import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import {
   findEntryRows,
   MCP_CLIENT_MODULE,
   presetLeafId,
-  readEntryRows,
-  type PresetFile,
 } from './mcp-authoring.ts'
+import { findPresetDeclaration } from './preset-source.ts'
 import type { McpLoadingMode } from './lazy-mcp.ts'
 import type { McpTarget } from './types.ts'
 
@@ -75,13 +78,7 @@ export interface GateMount {
   readonly tree: GateTree
 }
 
-/** The `agent-presets` surface the gate consumes. */
-interface AgentPresetResolver {
-  resolve(id: string): Promise<PresetFile>
-  list(): Promise<readonly { readonly id: string }[]>
-}
-
-/** The Loader's internal resolver, used to find the harness's own agent-presets instance. */
+/** The Loader's internal resolver, used to find the harness's own preset registry. */
 interface InternalResolver {
   internal?: { import(spec: string, base: string, options: object): Promise<unknown> }
 }
@@ -99,7 +96,7 @@ export type GateWarn = (message: string) => void
 export const MCP_ROW_EVENTS: readonly string[] = ['tools/change', 'loader/entry-init', 'agent-preset/selected']
 
 /**
- * Resolve the `livePresetMounts` reader from the `agent-presets` instance the
+ * Resolve the `livePresetMounts` reader from the preset registry instance the
  * Loader actually uses. A plain import can land on a second copy of the package
  * (the harness resolves its roster from its own graph), so the Loader's
  * internal resolver is asked first and the static import is the fallback.
@@ -115,7 +112,7 @@ export async function resolvePresetMounts(
   const base = (ctx as unknown as { baseUrl?: string }).baseUrl
   if (loader?.internal !== undefined && base !== undefined) {
     try {
-      const mod = await loader.internal.import('@deepseek-ai/dsh-agent-presets', base, {}) as {
+      const mod = await loader.internal.import('@deepseek-ai/dsh-agent-preset-registry', base, {}) as {
         livePresetMounts?: (within?: unknown) => readonly GateMount[]
       }
       if (mod.livePresetMounts !== undefined) return mod.livePresetMounts
@@ -150,15 +147,12 @@ export function createMcpPreloadGate(
   const run = async (): Promise<void> => {
     if (disposed) return
     const mode = readMode()
-    const presets = ctx.get('agentPresets') as AgentPresetResolver | undefined
-    if (presets === undefined) return
     const mounts = mountReader(ctx.root.fiber)
     const seen = new Set<string>()
     for (const mount of mounts) {
       let rows: readonly EntryOptions[]
       try {
-        const preset = await presets.resolve(mount.presetId)
-        rows = await readEntryRows(preset.path)
+        rows = findPresetDeclaration(ctx, mount.presetId).rows
       } catch (error) {
         warn(`mcp-manager: cannot read preset "${mount.presetId}" composition: ${String(error)}`)
         continue
@@ -167,11 +161,12 @@ export function createMcpPreloadGate(
         if (entry.options.group === true || entry.options.name !== MCP_CLIENT_MODULE) continue
         const leaf = presetLeafId(entry.options.id)
         const serverName = entry.options.id
-        const fileRow = findEntryRows(rows, leaf)[0]
-        // A row the file does not declare (a patch insert, or a preset whose
-        // file moved under us) keeps its composed state and is never driven.
-        if (fileRow === undefined) continue
-        const allowed = fileRow.disabled !== true
+        const declaredRow = findEntryRows(rows, leaf)[0]
+        // A row the declaration does not carry (a patch insert, or a preset
+        // whose declaration moved under us) keeps its composed state and is
+        // never driven.
+        if (declaredRow === undefined) continue
+        const allowed = declaredRow.disabled !== true
         const wantMounted = allowed && mode === 'eager'
         const key = mcpRowKey({ scope: 'preset', agentPreset: mount.presetId }, serverName)
         seen.add(key)

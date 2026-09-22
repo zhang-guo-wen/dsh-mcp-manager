@@ -13,7 +13,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-// Type-only: the settings namespace scope merge (ctx.settingsScope) and slot types.
+// Type-only: the configuration-form service merge (ctx.configForms) and slot types.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: the slot registry Context merge (ctx.slots).
@@ -65,7 +65,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /** Required services (cordis fiber inject). */
-export const inject = ['slots', 'locale', 'settingsScope', 'remote', 'remote.pluginInventory']
+export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.pluginInventory']
 
 /** The namespace service this plugin mounts itself — fetched via `ctx.get`, never injected. */
 interface McpManagerNamespace {
@@ -128,13 +128,13 @@ export async function apply(ctx: Context): Promise<void> {
     unwrapRemote(() => mcpMgr().gateState({}))
       .then(state => state.suppressed)
   const controller = new McpSettingsController(
-    ctx.settingsScope.bind<McpSettingsFlags>({ namespace: MCP_SETTINGS_NS }),
+    ctx.configForms.get<McpSettingsFlags>(MCP_SETTINGS_NS),
     mcps,
     authoring,
     presets,
     suppressedMcps,
   )
-  ctx.effect(() => () => { controller.dispose() }, 'ui-mcp-manager: scope')
+  ctx.effect(() => () => { controller.dispose() }, 'ui-mcp-manager: settings form')
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',

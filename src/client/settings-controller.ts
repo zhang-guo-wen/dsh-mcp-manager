@@ -28,9 +28,9 @@ import type {
 } from '../types.ts'
 import type { PluginInventorySnapshot } from '@deepseek-ai/dsh-host-plugin-inventory/types'
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 
-/** Settings namespace registered Host-side by @zhang-guo-wen/dsh-mcp-manager. */
+/** Settings namespace registered Host-side by @zhang-guo-wen/dsh-mcp-manager: its Loader row id. */
 export const MCP_SETTINGS_NS = 'mcp-manager'
 
 /** Module specifier of the MCP client bridge whose instances this section lists. */
@@ -213,14 +213,14 @@ export class McpSettingsController {
   private readonly unsubscribe: () => void
 
   /**
-   * @param scope - bound `mcp-manager` settings scope.
+   * @param scope - the `mcp-manager` configuration form.
    * @param mcps - Host-backed MCP roster loader.
    * @param authoring - Host-backed MCP mutation callbacks.
    * @param presets - Host-backed agent-preset options loader.
    * @param suppressed - Host-backed reader of the rows the gate holds unmounted.
    */
   constructor(
-    private readonly scope: SettingsScope<McpSettingsFlags>,
+    private readonly scope: ConfigForm<McpSettingsFlags>,
     private readonly mcps: () => Promise<readonly McpServer[]>,
     private readonly authoring: McpAuthoringActions,
     private readonly presets: () => Promise<readonly McpPresetOption[]>,
@@ -273,11 +273,13 @@ export class McpSettingsController {
     void this.scope.set('tools', next)
   }
 
-  private setMcpLoading(mode: McpLoadingOption): Promise<void> {
+  private async setMcpLoading(mode: McpLoadingOption): Promise<void> {
     const snapshot = this.scope.getSnapshot()
-    if (snapshot.status !== 'ready' || !snapshot.writable) return Promise.resolve()
-    if (snapshot.value?.loading === mode) return Promise.resolve()
-    return this.scope.set('loading', mode)
+    if (snapshot.status !== 'ready' || !snapshot.writable) return
+    if (snapshot.value?.loading === mode) return
+    // The form answers whether the Host accepted the write; the section shows
+    // the committed value through the mirror either way.
+    await this.scope.set('loading', mode)
   }
 
   private projection(): McpSectionState {

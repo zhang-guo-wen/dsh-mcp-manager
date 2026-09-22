@@ -64,7 +64,7 @@ host 侧:`class McpManager extends TypertRemoteService`,构造里 `super(ctx, 'm
 `mcp-manager` 命名空间属于本插件,字段三个:`loading`(加载模式)、`descriptions`(行描述)、
 `tools`(每行工具过滤规则)。键统一是 `mcpRowKey(target, serverName)`(`preset:<id>:<name>` / `global:<name>`)。
 
-**schema 用 `z.dict(z.any())`,不要在设置 schema 里校验规则。** 设置在 `~/.dsh/settings.yaml` 里是用户手写的,
+**schema 用 `z.dict(z.any())`,不要在设置 schema 里校验规则。** 设置由用户手写在 active profile 的 `cordis.patch.yml` 里,
 schema 拒绝一个字段会让**整个 `mcp-manager` 命名空间**回退到上一次好的值(warn 后静默失效),
 所以畸形值必须在读取时收敛:`parseMcpToolFilter` 跳过无法解析的条目,空规则不过滤任何东西。
 
@@ -76,25 +76,26 @@ schema 拒绝一个字段会让**整个 `mcp-manager` 命名空间**回退到上
 MCP 行有两种来源,更新路径不同:
 
 - **全局**:改 file-backed Include;新增走 `loader.create`,本身**实时生效**。
-- **preset(agent)**:写 preset 的 `agent.cordis.yml`。写完必须让**正在运行的 preset** 感知:
-  - 首选:拿 standing mount 的 `Include` 树调 **`tree.refresh()`** —— 按差异增量增删,只动改动那一行,亚秒级。
-  - 兜底:`agentPresets.standingKeyFor(id)` —— 整棵重组,会把 preset 里**所有** MCP 子进程重启,3-4 秒。
+- **preset(agent)**:改 **profile patch 里那条 preset 声明行**的 `config.plugins`,经 `configEditor.edit` 写。
+  写入本身就是生效:editor 落盘后 reconcile 该 entry,声明行重建、按 diff 挂/摘改动的那一行。
+  **不要再写 `agent.cordis.yml`,也不要再调 `tree.refresh()`/`standingKeyFor`** —— 目录预设与增量 refresh
+  的契约在 0.1.7 已随 "declare Agent compositions in profile YAML" 一起移除。
 
 开关 MCP 时 UI 用**行级乐观状态**(`启动中`/`停止中`)+ 后台异步,不要锁整列表。
 启用本质要等 MCP 子进程启动(`npx -y …` / `uvx …` 通常 1-3 秒),那是进程启动耗时,不是插件开销;
 用直接可执行文件替代 `npx -y` 能显著缩短。
 
-**关键坑:模块实例不共享。** 插件里 `import { livePresetMounts } from '@deepseek-ai/dsh-agent-presets'`
+**关键坑:模块实例不共享。** 插件里 `import { livePresetMounts } from '@deepseek-ai/dsh-agent-preset-registry'`
 可能解析到**与 harness 使用的不一样的副本**(harness 从源码经 tsx 加载,插件拿到构建版 `lib/index.js`),
-导致模块级状态为空(`livePresetMounts()` 返回 0),`refresh()` 形同虚设。要经 loader 的内部解析器取同一实例:
+导致模块级状态为空(`livePresetMounts()` 返回 0)。要经 loader 的内部解析器取同一实例:
 
 ```ts
-const mod = await ctx.loader.internal.import('@deepseek-ai/dsh-agent-presets', ctx.baseUrl, {}) as {
-  livePresetMounts(): readonly { presetId: string; tree: { refresh?(): Promise<void> } }[]
+const mod = await ctx.loader.internal.import('@deepseek-ai/dsh-agent-preset-registry', ctx.baseUrl, {}) as {
+  livePresetMounts(within?: unknown): readonly { presetId: string; tree: { entries(): Iterable<unknown> } }[]
 }
-const mount = mod.livePresetMounts().filter(m => m.presetId === id).at(-1)
-await mount?.tree.refresh?.()
 ```
+
+声明真值不走这个模块:它由 `configEditor`(`ctx.get('configEditor')`)提供,见 `src/preset-source.ts`。
 
 ### 延迟加载(src/lazy-mcp.ts)
 
@@ -142,26 +143,28 @@ await mount?.tree.refresh?.()
 standing 作用域里 `ctx.tools.register`),结果 **preset 每 ~5 秒被重挂一次**(MCP 子进程反复重启)。
 撤掉该行即恢复。所以注册落在 **host 平面**(插件 `apply` 时的 root ctx):`ctx.effect` 收口。
 
-模式是**活的用户设置**:`registerMcpSettings(ctx, config, onCommitted)` 把提交后的 flags 交给 host,
-`onCommitted` 里先 `dispose()` 掉旧注册(连带停掉它启动的服务器)再按新模式注册 —— 交换对**所有会话的下一次
-请求**生效。`parseMcpLoadingMode` 把无法识别的存量值收敛回 `dynamic`(设置文档是用户可编辑的,不能因为一个
+模式是**活的用户设置**:`readMcpSettings(config)` 读 Config 的 volatile 字段,`index.ts` 在
+`loader/volatile-update` 上先 `dispose()` 掉旧注册(连带停掉它启动的服务器)再按新模式注册 —— 交换对
+**所有会话的下一次请求**生效。`parseMcpLoadingMode` 把无法识别的存量值收敛回 `dynamic`(设置文档是用户可编辑的,不能因为一个
 拼错的值让提交失败)。UI 侧是 `McpSection.tsx` 的 `McpLoadingPicker`(三个 radio),读写 `loading` 字段。
 
 ### 预加载闸门(src/mcp-gate.ts)
 
-`dynamic`/`lazy` 下"允许但不预加载"靠 **运行时摘行**实现:gate 读每个 preset 的**文件真值**(行 `disabled`)
-得到 allowed,再让 live 行满足 `mounted === (allowed && mode === 'eager')`,用 `entry.update({disabled})`
-驱动挂载/卸载。四条必须记住的性质:
+`dynamic`/`lazy` 下"允许但不预加载"靠 **运行时摘行**实现:gate 读每个 preset 的**声明真值**(声明行
+`config.plugins` 里那一行的 `disabled`)得到 allowed,再让 live 行满足
+`mounted === (allowed && mode === 'eager')`,用 `entry.update({disabled})` 驱动挂载/卸载。
+**必须读声明,不能读 live 行** —— live 行正是 gate 自己摘掉的,读回来会把摘过的行永久锁死。
+四条必须记住的性质:
 
-1. **不写文件。** preset 树是 `PresetTree`,`write()` 是空实现(`agent-presets` 的契约:preset 是输入不是
-   持久化目标),所以内存里摘行不会碰用户的 `agent.cordis.yml`。**全局平面的行绝不动** —— 它们的树是
-   file-backed `Include`,`write()` 会把闸门的状态写回配置,所以全局行永远是"常驻挂载",不受加载模式影响。
+1. **不写声明。** preset 树是 registry 的内存树(`PresetTree`),`write()` 是空实现,所以内存里摘行不会
+   碰用户的 profile patch。**全局平面的行绝不动** —— 它们的树是 file-backed `Include`,`write()` 会把
+   闸门的状态写回配置,所以全局行永远是"常驻挂载",不受加载模式影响。
 2. **触发点。** 插件 `apply` 时 preset 还没挂载(`mounts=0`),所以主触发是 `tools/change`(**无过滤广播**),
    另订阅 `loader/entry-init` / `agent-preset/selected`。`reconcile()` 内部串行化,幂等,可重放。
 3. **一次 reconcile 会真的 kill 掉 MCP 子进程**(`entry.update` 走 `Entry._dispose`),所以设置页先等
    `gateState`(它内部 await reconcile)再读名册,否则会看到"摘到一半"的名册。
 4. **行是"先挂载、再被摘掉"的,所以每次 preset 首次挂载会有一次真实的启动+杀掉。** gate 是事件驱动的事后
-   纠正,而 stdio 的 spawn 在 `mcp-client.apply` 里立刻发生,reconcile 还要读 preset 文件(IO),抢不过。
+   纠正,而 stdio 的 spawn 在 `mcp-client.apply` 里立刻发生,reconcile 还要读声明,抢不过。
    宿主启动时不会启动(那时 preset 未挂载);第一个使用该 preset 的会话会触发这一次,因为 preset 是
    standing mount,每个 host 生命周期只发生一次。要消除它需要 harness 侧让 `mcp-client` 在 apply 早期
    就知道自己被抑制,插件做不到。
@@ -187,7 +190,7 @@ standing 作用域里 `ctx.tools.register`),结果 **preset 每 ~5 秒被重挂�
    `eager` 同理,所以 `eager` 下规则不生效 —— `index.ts` 的 `warnFiltersWithoutEffect` 会在启动和每次提交时警告。
    因为这条,**`mcp_call` 在动态/惰性两种模式下都注册**(只注册 lazy 是不够的)。
 3. **规则 reader 是活闭包而不是快照**:`registerMcpTools(..., key => readToolFilter(key))`,`index.ts` 在
-   `registerMcpSettings` 返回后把它指向 `flags().tools`。所以改规则不需要重建注册,下一次 `mcp_load` 就读到新值;
+   `apply` 里把它指向 `readSettings().tools`。所以改规则不需要重建注册,下一次 `mcp_load` 就读到新值;
    已经加载的服务器保持加载时那套工具(不追溯)。
 
 `mcp_load` 的结果带 `hidden` 字段(被隐藏的数量),render 里有一行提示 —— 模型需要知道"还有工具但不可调用",
@@ -235,7 +238,7 @@ standing 作用域里 `ctx.tools.register`),结果 **preset 每 ~5 秒被重挂�
 六条实现约束:
 
 1. **只读,且只写全局。** 扫描不挂载任何东西、不碰任何 composition;导入逐条调**现有的 `addMcp`**
-   (`target: { scope: 'global' }`),因此校验、冲突检测、原子写、`tree.refresh()` 与手工新增完全同一条路径。
+   (`target: { scope: 'global' }`),因此校验、冲突检测、原子写与手工新增完全同一条路径。
    **不要为导入新写一条写入路径** —— 那会绕开上面的每一项。
 2. **一个来源坏掉不能拖垮其它来源。** 文件不存在 → 整个来源不出现;存在但读不出/不是 JSON → 该来源带
    `problem` 返回(`missing`/`unreadable`/`malformed`/`too-large`),其余来源照常导入。
@@ -247,7 +250,7 @@ standing 作用域里 `ctx.tools.register`),结果 **preset 每 ~5 秒被重挂�
 5. **`env`/`headers` 的值必须跟着 `spec` 走**(否则导进去的服务器连不上),但 UI 只显示键名
    (`envKeys`)。所以**不要往诊断里打 spec** —— 它带着明文凭据。
 6. **导入只写全局是有意为之**(用户选定的范围)。要导入到 preset 需要在弹窗里加 scope 选择并复用
-   `addMcp` 的 preset 分支,`writePresetComposition` + `refreshPreset` 那套已经就绪。
+   `addMcp` 的 preset 分支,`writePresetRows`(`configEditor.edit`)那套已经就绪。
 
 `scanClaudeMcp(cwd, home?)` 的 `home` 可注入,`tests/claude-import.spec.ts` 就是靠它跑临时 fixtures;
 默认取真实 `homedir()`。
@@ -299,9 +302,9 @@ client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏�
    "Failed to load plugins",不打印原因。
 6. CSS module 里 JSX 引用但 CSS 未定义的类 → `undefined`,静默无样式(改样式后核对类名齐全)。
 7. `HANDOFF_ID` 不等于包名 → bundle 加载后没有注册启动图等待的 factory,Web 汇总为 `import failed`。
-8. 用 `standingKeyFor` 做实时更新 → 每次整棵重组、重启所有 MCP、3-4 秒。
+8. **把 live preset 行当"声明真值"读** → gate 会把自己摘掉的行当成用户禁用,切回 `eager` 也永远不再挂载。
 9. 直接用模块级 `livePresetMounts` 而不经 loader 解析 → 模块实例不同、返回空、更新无效。
-10. 编辑 preset 后不调 `tree.refresh()` → 文件写了但运行态不变、UI 开关不动。
+10. **写 preset 行绕过 `configEditor.edit`**(或再去写 `agent.cordis.yml`) → profile patch 没落盘,运行态也不会 reconcile,UI 开关不动。
 11. **在设置 schema 里校验 `tools` 值** → 一个写错的规则让整个命名空间回退,用户所有 MCP 设置静默失效。
 12. **把 `env`/`headers` 的值打进日志或错误消息** → 明文凭据落进会话与日志文件;导入的服务器恰恰都是带 token 的。
 13. **给导入单写一条写入路径** → 绕开 `addMcp` 的冲突检测与原子写,重名会写出重复行。

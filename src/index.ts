@@ -12,11 +12,9 @@
  */
 
 import type { Context, Fiber } from '@deepseek-ai/cordis'
-import z from '@deepseek-ai/schemastery'
-import type Schema from '@deepseek-ai/schemastery'
-import { livePresetMounts } from '@deepseek-ai/dsh-agent-presets'
+import { livePresetMounts } from '@deepseek-ai/dsh-agent-preset-registry'
 import { McpManager } from './mcp-remote.ts'
-import { parseMcpLoadingMode, registerMcpTools, type McpLoadingMode } from './lazy-mcp.ts'
+import { parseMcpLoadingMode, registerMcpTools } from './lazy-mcp.ts'
 import { createMcpPreloadGate, MCP_ROW_EVENTS, resolvePresetMounts, type GateMount } from './mcp-gate.ts'
 import { MCP_CLIENT_MODULE } from './mcp-authoring.ts'
 import {
@@ -26,8 +24,9 @@ import {
   type McpToolFilter,
 } from './mcp-tool-filter.ts'
 import {
-  registerMcpSettings,
-  type McpSettingsConfig,
+  Config,
+  MCP_SETTINGS_NAMESPACE,
+  readMcpSettings,
   type McpSettingsFlags,
 } from './settings.ts'
 
@@ -41,7 +40,7 @@ export { admits, filterHidesAnything, filterMcpTools, parseMcpToolFilter, toolRu
 export type { McpToolFilter, McpToolSelection } from './mcp-tool-filter.ts'
 export { mcpRowKey } from './mcp-gate.ts'
 export type { McpPreloadGate, McpRowGateState } from './mcp-gate.ts'
-export { MCP_SETTINGS_NAMESPACE, registerMcpSettings } from './settings.ts'
+export { Config, MCP_SETTINGS_NAMESPACE, readMcpSettings }
 export type { McpSettingsConfig, McpSettingsFlags, McpSettingsSource } from './settings.ts'
 export type { McpSpec, McpTarget } from './types.ts'
 export type {
@@ -61,31 +60,19 @@ export const name = 'mcp-manager'
 /** Services required by this plugin. Every other service is probed lazily. */
 export const inject = ['loader']
 
-/** Config forwarded to the settings namespace and the preload gate. */
-export interface Config extends McpSettingsConfig {
-  /**
-   * How MCP servers load: `eager` (every enabled row mounts at preset mount),
-   * `dynamic` (on-demand tools mount a server into the calling session; the
-   * tool list changes once per load) or `lazy` (on-demand tools talk to the
-   * server without registering, so the tool list never changes).
-   */
-  mcpLoading?: McpLoadingMode
-}
-
-export const Config: Schema<Config> = z.object({
-  mcpLoading: z.union(['eager', 'dynamic', 'lazy']).default('dynamic'),
-})
-
 /**
  * Register the on-demand MCP tools, the preload gate that follows the loading
- * mode, the `mcp-manager` settings namespace, and the `mcpManager` Remote.
+ * mode, the live settings fields, and the `mcpManager` Remote.
+ * @param ctx - plugin context.
+ * @param config - the row's resolved configuration.
  */
-export async function apply(ctx: Context, config: Config = {}): Promise<void> {
+export async function apply(ctx: Context, config: Config): Promise<void> {
+  const readSettings = readMcpSettings(config)
   // MCP loading has two inputs. The user's composition says which servers may
   // be used at all; the mode says whether an allowed server also takes part in
   // every request. The gate holds the composed rows to that second answer, and
   // the tool set is re-registered with the new mode on every commit.
-  let mcpLoading = parseMcpLoadingMode(config.mcpLoading)
+  let mcpLoading = parseMcpLoadingMode(readSettings().loading)
   const mountReader = await resolvePresetMounts(
     ctx,
     within => livePresetMounts(within as Fiber | undefined) as readonly GateMount[],
@@ -133,9 +120,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       + 'select the "dynamic" or "lazy" loading mode to apply these filters.',
     )
   }
-  // Only forward the field the namespace reads: under `exactOptionalPropertyTypes`
-  // an optional property does not accept an explicitly `undefined` value.
-  const flags = registerMcpSettings(ctx, config.mcpLoading === undefined ? {} : { loading: config.mcpLoading }, (next) => {
+  // A committed live field is the only way the mode or a filter changes at
+  // runtime; the Loader commits every volatile reference before it fires.
+  const commit = (): void => {
+    const next = readSettings()
     const mode = parseMcpLoadingMode(next.loading)
     if (mode !== mcpLoading) {
       mcpLoading = mode
@@ -144,9 +132,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       resync()
     }
     warnFiltersWithoutEffect(next)
-  })
-  readToolFilter = key => parseMcpToolFilter(flags().tools[key])
-  warnFiltersWithoutEffect(flags())
+  }
+  ctx.effect(() => ctx.on('loader/volatile-update', () => { commit() }), 'mcp-manager: settings commits')
+  readToolFilter = key => parseMcpToolFilter(readSettings().tools[key])
+  warnFiltersWithoutEffect(readSettings())
 
   // MCP authoring Remote: register the `mcpManager` Typert service so the
   // browser half can mount it with `ctx.remote.$mount`. The service resolves
