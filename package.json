@@ -4,7 +4,24 @@
   "version": "0.1.0",
   "type": "module",
   "license": "Apache-2.0",
-  "main": "lib/index.mjs",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhang-guo-wen/dsh-mcp-manager.git"
+  },
+  "homepage": "https://github.com/zhang-guo-wen/dsh-mcp-manager#readme",
+  "bugs": {
+    "url": "https://github.com/zhang-guo-wen/dsh-mcp-manager/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "mcp",
+    "model-context-protocol"
+  ],  "main": "lib/index.mjs",
   "exports": {
     ".": {
       "default": "./lib/index.mjs"
