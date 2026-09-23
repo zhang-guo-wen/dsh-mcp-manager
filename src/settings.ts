@@ -8,7 +8,7 @@
  * the running plugin without a remount, and the reader below always observes
  * the value as it stands at call time.
  *
- * @module @zhang-guo-wen/dsh-mcp-manager/settings
+ * @module @guowenzhang/dsh-mcp-manager/settings
  */
 
 import type { Volatile } from '@deepseek-ai/cordis'

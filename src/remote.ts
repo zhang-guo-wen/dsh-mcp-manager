@@ -8,7 +8,7 @@
  * gateway re-derives its own descriptor from the service method signature
  * (`packages/api/gateway` `srcDescriptor`) and validates there; the Client only
  * needs a strict-shaped codec so `$mount` accepts the contribution.
- * @module @zhang-guo-wen/dsh-mcp-manager/remote
+ * @module @guowenzhang/dsh-mcp-manager/remote
  */
 
 import type {
@@ -50,7 +50,7 @@ function codec(typeSymbol: string): TypertCodec {
 
 function descriptor(method: string): InvocationDescriptor {
   const endpoint = `${REMOTE_NAMESPACE}/${method}`
-  const owner = `@zhang-guo-wen/dsh-mcp-manager#${endpoint}`
+  const owner = `@guowenzhang/dsh-mcp-manager#${endpoint}`
   return {
     id: owner,
     service: REMOTE_NAMESPACE,
@@ -71,7 +71,7 @@ function descriptor(method: string): InvocationDescriptor {
 
 /** Contribution mounted by the browser half to reach the MCP authoring owner. */
 export const TYPERT_REMOTE: TypertRemoteContribution = {
-  package: '@zhang-guo-wen/dsh-mcp-manager',
+  package: '@guowenzhang/dsh-mcp-manager',
   descriptors: [
     descriptor('addMcp'),
     descriptor('editMcp'),

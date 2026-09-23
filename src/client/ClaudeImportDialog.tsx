@@ -9,7 +9,7 @@
  * Entries are imported independently and a failure is reported per entry rather
  * than aborting the batch, because one colliding name must not discard the rest.
  *
- * @module @zhang-guo-wen/dsh-mcp-manager/client/ClaudeImportDialog
+ * @module @guowenzhang/dsh-mcp-manager/client/ClaudeImportDialog
  */
 
 import { useEffect, useState, type ReactNode } from 'react'

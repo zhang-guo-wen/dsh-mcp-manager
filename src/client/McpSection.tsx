@@ -6,7 +6,7 @@
  * its config scope — and offers the three settings this plugin owns: when an
  * allowed server enters context, each row's authoring description, and each
  * row's tool filter.
- * @module @zhang-guo-wen/dsh-mcp-manager/client/McpSection
+ * @module @guowenzhang/dsh-mcp-manager/client/McpSection
  */
 
 import { useEffect, useState, type ReactNode } from 'react'

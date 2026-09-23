@@ -20,7 +20,7 @@
  * hidden tool is neither listed nor callable. A row with rules always takes the
  * `lazy` carrier, because a native registration publishes every discovered tool
  * and its owner offers no way to hold some of them back.
- * @module @zhang-guo-wen/dsh-mcp-manager/lazy-mcp
+ * @module @guowenzhang/dsh-mcp-manager/lazy-mcp
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -223,7 +223,7 @@ export async function connectLazy(config: McpEntryConfig): Promise<{ client: Laz
       Object.keys(config.headers).length === 0 ? {} : { requestInit: { headers: config.headers } },
     )
   }
-  const client = new Client({ name: '@zhang-guo-wen/dsh-mcp-manager', version: '0.1' })
+  const client = new Client({ name: '@guowenzhang/dsh-mcp-manager', version: '0.1' })
   await client.connect(transport)
   const listed = await client.listTools()
   return { client, tools: listed.tools ?? [] }

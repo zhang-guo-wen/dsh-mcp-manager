@@ -20,7 +20,7 @@
  * on purpose — their tree is a file-backed `Include` whose `write()` would
  * persist whatever this gate did to them.
  *
- * @module @zhang-guo-wen/dsh-mcp-manager/mcp-gate
+ * @module @guowenzhang/dsh-mcp-manager/mcp-gate
  */
 
 import type { Context } from '@deepseek-ai/cordis'

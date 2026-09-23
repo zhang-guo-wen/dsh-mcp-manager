@@ -3,7 +3,7 @@ description: "MCP server management for DeepSeek Harness: author composition row
 kind: "plugin-readme"
 ---
 
-# @zhang-guo-wen/dsh-mcp-manager
+# @guowenzhang/dsh-mcp-manager
 
 中文 | [English](README.md)
 
@@ -150,7 +150,7 @@ mcp-manager:
 | `mcpLoading` | `dynamic` | 允许的服务器默认怎么进上下文；设置页的选择覆盖它 |
 
 ```yaml
-- name: '@zhang-guo-wen/dsh-mcp-manager'
+- name: '@guowenzhang/dsh-mcp-manager'
   config:
     mcpLoading: lazy
 ```

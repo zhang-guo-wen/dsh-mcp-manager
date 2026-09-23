@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path'
 const root = dirname(fileURLToPath(import.meta.url))
 // Protocol identity: this must stay equal to package.json `name`. The Host
 // cache-busts changed client artifacts with their content revision.
-const HANDOFF_ID = '@zhang-guo-wen/dsh-mcp-manager'
+const HANDOFF_ID = '@guowenzhang/dsh-mcp-manager'
 const VIRT = '\0dsh-css:'
 const SUFFIX = '.mjs'
 

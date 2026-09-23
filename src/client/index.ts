@@ -5,9 +5,9 @@
  * filters.
  *
  * The section reads and writes the `mcp-manager` namespace the Host
- * `@zhang-guo-wen/dsh-mcp-manager` plugin owns, so the surface and the loading
+ * `@guowenzhang/dsh-mcp-manager` plugin owns, so the surface and the loading
  * behavior share one setting.
- * @module @zhang-guo-wen/dsh-mcp-manager/client
+ * @module @guowenzhang/dsh-mcp-manager/client
  */
 
 import type { Context } from '@deepseek-ai/cordis'

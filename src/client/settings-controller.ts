@@ -11,7 +11,7 @@
  * tagged with where it is configured (`global` or a preset id). Descriptions
  * and tool rules are plugin-owned: stored in the `mcp-manager` namespace and
  * merged onto the rows here.
- * @module @zhang-guo-wen/dsh-mcp-manager/client/settings-controller
+ * @module @guowenzhang/dsh-mcp-manager/client/settings-controller
  */
 
 import type {
@@ -30,7 +30,7 @@ import type { PluginInventorySnapshot } from '@deepseek-ai/dsh-host-plugin-inven
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 
-/** Settings namespace registered Host-side by @zhang-guo-wen/dsh-mcp-manager: its Loader row id. */
+/** Settings namespace registered Host-side by @guowenzhang/dsh-mcp-manager: its Loader row id. */
 export const MCP_SETTINGS_NS = 'mcp-manager'
 
 /** Module specifier of the MCP client bridge whose instances this section lists. */

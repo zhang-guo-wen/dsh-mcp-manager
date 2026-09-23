@@ -8,7 +8,7 @@
  * the MCP management section into a `window.__ModuleLoader__` handoff artifact
  * served at `/plugins/<id>/client.js`.
  *
- * @module @zhang-guo-wen/dsh-mcp-manager
+ * @module @guowenzhang/dsh-mcp-manager
  */
 
 import type { Context, Fiber } from '@deepseek-ai/cordis'

@@ -1,5 +1,5 @@
 {
-  "name": "@zhang-guo-wen/dsh-mcp-manager",
+  "name": "@guowenzhang/dsh-mcp-manager",
   "description": "MCP server management for DeepSeek Harness: author composition rows, choose when an allowed server loads, and filter which of its tools a session may call",
   "version": "0.1.0",
   "type": "module",

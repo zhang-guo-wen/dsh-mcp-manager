@@ -10,7 +10,7 @@
  * end up in the same composition row — two implementations would drift into
  * "the dialog accepted it but the import refused it".
  *
- * @module @zhang-guo-wen/dsh-mcp-manager/mcp-spec
+ * @module @guowenzhang/dsh-mcp-manager/mcp-spec
  */
 
 import type { McpSpec } from './types.ts'

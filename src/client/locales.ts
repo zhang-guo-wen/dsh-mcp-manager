@@ -1,6 +1,6 @@
 /**
  * MCP management settings section dictionaries.
- * @module @zhang-guo-wen/dsh-mcp-manager/client/locales
+ * @module @guowenzhang/dsh-mcp-manager/client/locales
  */
 
 /** Locale namespace owned by this plugin's settings section. */

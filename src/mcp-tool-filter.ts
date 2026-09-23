@@ -18,7 +18,7 @@
  * document is a user-editable file: an absent, empty, or unparsable rule set
  * filters nothing, because a typo must not silently hide a server.
  *
- * @module @zhang-guo-wen/dsh-mcp-manager/mcp-tool-filter
+ * @module @guowenzhang/dsh-mcp-manager/mcp-tool-filter
  */
 
 /** Marker that turns one rule entry into an exclusion. */

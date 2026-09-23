@@ -4,7 +4,7 @@
 管理 MCP 服务器行(全局平面 + 各 agent preset)、决定允许的服务器何时进上下文、按行过滤工具,
 并提供设置页的「MCP 管理」区块。
 
-它与姊妹插件 `@zhang-guo-wen/dsh-claude-compat` 是**两个仓、两个包**:那边负责 Claude Code /
+它与姊妹插件 `@guowenzhang/dsh-claude-compat` 是**两个仓、两个包**:那边负责 Claude Code /
 Codex 兼容与 `/btw`,这边负责 MCP。两者各有自己的设置命名空间(`context-injection` / `mcp-manager`)、
 自己的设置页区块、自己的 Remote 命名空间,互不 import、互不依赖,可以单独安装与卸载。
 
@@ -12,7 +12,7 @@ Codex 兼容与 `/btw`,这边负责 MCP。两者各有自己的设置命名空�
 
 ## 目录
 
-仓库根**就是**包:`package.json` 即 `@zhang-guo-wen/dsh-mcp-manager`。
+仓库根**就是**包:`package.json` 即 `@guowenzhang/dsh-mcp-manager`。
 这不是风格选择——`dsh plugin add <git-url>` 取的是仓库根,包放在 `packages/*` 下会被装成错误的东西。
 
 - `src/` —— host 入口 `index.ts`;浏览器半边在 `src/client/`。
@@ -274,7 +274,7 @@ dsh plugin --profile web add github:zhang-guo-wen/dsh-mcp-manager               
 `file:` 依赖则可能退化成物理拷贝,那时改源码不会影响正在跑的 dsh,要重装或手动同步 `lib/`。
 client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏览器,不要修改 `HANDOFF_ID`。
 
-它与 `@zhang-guo-wen/dsh-claude-compat` 互相独立:可以只装其中一个。两个都装时,设置页会出现
+它与 `@guowenzhang/dsh-claude-compat` 互相独立:可以只装其中一个。两个都装时,设置页会出现
 「Claude 兼容」与「MCP 管理」两个独立区块。
 
 ## 发版(Release)

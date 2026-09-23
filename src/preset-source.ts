@@ -8,7 +8,7 @@
  * file: reads come from the declaring Loader entry, and a write goes through
  * `configEditor.edit`, whose Loader reconcile is what puts the change live.
  *
- * @module @zhang-guo-wen/dsh-mcp-manager/preset-source
+ * @module @guowenzhang/dsh-mcp-manager/preset-source
  */
 
 import type { Context } from '@deepseek-ai/cordis'

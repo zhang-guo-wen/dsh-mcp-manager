@@ -17,7 +17,7 @@
  * field exists so the dialog can show *which* secrets a row will carry without
  * printing them, and so a diagnostic can name them without quoting values.
  *
- * @module @zhang-guo-wen/dsh-mcp-manager/claude-import
+ * @module @guowenzhang/dsh-mcp-manager/claude-import
  */
 
 import { readFile } from 'node:fs/promises'

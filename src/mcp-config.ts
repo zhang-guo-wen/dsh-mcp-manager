@@ -4,7 +4,7 @@
  * shape, and back, so the roster and the edit form share one form. The spec is
  * validated strictly — a malformed or unknown-transport spec is refused before
  * it reaches a composition file.
- * @module @zhang-guo-wen/dsh-mcp-manager/mcp-config
+ * @module @guowenzhang/dsh-mcp-manager/mcp-config
  */
 
 /** mcp-client `serverName` namespace pattern (`mcp__<serverName>__<rawName>`). */

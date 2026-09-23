@@ -3,7 +3,7 @@ description: "MCP server management for DeepSeek Harness: author composition row
 kind: "plugin-readme"
 ---
 
-# @zhang-guo-wen/dsh-mcp-manager
+# @guowenzhang/dsh-mcp-manager
 
 [中文](README.zh.md) | English
 
@@ -164,7 +164,7 @@ every server it finds as a checklist. Selected servers are imported as **global*
 | `mcpLoading` | `dynamic` | How allowed servers enter context by default; the settings-page choice overrides it |
 
 ```yaml
-- name: '@zhang-guo-wen/dsh-mcp-manager'
+- name: '@guowenzhang/dsh-mcp-manager'
   config:
     mcpLoading: lazy
 ```
