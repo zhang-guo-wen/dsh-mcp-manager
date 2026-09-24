@@ -16,23 +16,37 @@
  *   through the fixed `mcp_call` proxy. The tool list never changes, so the
  *   request-cache prefix is never invalidated.
  *
- * A row's `context-injection.mcpTools` rules narrow what a load exposes: a
- * hidden tool is neither listed nor callable. A row with rules always takes the
- * `lazy` carrier, because a native registration publishes every discovered tool
- * and its owner offers no way to hold some of them back.
+ * A filtered `dynamic` row cannot take the mount: mcp-client registers every
+ * discovered tool and offers no way to hold some of them back. It registers its
+ * VISIBLE tools itself through the harness's own `createMcpToolDefinition`
+ * adapter, so those tools keep their upstream schemas — the model argues from
+ * the real schema in every request — while the hidden ones are never registered
+ * at all. A row's `context-injection.mcpTools` rules narrow what a load exposes
+ * in every carrier: a hidden tool is neither listed nor callable.
  * @module @guowenzhang/dsh-mcp-manager/lazy-mcp
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
+import type { McpToolDefinitionOptions } from '@deepseek-ai/dsh-mcp-client'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { scopeOf } from '@deepseek-ai/dsh-scope'
 import { MCP_CLIENT_MODULE } from './mcp-authoring.ts'
+import {
+  carrierFor,
+  nativeDefinitions,
+  swapNativeTools,
+  visibleToolName,
+  type LazyClient,
+  type LazyTool,
+  type McpCarrier,
+  type McpToolAdapter,
+  type ToolRegistry,
+} from './mcp-carrier.ts'
 import { mcpEntryConfig, type McpEntryConfig } from './mcp-config.ts'
 import type { McpPreloadGate } from './mcp-gate.ts'
 import { mcpRowKey } from './mcp-gate.ts'
 import {
-  filterHidesAnything,
   filterMcpTools,
   NO_TOOL_FILTER,
   type McpToolFilter,
@@ -72,37 +86,53 @@ interface McpClientModule {
   readonly name: string
   readonly inject: readonly string[]
   apply(ctx: Context, config: unknown): void | Promise<void>
+  /**
+   * The harness's upstream-tool adapter. The per-tool native carrier builds its
+   * definitions with it, so a filtered row's tools keep the same argument
+   * binding, canonical result, error, and image projection as a mounted one.
+   * Absent only on a harness build older than the adapter: the carrier fails
+   * loud there rather than registering a weaker definition.
+   */
+  createMcpToolDefinition?(ctx: Context, options: McpToolDefinitionOptions): unknown
 }
 
-/** One MCP tool as the lazy client reports it. */
-export interface LazyTool {
-  readonly name: string
-  readonly description?: string
-  readonly inputSchema?: unknown
+/** A live per-agent server under the `mount` carrier: the harness owns its tools. */
+interface MountedMount {
+  readonly carrier: 'mount'
+  /** Idempotent: `mcp_unload` and the session's own disposal both reach it. */
+  dispose(): Promise<void>
+}
+
+/** A live per-agent server under the `proxy` carrier: `mcp_call` carries every call. */
+interface MountedProxy {
+  readonly carrier: 'proxy'
+  dispose(): Promise<void>
+  /** The connected SDK client. */
+  readonly client: LazyClient
+  /** The tools this session may use, in the server's own order. */
+  tools: readonly LazyTool[]
+  /** Discovered tools this row's filter kept out of the model's view. */
+  hidden: number
+}
+
+/** A live per-agent server under the `native` carrier: the plugin owns the registrations. */
+interface MountedNative {
+  readonly carrier: 'native'
+  dispose(): Promise<void>
+  /** The connected SDK client every definition forwards to. */
+  readonly client: LazyClient
+  tools: readonly LazyTool[]
+  hidden: number
+  /** Live registrations by public name, re-swapped on `tools/list_changed`. */
+  registrations: Map<string, () => void>
+  /** Rules this mount was admitted with: read at load, reused by every re-sync. */
+  readonly filter: McpToolFilter
+  /** The in-flight `tools/list_changed` re-sync, if any. */
+  resyncing?: Promise<void>
 }
 
 /** A live per-agent server. `dispose` releases whichever carrier started it. */
-interface MountedServer {
-  dispose(): Promise<void>
-  /** Lazy carrier only: the connected SDK client and the tools it exposed. */
-  readonly client?: LazyClient
-  readonly tools?: readonly LazyTool[]
-  /** Discovered tools this row's filter kept out of the model's view. */
-  readonly hidden?: number
-}
-
-/** The subset of the MCP SDK client this module uses. */
-export interface LazyClient {
-  listTools(): Promise<{ tools?: readonly LazyTool[] }>
-  callTool(request: { name: string; arguments: Record<string, unknown> }): Promise<unknown>
-  close(): Promise<void>
-}
-
-/** The tool registry surface this module uses. */
-interface ToolRegistry {
-  register(definition: unknown): () => void
-  schemas(scope?: unknown): readonly { readonly name: string }[]
-}
+type MountedServer = MountedMount | MountedProxy | MountedNative
 
 /** The last `:`-separated segment of a loader-qualified row id. */
 function leafId(id: string): string {
@@ -229,6 +259,71 @@ export async function connectLazy(config: McpEntryConfig): Promise<{ client: Laz
   return { client, tools: listed.tools ?? [] }
 }
 
+/** Wrap one release step so the session context and `mcp_unload` cannot run it twice. */
+function once(release: () => Promise<void>): () => Promise<void> {
+  let released = false
+  return async () => {
+    if (released) return
+    released = true
+    await release()
+  }
+}
+
+/**
+ * Re-list one native mount and swap its registration generation.
+ *
+ * The mount's own load-time rules decide the new visible set, so a
+ * `tools/list_changed` never applies a rule the session did not load with. A
+ * failed re-list leaves the session with the tools it already had.
+ * @param mount - the session's native mount for one server.
+ * @param row - the composition row the mount came from.
+ * @param deps - the session-scoped registry and the harness adapter.
+ */
+async function resyncNativeTools(mount: MountedNative, row: McpRow, deps: NativeDeps): Promise<void> {
+  const listed = await mount.client.listTools()
+  const selection = filterMcpTools(listed.tools ?? [], mount.filter)
+  const definitions = nativeDefinitions(deps.ctx, deps.adapter, row.serverName, selection.visible, mount.client)
+  mount.registrations = swapNativeTools(deps.registry, mount.registrations, definitions)
+  mount.tools = selection.visible
+  mount.hidden = selection.hidden
+}
+
+/** What one native mount needs to rebuild its registrations. */
+interface NativeDeps {
+  /** The session-scoped tool registry the mount registers into. */
+  readonly registry: ToolRegistry
+  /** The session context the definitions resolve services through. */
+  readonly ctx: Context
+  /** The harness `createMcpToolDefinition` export. */
+  readonly adapter: McpToolAdapter
+}
+
+/**
+ * Follow `notifications/tools/list_changed` for one native mount.
+ *
+ * The SDK installs no dedicated handler for that notification, so it arrives at
+ * the client's fallback listener. Re-syncs are serialized per mount, because a
+ * server may announce another change while the previous swap is still running.
+ * @param mount - the session's native mount.
+ * @param row - the composition row the mount came from.
+ * @param deps - the session-scoped registry and the harness adapter.
+ */
+function watchToolListChanges(mount: MountedNative, row: McpRow, deps: NativeDeps): void {
+  mount.client.fallbackNotificationHandler = async (notification) => {
+    if (notification.method !== 'notifications/tools/list_changed') return
+    const previous = mount.resyncing ?? Promise.resolve()
+    const next = previous
+      .then(() => resyncNativeTools(mount, row, deps))
+      .catch((error: unknown) => {
+        deps.ctx.logger.warn(
+          `mcp-manager: could not follow the tool list change of "${row.serverName}": ${String(error)}`,
+        )
+      })
+    mount.resyncing = next
+    await next
+  }
+}
+
 const SERVER_ROW_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -292,11 +387,13 @@ export function registerMcpTools(
   /**
    * Close everything one ended session started.
    *
-   * The native carrier mounts the mcp-client on the agent's own context, so
-   * Cordis disposes its connection with that context. The proxy carrier owns a
-   * bare SDK client instead, and without this it would outlive the session that
-   * loaded it: every session that ends without an `mcp_unload` would leave its
-   * server running until the plugin unloads.
+   * The `mount` carrier puts the mcp-client on the agent's own context, so
+   * Cordis disposes its connection with that context and nothing is left here.
+   * The `proxy` and `native` carriers own a bare SDK client instead — and the
+   * native one also owns tool registrations made through that context — so
+   * without this they would outlive the session that loaded them: every session
+   * that ends without an `mcp_unload` would leave its server running until the
+   * plugin unloads.
    * @param agentId - the session that ended.
    */
   const releaseAgent = (agentId: string): void => {
@@ -305,9 +402,7 @@ export function registerMcpTools(
     if (perAgent === undefined) return
     mounted.delete(agentId)
     for (const server of perAgent.values()) {
-      // Only the proxy carrier needs closing here; a native instance belongs to
-      // the same context that is running this cleanup.
-      if (server.client !== undefined) void server.dispose()
+      if (server.carrier !== 'mount') void server.dispose()
     }
   }
 
@@ -414,12 +509,13 @@ export function registerMcpTools(
       if (existing !== undefined) {
         return {
           server: serverName,
-          // A natively loaded server reports the names its registration
-          // published; only the proxy carrier keeps the discovered tools.
-          tools: existing.client === undefined
+          // A mounted server reports the names its mcp-client registration
+          // published; the two carriers that keep the discovered tools report
+          // the schemas they admitted.
+          tools: existing.carrier === 'mount'
             ? toolNamesFor(tools, agent.ctx, serverName).map(name => ({ name, description: '', schema: '' }))
-            : describeTools(existing),
-          hidden: existing.hidden ?? 0,
+            : describeTools(existing, serverName),
+          hidden: existing.carrier === 'mount' ? 0 : existing.hidden,
         }
       }
       const row = (await allowedRows()).find(candidate => candidate.serverName === serverName)
@@ -431,25 +527,77 @@ export function registerMcpTools(
       const spec = await describeRow(ctx, row)
       const config = mcpEntryConfig(spec, serverName)
       const filter = filterFor(row.key)
-      // A filtered row always takes the proxy carrier: the native carrier
-      // publishes every discovered tool through mcp-client, which owns those
-      // registrations and cannot be told to hold some of them back.
-      if (mode === 'lazy' || filterHidesAnything(filter)) {
+      const carrier = carrierFor(mode, filter)
+      if (carrier === undefined) throw new Error('mcp_load is not registered under the "eager" loading mode')
+
+      if (carrier === 'proxy') {
         const { client, tools: listed } = await connectLazy(config)
         const selection = filterMcpTools(listed, filter)
         loadedFor(agent.id).set(serverName, {
-          dispose: async () => { await client.close() },
+          carrier: 'proxy',
           client,
           tools: selection.visible,
           hidden: selection.hidden,
+          dispose: once(async () => { await client.close() }),
         })
         bindAgentScope(agent)
         return { server: serverName, tools: selection.visible.map(lazyTool), hidden: selection.hidden }
       }
+
+      if (carrier === 'native') {
+        const mod = await resolveMcpClient(ctx)
+        const adapter = mod.createMcpToolDefinition
+        if (adapter === undefined) {
+          throw new Error(
+            `this harness build does not export createMcpToolDefinition from @deepseek-ai/dsh-mcp-client, so the `
+            + `tools of "${serverName}" cannot be registered individually; select the "lazy" loading mode, or a `
+            + 'harness build that provides the adapter',
+          )
+        }
+        const registry = agent.ctx.get('tools') as ToolRegistry | undefined
+        if (registry === undefined) throw new Error('mcp_load requires the tools service')
+        const { client, tools: listed } = await connectLazy(config)
+        const selection = filterMcpTools(listed, filter)
+        let registrations: Map<string, () => void>
+        try {
+          registrations = swapNativeTools(
+            registry,
+            new Map(),
+            nativeDefinitions(agent.ctx, adapter, serverName, selection.visible, client),
+          )
+        } catch (error) {
+          await client.close()
+          throw error
+        }
+        const mount: MountedNative = {
+          carrier: 'native',
+          client,
+          filter,
+          tools: selection.visible,
+          hidden: selection.hidden,
+          registrations,
+          dispose: once(async () => {
+            for (const dispose of [...mount.registrations.values()].reverse()) dispose()
+            await client.close()
+          }),
+        }
+        loadedFor(agent.id).set(serverName, mount)
+        watchToolListChanges(mount, row, { registry, ctx: agent.ctx, adapter })
+        bindAgentScope(agent)
+        return {
+          server: serverName,
+          tools: selection.visible.map(tool => exposedTool('native', serverName, tool)),
+          hidden: selection.hidden,
+        }
+      }
+
       const mod = await resolveMcpClient(ctx)
       const plugin = { name: mod.name, inject: mod.inject, apply: mod.apply }
       const handle = await agent.ctx.plugin(plugin as never, config as never) as unknown as { dispose(): Promise<void> }
-      loadedFor(agent.id).set(serverName, { dispose: async () => { await handle.dispose() } })
+      loadedFor(agent.id).set(serverName, {
+        carrier: 'mount',
+        dispose: once(async () => { await handle.dispose() }),
+      })
       bindAgentScope(agent)
       return {
         server: serverName,
@@ -459,8 +607,8 @@ export function registerMcpTools(
     },
   }))
 
-  // Registered in every on-demand mode: a filtered row takes the proxy carrier
-  // even under `dynamic`, where its tools would otherwise arrive natively.
+  // Registered in every on-demand mode: this proxy is what `lazy` serves, and
+  // the mode is a live setting, so the registration cannot depend on it.
   register(defineTool({
     name: 'mcp_call',
     description:
@@ -492,12 +640,12 @@ export function registerMcpTools(
       if (mount === undefined) {
         throw new Error(`MCP server "${request.server}" is not loaded for this session — call mcp_load first`)
       }
-      if (mount.client === undefined) {
+      if (mount.carrier !== 'proxy') {
         throw new Error(
           `MCP server "${request.server}" was loaded with its tools registered natively — call them by name instead`,
         )
       }
-      if (mount.tools !== undefined && !mount.tools.some(candidate => candidate.name === request.tool)) {
+      if (!mount.tools.some(candidate => candidate.name === request.tool)) {
         throw new Error(
           `MCP server "${request.server}" exposes no tool "${request.tool}" in this session — `
           + 'call mcp_load to list the tools this session may call',
@@ -568,10 +716,14 @@ function lazyTool(tool: LazyTool): { name: string; description: string; schema: 
   }
 }
 
+/** One visible tool as `mcp_load` reports it: named the way this session must call it. */
+function exposedTool(carrier: McpCarrier, serverName: string, tool: LazyTool): { name: string; description: string; schema: string } {
+  return { ...lazyTool(tool), name: visibleToolName(carrier, serverName, tool.name) }
+}
+
 /** The already-loaded server's exposed tool list, re-reported without reconnecting. */
-function describeTools(mount: MountedServer): { name: string; description: string; schema: string }[] {
-  if (mount.tools === undefined) return []
-  return mount.tools.map(lazyTool)
+function describeTools(mount: MountedProxy | MountedNative, serverName: string): { name: string; description: string; schema: string }[] {
+  return mount.tools.map(tool => exposedTool(mount.carrier, serverName, tool))
 }
 
 /** Coerce model-supplied arguments to the object the SDK expects. */

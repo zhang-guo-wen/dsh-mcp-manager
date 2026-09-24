@@ -71,7 +71,7 @@ at all**, the mode says **when an allowed server enters context**.
 | Mode | Behavior |
 |---|---|
 | Load all (`eager`) | Allowed servers mount at session start; their tools are always in the request |
-| Dynamic insert (`dynamic`, default) | Allowed servers stay unmounted; `mcp_load` mounts one into the calling session, so its tools join the request — best tool binding, but the tool list changes once per load |
+| Dynamic insert (`dynamic`, default) | Allowed servers stay unmounted; `mcp_load` mounts one into the calling session, so its tools join the request — best tool binding, but the tool list changes once per load. **A filtered row mounts only its visible tools**, which keep the server's real argument schemas |
 | Lazy (`lazy`) | Allowed servers stay unmounted; `mcp_load` connects over the MCP SDK **without registering anything** and returns the tool schemas, and the model calls them through the fixed `mcp_call` proxy — the tool list never changes, so the request-cache prefix is never invalidated |
 
 Set it in **设置 → Harness 兼容 → MCP 管理 → MCP 加载方式**. The choice is stored in the user's `mcp-manager`
@@ -92,9 +92,9 @@ opposite — the preset is a standing mount, so one shared instance serves every
 
 ### MCP tool filters
 
-A server often publishes dozens of tools while a session uses a few. Once filtered, **only the tools the rules admit
-are handed to the model when the server loads**: a hidden tool is absent from the `mcp_load` result and `mcp_call`
-refuses to invoke it.
+A server often publishes dozens of tools while a session uses a few. The rules decide **which tools are visible**: a
+hidden tool is absent from the `mcp_load` result and `mcp_call` refuses to invoke it. Filtering does **not** change the
+cost model — whether the visible tools enter every request is the **loading mode**'s decision, filter or not.
 
 **In the settings page:** Settings → Harness 兼容 → MCP 管理 → a row's **Edit** → the **Tools** block at the bottom of
 the dialog.
@@ -127,9 +127,12 @@ mcp-manager:
 What to expect:
 
 - **Rules are read at load time.** A committed change applies to the **next `mcp_load`**; an already-loaded server
-  keeps the tools it was admitted with, and `mcp_unload` followed by `mcp_load` picks up the new rules.
-- **A filtered row always takes the proxy carrier** (`mcp_load` lists, `mcp_call` invokes), even under the `dynamic`
-  mode: native registration publishes every discovered tool and offers no way to hold some back.
+  keeps the tools it was admitted with, and `mcp_unload` followed by `mcp_load` picks up the new rules. When the
+  server itself changes its tool list (`tools/list_changed`), the re-sync keeps the rules the load used.
+- **The loading mode picks the carrier, not the rules.** Under `lazy` a row's tools always take the proxy carrier
+  (`mcp_load` lists, `mcp_call` invokes). Under `dynamic`, a row without rules mounts through the harness as a whole,
+  while **a filtered row registers only its visible tools natively in that session** — they carry the server's real
+  argument schemas in every request, and the hidden ones are never registered at all.
 - **`eager` ignores filters**, because that mode mounts the whole server through the harness's mcp-client. The plugin
   warns at startup when rules are configured for it.
 - **A malformed rule set hides nothing**: an unparsable value filters nothing, so a typo never empties a server.
@@ -181,6 +184,9 @@ every server it finds as a checklist. Selected servers are imported as **global*
 - **Import reads Claude Code and the project `.mcp.json` only.** Cursor, Cline, Roo, and VS Code configuration files
   are not scanned, and an import always targets the global plane; move a row into a preset afterwards if you want it
   on-demand.
+- **A filtered row under `dynamic` gets no server instructions and no resource tools.** The harness's mcp-client
+  provides both, and this row registers through the plugin's own carrier instead. The tools themselves — argument
+  binding, results, image projection — match a native mount.
 
 ## Development
 

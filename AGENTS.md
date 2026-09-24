@@ -16,6 +16,9 @@ Codex 兼容与 `/btw`,这边负责 MCP。两者各有自己的设置命名空�
 这不是风格选择——`dsh plugin add <git-url>` 取的是仓库根,包放在 `packages/*` 下会被装成错误的东西。
 
 - `src/` —— host 入口 `index.ts`;浏览器半边在 `src/client/`。
+- `src/mcp-carrier.ts` —— 载体选择(`carrierFor`)与原生注册原语(`nativeDefinitions` / `swapNativeTools`)。
+  纯逻辑:只 import `node:crypto` 与同仓纯模块,不碰 harness 运行时包,所以 vitest 能直接跑到。
+  `src/mcp-tool-name.ts` —— 公开工具名契约,镜像 mcp-client 的 `publicToolName`。
 - `lib/` —— 构建产物:**已提交进仓库**(`index.mjs` host + `client.js` 浏览器 handoff),
   这样别人可以直接从 git 安装。改完源码**记得 `npm run build` 并把 `lib/` 一起提交**。
 - `cordis.patch.yml` —— 把插件行插入组合的 bundle 层。
@@ -105,12 +108,45 @@ const mod = await ctx.loader.internal.import('@deepseek-ai/dsh-agent-preset-regi
 
 - `eager`:允许的行照常挂载;不注册按需工具。
 - `dynamic`(默认):允许的行**默认不挂载**(见下面的 gate);`mcp_load` 把 mcp-client 挂进**调用方 agent
-  的作用域**,原生注册工具。
+  的作用域**,原生注册工具。**配了工具过滤规则的行**改走下面「载体选择」里的原生式注册:只注册可见工具。
 - `lazy`:允许的行**默认不挂载**;**用 MCP SDK 直连、完全不注册工具**;`mcp_load` 把工具 schema 作为结果
   返回,模型用固定的 `mcp_call` 代理调用 → **工具列表永不变,请求缓存前缀零失效**。
 
 三种模式的取舍、否决过的替代方案,以及 Claude Code / Messages API 的延迟加载先例对照,见
 [docs/design-decisions.md](docs/design-decisions.md);本节只讲实现契约。
+
+### 载体选择(src/mcp-carrier.ts)
+
+**载体由模式决定,规则只决定可见集合**(决策 D8)。`carrierFor(mode, filter)`:
+
+| 模式 | 无规则 | 有规则 |
+|---|---|---|
+| `lazy` | `proxy` | `proxy` |
+| `dynamic` | `mount`(整台交给 mcp-client) | `native`(插件只注册可见工具) |
+| `eager` | `undefined`(不注册按需工具) | `undefined`(规则不生效并 warn) |
+
+**`native` 载体怎么工作:** SDK 直连 → `listTools` → `filterMcpTools` 只留可见的 → `nativeDefinitions` 用
+harness 自己的 `createMcpToolDefinition`(`@deepseek-ai/dsh-mcp-client` 的公开根导出,经 loader 取同一实例)造定义 →
+`swapNativeTools` 注册进 **`agent.ctx.get('tools')`**。三条必须记住的事:
+
+1. **注册必须落在调用方 agent 作用域。** 用 `agent.ctx.get('tools')`,不要用插件 root ctx 上那份 —— Cordis 的
+   `ctx.get` 返回 scope 绑定的可追踪代理(`reflect.get` → `getTraceable`),`this.ctx` 因此是该 agent 的 ctx,
+   `register` 才落进那个层。用 root 那份会变成全局注册,工具漏给所有会话。
+2. **注册代次按名字 diff 替换**(`swapNativeTools`):新增的先注册、消失的最后撤销、存活的名字保持原注册 ——
+   工具列表只在服务器真的改动处变化,前缀不会因为无关工具重建而失效。任一注册失败要把本次新增的全部撤销再抛,
+   与 mcp-client 的「整代或零代」一致。
+3. **`tools/list_changed` 要重新同步**:SDK 没有该通知的专用 handler,它走 `client.fallbackNotificationHandler`;
+   重新列目录后按**加载时那套规则**重算可见集合,再换一代注册。同一个 mount 上的重同步串行化(`mount.resyncing`),
+   因为服务器可能在上一次交换还没完成时再报一次变化。
+
+**`mcp_call` 只服务 `proxy`**:其余载体的行调用它会直接报错让模型按名字调。它在每种按需模式下都注册,因为它服务的
+是 `lazy`,而模式是活设置,注册不能跟着某个模式走。
+
+**工具定义用 harness 的适配器,不要自己写。** `createMcpToolDefinition` 负责上游 schema、canonical 结果校验、
+`isError`、图片落盘与 PTC 投影;自己拼一个只会得到一个更弱的定义。它在老版本 harness 上不存在时,`native` 载体
+**fail loud**(提示改用 `lazy`),不要静默降级。工具名必须用 `mcpToolPublicName` 复刻 mcp-client 的命名契约
+(`mcp__<serverName>__<rawName>`,超长/非法字符时截断并接 12 位 SHA-256):同一个工具在不同载体下必须是同一个名字,
+否则按 `mcp__<serverName>__` 前缀挂的 toolview 与命名空间都会失准。
 
 **作用域语义(preset 行 vs `mcp_load`):** preset 平面的行是 standing mount,服务的是**该 preset 的所有会话,
 以及它们的子代理** —— 子代理加入的是父的 **preset** 而不是父 agent(`applyChildComposition` 调
@@ -121,19 +157,20 @@ const mod = await ctx.loader.internal.import('@deepseek-ai/dsh-agent-preset-regi
 同类插件的做法对比见 [docs/competitive-landscape.md](docs/competitive-landscape.md) 的「作用域分层」。
 
 `mcp_list` / `mcp_load` / `mcp_unload` / `mcp_call` 让一个会话**按需启动**某台 MCP,省掉工具 schema 的 token
-(`mcp_call` 在 `dynamic` 与 `lazy` 下都注册,见"工具过滤";`eager` 下一个按需工具都不注册):
+(`mcp_call` 在每种按需模式下都注册 —— 它服务 `lazy`,而模式是活设置;`eager` 下一个按需工具都不注册):
 
 - 被**禁用**的 composition 行完全不参与:工具不进目录,也不能 `mcp_load`。
-- `mcp_load` 走 **agent 作用域**:`exec.agent.ctx.plugin(mcpClientPlugin, config)`,实例随该会话销毁,
-  注册的工具只进这个 agent 的层(所以一个会话加载的服务器不会漏到别的会话)。
+- `mcp_load` 走 **agent 作用域**:无规则时 `exec.agent.ctx.plugin(mcpClientPlugin, config)`,实例随该会话销毁,
+  注册的工具只进这个 agent 的层(所以一个会话加载的服务器不会漏到别的会话);有规则时插件自己
+  `agent.ctx.get('tools').register(...)`(见「载体选择」)。
 - **连接按会话隔离,也按会话回收。** `mounted` 是 `Map<agentId, Map<serverName, MountedServer>>`:同一会话重复
   `mcp_load` 复用一份,不同会话各起一份(stdio 就是各一个子进程),子 agent / fork 出的会话都算独立 agent。
-  `eager` 相反 —— preset 是 standing mount,全局共享一个实例。**native 载体**(dynamic 的原生注册)挂在 agent
-  ctx 上,会话销毁时 Cordis 连它一起回收;但 **proxy 载体**是一个裸 SDK client,不绑定任何作用域,会话结束不会
-  自动关 —— 所以 `bindAgentScope` 在某个会话第一次 load 时用 `agent.ctx.effect` 注册一次清理
-  (`Agent.ctx` 的契约是 agent-local contributions "unwind on disposal"),会话销毁时 `releaseAgent` 收掉该
-  会话的全部 mount。注意 `releaseAgent` **只 dispose proxy 载体**:native 的 handle 属于同一个正在销毁的 ctx,
-  在那里再调一次它的 disposer 是多余的。
+  `eager` 相反 —— preset 是 standing mount,全局共享一个实例。**`mount` 载体**的 handle 挂在 agent ctx 上,
+  会话销毁时 Cordis 连它一起回收,`releaseAgent` 不必再动它;但 **`proxy` 与 `native` 载体**是裸 SDK client
+  (native 还额外持有注册),不绑定任何作用域,会话结束不会自动关 —— 所以 `bindAgentScope` 在某个会话第一次
+  load 时用 `agent.ctx.effect` 注册一次清理(`Agent.ctx` 的契约是 agent-local contributions "unwind on
+  disposal"),会话销毁时 `releaseAgent` 收掉该会话剩下的全部 mount。`dispose` 包了 `once`,因为 native 的注册
+  本来也会随同一个 ctx 销毁,两条路径都可能到达它。
 - 工具定义用 `@deepseek-ai/dsh-tools` 的 `defineTool` + `ctx.tools.register(def)`;`register` 返回 disposer,
   注册必须包在 `ctx.effect` 里。`exec.agent` 是拿到当前 agent 的唯一途径(无 agent 时要拒绝执行)。
 - mcp-client 的插件对象**经 loader 内部解析**取得(`ctx.loader.internal.import`),与组合用的是同一个模块实例,
@@ -183,15 +220,14 @@ standing 作用域里 `ctx.tools.register`),结果 **preset 每 ~5 秒被重挂�
 
 三条实现约束:
 
-1. **过滤点有两处,不能只做一处。** `mcp_load` 的返回(模型看不到被隐藏的工具名)和 `mcp_call` 的入参校验
-   (拿旧名字调用会被拒绝)。只做前者挡不住模型凭历史记忆直呼工具名。
-2. **配了规则的行强制走代理通道**(`mode === 'lazy' || filterHidesAnything(filter)`)。`dynamic` 的原生注册由
-   harness 的 `mcp-client` 全量挂载,`ctx.tools.register` 返回的 disposer 只在该包内部,插件拿不到单个工具的撤销权;
-   `eager` 同理,所以 `eager` 下规则不生效 —— `index.ts` 的 `warnFiltersWithoutEffect` 会在启动和每次提交时警告。
-   因为这条,**`mcp_call` 在动态/惰性两种模式下都注册**(只注册 lazy 是不够的)。
+1. **过滤点跟着载体走。** `proxy` 载体两个点都要:`mcp_load` 的返回(模型看不到被隐藏的工具名)与 `mcp_call`
+   的入参校验(拿旧名字调用会被拒绝)。`native` 载体只需要前者 —— 被隐藏的工具根本没有注册,模型照历史名字调用
+   直接得到未知工具;`mcp_call` 对这类行也拒绝(它只服务 `proxy`)。
+2. **过滤不切换载体**(见「载体选择」)。`eager` 下规则不生效 —— 该模式由 harness 的 mcp-client 整台挂载,插件没有
+   插手的点 —— `index.ts` 的 `warnFiltersWithoutEffect` 会在启动和每次提交时警告。
 3. **规则 reader 是活闭包而不是快照**:`registerMcpTools(..., key => readToolFilter(key))`,`index.ts` 在
    `apply` 里把它指向 `readSettings().tools`。所以改规则不需要重建注册,下一次 `mcp_load` 就读到新值;
-   已经加载的服务器保持加载时那套工具(不追溯)。
+   已经加载的服务器保持加载时那套工具(不追溯),服务器自己发 `tools/list_changed` 时也按加载时那套规则重算。
 
 `mcp_load` 的结果带 `hidden` 字段(被隐藏的数量),render 里有一行提示 —— 模型需要知道"还有工具但不可调用",
 否则会照历史里的名字硬调。
@@ -308,3 +344,7 @@ client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏�
 11. **在设置 schema 里校验 `tools` 值** → 一个写错的规则让整个命名空间回退,用户所有 MCP 设置静默失效。
 12. **把 `env`/`headers` 的值打进日志或错误消息** → 明文凭据落进会话与日志文件;导入的服务器恰恰都是带 token 的。
 13. **给导入单写一条写入路径** → 绕开 `addMcp` 的冲突检测与原子写,重名会写出重复行。
+14. **把原生载体的工具注册到插件 root ctx**(而不是 `agent.ctx.get('tools')`) → 工具变成全局注册,漏给所有会话。
+15. **自己拼 MCP 工具定义而不用 `createMcpToolDefinition`** → 丢 canonical 结果校验、`isError`、图片落盘与 PTC 投影。
+16. **复刻工具名时漏掉 mcp-client 的规范化与哈希** → 同一个工具在不同载体下拿到两个名字,`mcp__<serverName>__`
+    前缀的命名空间与 toolview 失准。

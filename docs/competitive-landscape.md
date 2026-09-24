@@ -49,19 +49,23 @@ MCP Apps 宿主 [sugarforever/dsh-mcp-apps](https://github.com/sugarforever/dsh-
 
 ### 我们守住的三点
 
-1. **进程级惰性 + 行级过滤 + 会话隔离三合一**：`mcp_load` 走 `exec.agent.ctx.plugin()`，native 载体随会话销毁，
-   proxy 载体靠 `bindAgentScope` 回收。竞品要么不管进程（leaforbook），要么不管作用域（多数面板插件）。
-2. **工具过滤两点强制**：`mcp_load` 的返回与 `mcp_call` 的入参校验都挡；配了规则的行自动切换代理载体。
-   labmimors 的 `allowTools/denyTools` 最接近，但它是网关级、没有按行规则。
+1. **进程级惰性 + 行级过滤 + 会话隔离三合一**：`mcp_load` 的 `mount` 载体走 `exec.agent.ctx.plugin()`（随会话销毁），
+   过滤行改走插件自己的 `native` 载体（注册落进调用方 agent 作用域），`proxy` 载体靠 `bindAgentScope` 回收。
+   竞品要么不管进程（leaforbook），要么不管作用域（多数面板插件）。
+2. **工具过滤不牺牲绑定**：`dynamic` 下的过滤行只注册可见工具，参数 schema 与原生挂载同源（harness 自己的
+   `createMcpToolDefinition`）；只有 `lazy` 才退到 `mcp_call` 的入参校验。labmimors 的 `allowTools/denyTools`
+   最接近，但它是网关级、没有按行规则，也没有"过滤之后仍然是原生工具"这一档。
 3. **加载语义显式建模**：两个正交开关，且模式是活设置（提交即对所有会话的下一次请求生效）。
    竞品普遍只有一个 enable/disable 维度。
 
-### 已知的两类代价（来自竞品视角，我们尚未在 README 写明）
+### 已知的两类代价（只在 `lazy` 下成立）
 
 - **代理通道丢掉模型侧的参数文档**：`lazy` 要求模型照抄 schema 里的参数（设计取舍见 design-decisions.md D2）。
+  `dynamic` 下的过滤行没有这条代价 —— 可见工具照旧带真实 schema 进请求（D8）。
 - **代理通道丢掉富 UI 呈现**：`dsh-mcp-diff` 按 `mcp__<serverName>__<tool>` 前缀注册 toolview，
   `dsh-mcp-apps` 按工具 `_meta.ui.resourceUri` 渲沙箱 App——两者都依赖工具被**原生注册**。
-  经 `mcp_call` 的调用结果只有一个文本字段，这类卡片与 App 不会触发。
+  经 `mcp_call` 的调用结果只有一个文本字段，这类卡片与 App 不会触发；`dynamic` 下过滤行仍按同一前缀原生注册，
+  所以照样命中。
 
 ## 作用域分层
 
