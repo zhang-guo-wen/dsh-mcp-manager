@@ -61,7 +61,7 @@ Connections are per-session: a repeated `mcp_load` reuses one, different session
 
 ### Tool filters
 
-Settings → MCP 管理 → a row's **Edit** → the **Tools** block lists every method the server publishes, all checked. Unchecking one hides it: it never enters context, and calling it is refused. Filtering does not change the cost model — the loading mode decides that.
+Settings → MCP 管理 → a row's **Edit** → the **Tools** tab lists every method the server publishes, all checked. Unchecking one hides it: it never enters context, and calling it is refused. Filtering does not change the cost model — the loading mode decides that.
 
 For wildcards, write the rules yourself in the `mcp-manager` settings under `tools`, keyed by the row key (`preset:<preset id>:<serverName>`):
 
@@ -89,7 +89,7 @@ Nothing is modified — the scan only reads — and each server is imported on i
 ## Notes and caveats
 
 - **Enabling a server still waits on the child process** (`npx -y …` / `uvx …`, usually 1–3 seconds). The UI never blocks; installing the server as a direct executable shortens this noticeably.
-- **Opening the edit dialog connects to that server once** (to list its tools), with the same 1–3 second cost.
+- **Switching to the edit dialog's Tools tab connects to that server once** (to list its tools), with the same 1–3 second cost; renaming a row only never connects.
 - **Global-plane rows ignore the loading mode**: they always mount.
 - **A preset's first mount starts and then kills each server once.** On-demand loading works by unmounting rows at runtime, which cannot beat the child process's spawn, so the first session to use a preset after a host restart pays one short start-up.
 - **Import reads Claude Code and the project `.mcp.json` only.** Cursor, Cline, Roo, and VS Code configuration files are not scanned, and an import always targets the global plane; move a row into a preset afterwards if you want it on-demand.

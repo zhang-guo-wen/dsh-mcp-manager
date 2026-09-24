@@ -1,5 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { Button, Input, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useEffect, useId, useState, type ReactNode } from 'react'
+import { Button, Input, Modal, SegmentedTabs } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   AddMcpRequest,
   DescribeMcpRequest,
@@ -21,6 +21,9 @@ type Translate = (key: McpSectionKey) => string
 
 /** Whether the editor is creating a row or replacing one. */
 export type McpEditorMode = 'add' | 'edit'
+
+/** The editor's two panes: the connection row's own fields, and its tools. */
+type McpEditorTab = 'config' | 'tools'
 
 /** Request emitted by the MCP editor after JSON parsing and validation. */
 export type McpEditorRequest = AddMcpRequest | EditMcpRequest
@@ -64,8 +67,10 @@ function specJson(describe: DescribeMcpResult | undefined): string {
   return JSON.stringify(flattenSpec(spec), null, 2)
 }
 
-/** Modal editor: one scope dropdown, title/description fields, a JSON spec box, and the tool list. */
+/** Modal editor split into a pane for the row's fields and a pane for its tools. */
 export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, globalProblemReason, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
+  const [tab, setTab] = useState<McpEditorTab>('config')
+  const tabId = useId()
   const [scopeValue, setScopeValue] = useState(server?.scope === 'preset' ? server.presetId ?? '' : '')
   const [presetOptions, setPresetOptions] = useState<readonly McpPresetOption[]>([])
   const [title, setTitle] = useState(server?.serverName ?? '')
@@ -114,10 +119,39 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
     )
   }
 
+  /**
+   * List the tools of the spec the form currently shows. The JSON box is the
+   * source, so an edited command or url is listed as edited.
+   * @param fromRules - seed the checkboxes from the row's stored rules.
+   */
+  const loadToolsFromForm = (fromRules: boolean): void => {
+    try {
+      const parsed = parseSpecText(json, t('mcp.form.jsonInvalid'))
+      const serverName = (title.trim() !== '' ? title.trim() : parsed.serverName ?? '').trim()
+      loadTools(parsed.spec, serverName, fromRules)
+    } catch (cause) {
+      setToolsError(cause instanceof Error ? cause.message : t('mcp.form.jsonInvalid'))
+    }
+  }
+
+  /**
+   * Opening the tools pane is what asks the server for its listing: connecting
+   * spawns a child process for stdio rows, and a row the user only renames never
+   * needs one. `tools` stays null until a listing was actually shown, which is
+   * what keeps the save from rewriting the stored rules with an empty set.
+   */
+  const pickTab = (next: McpEditorTab): void => {
+    setTab(next)
+    if (next !== 'tools' || mode !== 'edit' || loading) return
+    if (tools !== null || toolsBusy) return
+    loadToolsFromForm(true)
+  }
+
   useEffect(() => {
     if (!open) return
     let current = true
     setLocalError(null)
+    setTab('config')
     setScopeValue(server?.scope === 'preset' ? server.presetId ?? '' : '')
     setTitle(server?.serverName ?? '')
     setDescription(descriptionInitial)
@@ -125,6 +159,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
     setHiddenTools(new Set<string>())
     setToolsError(null)
     setToolsBusy(false)
+    setLoading(false)
     void presets().then(
       (list) => { if (current) setPresetOptions(list) },
       () => { if (current) setPresetOptions([]) },
@@ -139,7 +174,6 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
           if (!current) return
           setJson(specJson(described))
           setLoading(false)
-          loadTools(described.spec, described.serverName, true)
         },
         () => { if (current) { setJson(specJson(undefined)); setLoading(false) } },
       )
@@ -204,6 +238,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       title={titleText}
       closeLabel={t('mcp.form.close')}
       description={t('mcp.form.hint')}
+      className={css.mcpEditorDialog ?? ''}
       contentClassName={css.mcpEditorContent ?? ''}
       footer={(
         <div className={css.formActions}>
@@ -215,60 +250,76 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       )}
     >
       <div className={css.mcpForm}>
-        <label className={css.formField}>
-          <span className={css.formLabel}>{t('mcp.form.scope')}</span>
-          <select
-            className={css.formSelect}
-            value={scopeValue}
-            disabled={formDisabled || mode === 'edit'}
-            aria-label={t('mcp.form.scope')}
-            onChange={(event) => { setScopeValue(event.currentTarget.value); setLocalError(null) }}
-          >
-            <option value="" disabled={globalUnavailable}>{globalUnavailable ? t('mcp.scopeGlobalReadOnly') : t('mcp.scopeGlobal')}</option>
-            {presetOptions.map(option => (
-              <option key={option.id} value={option.id}>{option.name}</option>
-            ))}
-            {showsCurrentPreset ? <option value={scopeValue}>{scopeValue}</option> : null}
-          </select>
-          {globalUnavailable ? <span className={css.fieldHint}>{globalProblemReason}</span> : null}
-        </label>
-        <label className={css.formField}>
-          <span className={css.formLabel}>{t('mcp.form.serverName')}</span>
-          <Input value={title} disabled={formDisabled} aria-label={t('mcp.form.serverName')} onChange={(event) => { setTitle(event.currentTarget.value); setLocalError(null) }} />
-        </label>
-        <label className={css.formField}>
-          <span className={css.formLabel}>{t('mcp.form.description')}</span>
-          <Input value={description} disabled={formDisabled} aria-label={t('mcp.form.description')} onChange={(event) => { setDescription(event.currentTarget.value); setLocalError(null) }} />
-        </label>
-        <label className={css.formField}>
-          <span className={css.formLabel}>{t('mcp.form.json')}</span>
-          <textarea
-            className={css.formJson}
-            value={json}
-            disabled={formDisabled}
-            spellCheck={false}
-            aria-label={t('mcp.form.json')}
-            onChange={(event) => { setJson(event.currentTarget.value); setLocalError(null) }}
-          />
-        </label>
-        <div className={css.formField}>
-          <span className={css.toolsHead}>
-            <span className={css.formLabel}>{t('mcp.form.tools')}</span>
+        <SegmentedTabs<McpEditorTab>
+          className={css.editorTabs}
+          label={t('mcp.form.tabs')}
+          value={tab}
+          onChange={pickTab}
+          items={[
+            { value: 'config', label: t('mcp.form.tabConfig'), id: `${tabId}-config-tab`, panelId: `${tabId}-config-panel` },
+            { value: 'tools', label: t('mcp.form.tabTools'), id: `${tabId}-tools-tab`, panelId: `${tabId}-tools-panel` },
+          ]}
+        />
+        <div
+          id={`${tabId}-config-panel`}
+          role="tabpanel"
+          aria-labelledby={`${tabId}-config-tab`}
+          className={css.editorPanel}
+          hidden={tab !== 'config'}
+        >
+          <label className={css.formField}>
+            <span className={css.formLabel}>{t('mcp.form.scope')}</span>
+            <select
+              className={css.formSelect}
+              value={scopeValue}
+              disabled={formDisabled || mode === 'edit'}
+              aria-label={t('mcp.form.scope')}
+              onChange={(event) => { setScopeValue(event.currentTarget.value); setLocalError(null) }}
+            >
+              <option value="" disabled={globalUnavailable}>{globalUnavailable ? t('mcp.scopeGlobalReadOnly') : t('mcp.scopeGlobal')}</option>
+              {presetOptions.map(option => (
+                <option key={option.id} value={option.id}>{option.name}</option>
+              ))}
+              {showsCurrentPreset ? <option value={scopeValue}>{scopeValue}</option> : null}
+            </select>
+            {globalUnavailable ? <span className={css.fieldHint}>{globalProblemReason}</span> : null}
+          </label>
+          <label className={css.formField}>
+            <span className={css.formLabel}>{t('mcp.form.serverName')}</span>
+            <Input value={title} disabled={formDisabled} aria-label={t('mcp.form.serverName')} onChange={(event) => { setTitle(event.currentTarget.value); setLocalError(null) }} />
+          </label>
+          <label className={css.formField}>
+            <span className={css.formLabel}>{t('mcp.form.description')}</span>
+            <Input value={description} disabled={formDisabled} aria-label={t('mcp.form.description')} onChange={(event) => { setDescription(event.currentTarget.value); setLocalError(null) }} />
+          </label>
+          <label className={css.formField}>
+            <span className={css.formLabel}>{t('mcp.form.json')}</span>
+            <textarea
+              className={css.formJson}
+              value={json}
+              disabled={formDisabled}
+              spellCheck={false}
+              aria-label={t('mcp.form.json')}
+              onChange={(event) => { setJson(event.currentTarget.value); setLocalError(null) }}
+            />
+          </label>
+          {loading ? <p className={css.mcpStatus}>{t('mcp.loading')}</p> : null}
+        </div>
+        <div
+          id={`${tabId}-tools-panel`}
+          role="tabpanel"
+          aria-labelledby={`${tabId}-tools-tab`}
+          className={css.editorPanel}
+          hidden={tab !== 'tools'}
+        >
+          <div className={css.toolsHead}>
             {tools !== null ? <span className={css.toolsCount}>{`${enabledCount}/${tools.length}`}</span> : null}
             <span className={css.toolsActions}>
               <button
                 type="button"
                 className={css.mcpAction}
                 disabled={formDisabled || toolsBusy}
-                onClick={() => {
-                  try {
-                    const parsed = parseSpecText(json, t('mcp.form.jsonInvalid'))
-                    const serverName = (title.trim() !== '' ? title.trim() : parsed.serverName ?? '').trim()
-                    loadTools(parsed.spec, serverName, tools === null)
-                  } catch (cause) {
-                    setToolsError(cause instanceof Error ? cause.message : t('mcp.form.jsonInvalid'))
-                  }
-                }}
+                onClick={() => { loadToolsFromForm(tools === null) }}
               >
                 {toolsBusy ? t('mcp.form.toolsLoading') : t('mcp.form.toolsReload')}
               </button>
@@ -283,7 +334,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
                 </>
               ) : null}
             </span>
-          </span>
+          </div>
           <span className={css.fieldHint}>{t('mcp.form.toolsHint')}</span>
           {toolsError !== null ? <p className={css.formError} role="alert">{toolsError}</p> : null}
           {tools !== null && tools.length === 0 ? <p className={css.mcpStatus}>{t('mcp.form.toolsEmpty')}</p> : null}
@@ -305,7 +356,6 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
             </div>
           ) : null}
         </div>
-        {loading ? <p className={css.mcpStatus}>{t('mcp.loading')}</p> : null}
         {localError !== null ? <p className={css.formError} role="alert">{localError}</p> : null}
         {error !== null ? <p className={css.formError} role="alert">{error}</p> : null}
       </div>

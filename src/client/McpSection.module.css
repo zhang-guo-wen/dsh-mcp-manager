@@ -254,11 +254,37 @@
   gap: 12px;
 }
 
+/* The default card is 380px wide, which fits neither the JSON spec nor a tool
+   listing with names and descriptions; widen it beyond the reading dialogs. */
+.mcpEditorDialog {
+  box-sizing: border-box;
+  width: min(640px, 100%);
+}
+
 /* Modal content budget: the dialogs scroll internally instead of growing the
    page, and the action row keeps its own separator. */
 .mcpEditorContent {
   max-height: min(70vh, 640px);
   overflow: auto;
+}
+
+.editorTabs {
+  flex: none;
+}
+
+/* Both panes keep the dialog at one height while the user switches, so the tool
+   listing does not resize the card the moment it is opened. */
+.editorPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 320px;
+}
+
+/* The pane sets its own display, which would otherwise beat the user-agent
+   `[hidden]` rule and leave the unselected pane on screen. */
+.editorPanel[hidden] {
+  display: none;
 }
 
 .formActions {
@@ -279,7 +305,11 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* The app has no global border-box reset, and a content-box control inside the
+   modal body would overflow the body's 24px right pad: the scroll region then
+   clips that pad and the control reads as flush against the right edge. */
 .formSelect {
+  box-sizing: border-box;
   width: 100%;
   padding: 8px 10px;
   border-radius: 8px;
@@ -295,12 +325,13 @@
 }
 
 .formJson {
+  box-sizing: border-box;
   width: 100%;
   min-height: 220px;
   font-family: var(--ds-font-family-code);
   font-size: 12px;
   line-height: 18px;
-  padding: 10px 12px;
+  padding: 10px 14px;
   border-radius: 8px;
   border: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-1);

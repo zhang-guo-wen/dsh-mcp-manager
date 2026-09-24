@@ -293,7 +293,7 @@ mcp-manager:
 
 ### 工具选择 UI(src/client/McpEditor.tsx)
 
-编辑弹窗底部的"工具"区块是规则的可视化入口:勾选 = 可见,取消勾选 = 隐藏,默认全勾。
+编辑弹窗分成「配置」与「工具列表」两个 tab,后者是规则的可视化入口:勾选 = 可见,取消勾选 = 隐藏,默认全勾。
 
 - **数据来自 `mcpManager.listMcpTools`**(`mcp-remote.ts`),它按**表单当前的 spec** 连一次服务器并
   `listTools`,返回 `{name, description}[]`,完成后 close。之所以传 spec 而不是 `entryId`:新增行还没有 entryId,
@@ -301,8 +301,8 @@ mcp-manager:
 - **默认全勾 = 没有规则。** 勾选状态由 `admits(parseMcpToolFilter(toolRulesInitial), name)` 算出,所以手写的
   allow/通配规则在 UI 里也显示正确;保存时展开成 `!<name>` 的 deny 列表,全勾则写空数组 → 删掉该键。
 - **连不上就不动规则。** `tools === null` 时保存只提交连接配置 —— 否则一次连接抖动会清掉用户已有的过滤。
-- **每次打开弹窗会真起一个 MCP 连接**(stdio 是新的子进程,`npx -y` 那种 1-3 秒)。edit 模式自动拉,add 模式靠按钮,
-  因为新增时表单里的 spec 常常还是空的。
+- **切到「工具列表」tab 才会真起一个 MCP 连接**(stdio 是新的子进程,`npx -y` 那种 1-3 秒):edit 模式首次切过去
+  自动拉,add 模式靠按钮,因为新增时表单里的 spec 常常还是空的。只改描述就不进这个 tab,不会白起一个进程。
 - **改 client 后必须重建 `lib/client.js`**;Host 用内容 revision 让浏览器加载新 bundle,`HANDOFF_ID` 不得改变。
   改了 CSS module 要核对类名两边都在:JSX 引用了 CSS 里没有的类只得到 `undefined`,静默无样式。
 
