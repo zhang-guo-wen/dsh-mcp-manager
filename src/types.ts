@@ -40,6 +40,46 @@ export interface AddMcpRequest {
   readonly spec: McpSpec
 }
 
+/** One row a batch add appends; an unusable row is reported, not thrown. */
+export interface AddMcpBatchRow {
+  /** Row id; defaults to `serverName` when omitted. */
+  readonly entryId?: string
+  /** MCP namespace used in tool names. */
+  readonly serverName: string
+  /** Claude-compatible transport specification. */
+  readonly spec: McpSpec
+}
+
+/**
+ * Request to append several MCP client rows to one composition in a single
+ * write. Importing a configuration one row per call re-mounts an agent preset
+ * once per row, which respawns every MCP server that preset declares.
+ */
+export interface AddMcpsRequest {
+  /** Composition that receives every row. */
+  readonly target: McpTarget
+  /** Rows to append, in the order they should appear. */
+  readonly rows: readonly AddMcpBatchRow[]
+}
+
+/** What became of one row of a batch add. */
+export interface AddMcpBatchOutcome {
+  /** MCP namespace the row asked for. */
+  readonly serverName: string
+  /** Address of the appended row, or null when the row was refused. */
+  readonly entryId: string | null
+  /** Why this row was refused; absent on success. */
+  readonly reason?: string
+}
+
+/** Per-row result of a batch add, in request order. */
+export interface AddMcpsResult {
+  /** Composition the batch addressed. */
+  readonly target: McpTarget
+  /** One outcome per requested row, in request order. */
+  readonly outcomes: readonly AddMcpBatchOutcome[]
+}
+
 /** Request to replace one MCP client row's connection configuration. */
 export interface EditMcpRequest {
   /** Composition containing the row. */
@@ -141,15 +181,6 @@ export interface McpGateStateResult {
 /** Root-fiber lifecycle phase of one MCP row, or null when it owns no fiber. */
 export type McpFiberPhase = 'pending' | 'loading' | 'active' | 'failed' | 'unloading' | null
 
-/** Why the global plane refuses MCP row writes. */
-export type McpGlobalProblem =
-  /** The root Include carries the profile's patch list, so write-back would flatten it. */
-  | 'patched-include'
-  /** The composition mounts no single file-backed Include to address. */
-  | 'no-include'
-  /** The mounted global configuration file is not writable. */
-  | 'not-writable'
-
 /** One MCP client row a composition declares, read without waiting for its activation. */
 export interface McpRosterRow {
   /** Loader-qualified row id for a global row, the local row id for a preset row. */
@@ -190,13 +221,11 @@ export interface ListMcpsResult {
   /** Every declared preset, with its MCP rows. */
   readonly presets: readonly McpRosterPreset[]
   /**
-   * Whether the global plane accepts writes. False when the mounted root
-   * Include carries a patch list, which is the normal profile composition and
-   * makes Loader write-back flatten the bundle and user layers.
+   * Whether the global plane accepts writes, which needs exactly one file-backed
+   * root Include to address. Its patch layers are not a bar: a global write edits
+   * that file and reloads the Include, so the layers stay in place.
    */
   readonly globalWritable: boolean
-  /** Why the global plane is read-only, for the settings page to show. */
-  readonly globalProblem?: McpGlobalProblem
 }
 
 /** Request the MCP servers the Claude Code configuration files declare. */
@@ -211,7 +240,6 @@ export interface ScanClaudeMcpRequest {
 
 /** Which configuration file an imported entry was read from. */
 export type ClaudeMcpSourceLabel = 'user' | 'projectScope' | 'settings' | 'projectFile'
-
 /** Why a scanned source or entry could not be offered for import. */
 export type ClaudeMcpProblem =
   | 'missing'

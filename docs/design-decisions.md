@@ -24,6 +24,8 @@ kind: "package-reference"
 | D8 | 载体由加载模式决定，规则只决定可见集合 | 模式才是「绑定 vs 缓存」的取舍，规则不该替用户改代价 |
 | D9 | 服务器清单进系统提示，不做成列目录工具 | 模型看不到名字就加载不了，而这段常驻成本可用预算封顶 |
 | D10 | 名册读声明 + live fiber，不等任何行的激活 | 等激活等于把 MCP 子进程启动时间（实测 7.5–23s）算进设置页 |
+| D11 | 全局行写 Include 的文件 + `refresh()`，不走 Loader 写回 | Loader 写回会把带补丁的树拍平进用户的 `cordis.yml` |
+| D12 | 批量新增一次提交（`addMcps`） | 一次 preset 写入 = 该 preset 每台 MCP 重启一轮 |
 
 ### D1 允许与进上下文分离
 
@@ -143,9 +145,40 @@ kind: "package-reference"
   2. **给名册加缓存**：缓存要自己维护失效点，而声明与 live fiber 本来就同步可读，没有需要缓存的慢读。
 - **代价**：preset 未挂载（声明读）时 `!!js` 的 `disabled` 无法求值，报 `conditional` 而不是猜；
   group 的 `disabled` 继承规则在本模块复刻了一份（镜像 Loader 的语义，见 AGENTS.md 的「名册读取」）。
-- **顺带记录的宿主事实**：真实 profile 的根 Include 是带着补丁层挂载的（`boot(..., readProfilePatches(...))`），
-  所以 `globalInclude()` 的"补丁层会拍平"守卫必然命中，全局平面**只读**。插件侧只能提前说明，
-  见 AGENTS.md 的「导入 Claude 配置」第 1 条。
+
+### D11 全局行写文件 + 重读 Include
+
+- **结论**：全局平面的写（新增 / 编辑 / 开关）改 **file-backed Include 自己的文件**（`writeEntryListFile`，
+  只写用户自己的行列表），然后调 `Include.refresh()` 让组合重读该文件并重新套用补丁层；**不再用
+  `loader.create` / `loader.update`**。`globalWritable` 的判据因此只剩"组合里是否恰好挂着一个 file-backed
+  Include"。
+- **理由**：`loader.create` / `loader.update` 会走到 `EntryTree` 的写回，`Include.write()` 把**带过补丁的树**
+  序列化回文件——bundle 层与用户补丁层被拍平进用户的 `cordis.yml`。旧版为避免这一点把全局平面判为只读，
+  于是 CLI 默认 profile 里"新增到全局"必然失败。改文件 + `refresh()` 既保住分层，又当场生效（不需要重启）。
+- **被否决**：
+  1. **维持只读，导流到 preset**：全局平面本来就是这个组合的合法入口，用户明确要求能写；
+  2. **把新行插进 profile patch 的顶层 `insert:`**：那要插件自己实现 `configEditor` 的 YAML 文档事务
+     （`!!js` 标签、锁、回滚），而 `cordis.yml` 的 Include 就是为此存在的；
+  3. **写文件后用 `loader.create` 补一次挂载**：那正是会拍平的那一步。
+- **代价**：`writeEntryListFile` 用 `yaml.dump` 重写文件，**用户文件里的注释会丢**（本次实测：
+  `cordis.yml` 顶部的说明注释）。写入后做一次"行确实挂上了"的校验，校验失败就报错而不是假装成功。
+- **实现**：`src/mcp-remote.ts` 的 `writeGlobalRow` / `writeGlobalOne`；行查找不能走 `loader.resolve`
+  （它只看根 store），见 AGENTS.md 的「MCP 行编写」。
+
+### D12 批量新增走一次写
+
+- **结论**：导入这类批量写入走 `addMcps`（[`src/mcp-remote.ts`](../src/mcp-remote.ts)）：整批**一次 patch 提交**，
+  逐行校验、逐行报结果（`outcomes[].entryId === null` + `reason`）。单行编辑仍走 `addMcp`。
+- **理由**：一次 preset 写入 = 该 preset 的声明行重建 = 里面**每一台** MCP 重新挂载并重启子进程。导入 N 台按
+  `addMcp` 循环就是 N 轮全量重启，本机实测 `cmd /c npx -y …` 一台 7.5–23 秒，四台就是分钟级——用户看到的就是
+  "导入卡住"。一次提交把 N 轮压成 1 轮。
+- **被否决**：
+  1. **前端并发发 N 个 `addMcp`**：Host 侧 `enqueue` 本就串行化写，重挂次数不变；
+  2. **只按"逐行失败不中断"的旧要求做单行循环**：那条要求是**报错粒度**，`outcomes` 同样满足它，不必用 N 次写入换。
+- **代价**：一个 preset 里若有一条与批次中某行同名的行，冲突检测要同时覆盖"声明里已有的"和"本批次内的"
+  （两处都做了）；批内任一行在锁定文件后仍冲突时，会把整批标成失败（保守，不部分写）。
+- **实现**：`addMany` / `writeGlobalBatch` / `writePresetBatch`；客户端一次调用，全部成功即关窗，有失败才留在
+  弹窗里逐条列出（见 AGENTS.md 的「导入 Claude 配置」）。
 
 ## 先例：Claude 的 MCP 延迟加载
 

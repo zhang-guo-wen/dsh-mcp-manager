@@ -149,12 +149,12 @@ export function readMcpRoster(
 ): ListMcpsResult {
   const loader = ctx.get('loader') as { entries(): Iterable<RosterLoaderEntry> } | undefined
   const entries: McpRosterRow[] = []
-  /** Mounted root Includes, reduced to the write-back obstacle they carry. */
-  const includes: { readonly patches: number }[] = []
+  /** Mounted root Includes, which is where a global write lands. */
+  let includes = 0
   if (loader !== undefined) {
     for (const entry of loader.entries()) {
       if (entry.options.name === 'cordis:include' && entry.subtree !== undefined) {
-        includes.push({ patches: entry.subtree.config?.patches?.length ?? 0 })
+        includes += 1
       }
       if (!isMcpRow(entry.options)) continue
       entries.push(rosterRow({
@@ -192,18 +192,12 @@ export function readMcpRoster(
     }
   })
 
-  // Writing the global plane goes through Loader write-back, which re-serializes
-  // the Include's own entry list. A root Include carrying the profile's patch
-  // list is the normal composition and makes that write flatten the bundle and
-  // user layers, so this plane is read-only then.
-  const rootInclude = includes.length === 1 ? includes[0] : undefined
-  const problem = rootInclude === undefined
-    ? 'no-include' as const
-    : rootInclude.patches > 0 ? 'patched-include' as const : undefined
+  // A global write edits the Include's own file and reloads it, so the profile's
+  // patch layers stay where they are; only a composition with no single
+  // file-backed Include has nothing to address.
   return {
     entries,
     presets,
-    globalWritable: problem === undefined,
-    ...problem === undefined ? {} : { globalProblem: problem },
+    globalWritable: includes === 1,
   }
 }

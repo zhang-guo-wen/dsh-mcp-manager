@@ -2,26 +2,35 @@
  * Import dialog: the MCP servers the Claude Code configuration files declare,
  * offered as a checklist.
  *
- * The scan is a read; the import is a sequence of ordinary `addMcp` calls, one
- * per selected entry. That reuse is deliberate: a row imported here goes
- * through the same validation, conflict detection, atomic write, and live
- * reconciliation as one typed into the editor, so the two paths cannot drift.
- * Entries are imported independently and a failure is reported per entry rather
- * than aborting the batch, because one colliding name must not discard the rest.
+ * The scan is a read; the import is one `addMcps` call carrying every selected
+ * entry. That reuse is deliberate: a row imported here goes through the same
+ * validation, conflict detection, atomic write, and live reconciliation as one
+ * typed into the editor, so the two paths cannot drift. One call, not one per
+ * entry, because an agent preset re-mounts once per write and every MCP server
+ * that preset declares starts again on each mount. Entries are still validated
+ * individually, so a failure is reported per entry rather than discarding the
+ * batch, because one colliding name must not cost the rest.
  *
- * The target is chosen here: the global plane while it accepts writes, otherwise
- * an agent preset. A profile mounts its root Include together with the bundle and
- * user patch layers, so the global plane refuses writes there and an import that
- * insisted on it could never land a row.
+ * The plane is the settings tab's, not a field of its own: a user who opened the
+ * import from the global tab is importing into the global plane, and one who
+ * opened it from the agent tab picks the preset there.
  *
  * @module @guowenzhang/dsh-mcp-manager/client/ClaudeImportDialog
  */
 
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { AddMcpRequest, ClaudeMcpEntry, ClaudeMcpSource, McpTarget, ScanClaudeMcpRequest, ScanClaudeMcpResult } from '../types.ts'
+import type {
+  AddMcpsRequest,
+  AddMcpsResult,
+  ClaudeMcpEntry,
+  ClaudeMcpSource,
+  McpTarget,
+  ScanClaudeMcpRequest,
+  ScanClaudeMcpResult,
+} from '../types.ts'
 import type { McpSectionKey } from './locales.ts'
-import type { McpPresetOption, McpServer } from './settings-controller.ts'
+import type { McpPlane, McpPresetOption, McpServer } from './settings-controller.ts'
 import css from './McpSection.module.css'
 
 /** Localized `t` bound to this section's dictionary namespace. */
@@ -45,27 +54,21 @@ interface ClaudeImportDialogProps {
   readonly error: string | null
   /** Read the servers the Claude Code configuration files declare. */
   readonly scanClaudeMcp: (request: ScanClaudeMcpRequest) => Promise<ScanClaudeMcpResult>
-  /** Import one entry as a row of the selected composition. */
-  readonly addMcp: (request: AddMcpRequest) => Promise<unknown>
+  /** Append every selected entry to the addressed composition in one write. */
+  readonly addMcps: (request: AddMcpsRequest) => Promise<AddMcpsResult>
   /** The roster already configured, used to pre-clear names that would collide. */
   readonly servers: readonly McpServer[]
   /** Presets an import can target, in roster order. */
   readonly presets: () => Promise<readonly McpPresetOption[]>
-  /** Whether the global plane accepts writes; when false it is not offered. */
-  readonly globalWritable: boolean
-  /**
-   * Localized reason the global plane refuses writes, shown while it does. The
-   * import then writes into a preset, because the global plane cannot persist a
-   * row in a profile whose root Include carries the bundle and user patch layers.
-   */
-  readonly globalProblem?: string
+  /** The plane the settings tab shows, which the batch writes into. */
+  readonly plane: McpPlane
   readonly t: Translate
   readonly onClose: () => void
   /** Called after a batch settles so the section can refresh its roster. */
   readonly onImported: () => void
 }
 
-/** Where one import writes, as the dialog's scope field spells it. */
+/** Where one import writes. */
 type ImportScope = { readonly kind: 'global' } | { readonly kind: 'preset'; readonly presetId: string }
 
 /** The composition target one import scope addresses. */
@@ -141,15 +144,15 @@ const EntryRow = memo(function EntryRow({ entryKey, entry, checked, disabled, on
 
 /** The Claude configuration import dialog. */
 export function ClaudeImportDialog({
-  open, busy, error, scanClaudeMcp, addMcp, servers, presets, globalWritable, globalProblem, t, onClose, onImported,
+  open, busy, error, scanClaudeMcp, addMcps, servers, presets, plane, t, onClose, onImported,
 }: ClaudeImportDialogProps): ReactNode {
   const [view, setView] = useState<ImportView>({ status: 'loading' })
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(() => new Set<string>())
   const [attempt, setAttempt] = useState(0)
   const [outcome, setOutcome] = useState<ImportOutcome | null>(null)
-  const [progress, setProgress] = useState<{ readonly done: number; readonly total: number; readonly serverName: string } | null>(null)
+  const [importing, setImporting] = useState(false)
   const [presetOptions, setPresetOptions] = useState<readonly McpPresetOption[]>([])
-  const [scope, setScope] = useState<ImportScope>({ kind: 'global' })
+  const [presetId, setPresetId] = useState('')
   /** Whether the previous render had the dialog open, so a re-scan is told apart from a fresh open. */
   const wasOpen = useRef(false)
 
@@ -160,25 +163,20 @@ export function ClaudeImportDialog({
     let current = true
     setView({ status: 'loading' })
     setOutcome(null)
-    setProgress(null)
+    setImporting(false)
     // Only a fresh open starts from "everything importable selected". A re-scan
     // inside the same open dialog (a batch settled, or the retry button) keeps
     // the user's own selection: clearing it there silently re-checked every row.
     if (opening) {
       setExcluded(new Set<string>())
-      // An empty preset id stands for "the first preset once they are known";
-      // the global plane is preferred while it accepts writes.
-      setScope(globalWritable ? { kind: 'global' } : { kind: 'preset', presetId: '' })
+      // An empty preset id stands for "the first preset once they are known".
+      setPresetId('')
     }
     void presets().then(
       (list) => {
         if (!current) return
         setPresetOptions(list)
-        setScope((previous) => {
-          if (previous.kind !== 'preset' || previous.presetId !== '') return previous
-          const first = list[0]
-          return first === undefined ? { kind: 'global' } : { kind: 'preset', presetId: first.id }
-        })
+        setPresetId(previous => previous !== '' ? previous : list[0]?.id ?? '')
       },
       () => { if (current) setPresetOptions([]) },
     )
@@ -187,8 +185,10 @@ export function ClaudeImportDialog({
       () => { if (current) setView({ status: 'error' }) },
     )
     return () => { current = false }
-  }, [open, attempt, scanClaudeMcp, presets, globalWritable])
+  }, [open, attempt, scanClaudeMcp, presets])
 
+  /** The composition the batch writes into: the tab's plane, or its preset. */
+  const scope: ImportScope = plane === 'global' ? { kind: 'global' } : { kind: 'preset', presetId }
   const existing = configuredNames(servers, scope)
   /** A key is source-scoped, because the same name may appear in two files. */
   const keyOf = (source: ClaudeMcpSource, entry: ClaudeMcpEntry): string => `${source.id}\u0000${entry.serverName}`
@@ -215,56 +215,57 @@ export function ClaudeImportDialog({
   }
 
   /**
-   * Import every selected entry, one `addMcp` each. A rejection is recorded
-   * against its own server and the batch continues, so a single conflict cannot
-   * cost the user the rest of the import. One add can take as long as the MCP
-   * child process takes to start, so the dialog reports which server it is on
-   * rather than an indeterminate "importing" line.
+   * Import every selected entry in one `addMcps` call. The Host validates each
+   * row on its own and reports what became of it, so a collision still costs only
+   * its own row, while the accepted rows commit together — one write, which means
+   * one preset re-mount instead of one per row.
    */
   const runImport = async (): Promise<void> => {
     setOutcome(null)
-    const failures: { serverName: string; reason: string }[] = []
-    let imported = 0
-    for (const [index, { entry }] of chosen.entries()) {
-      setProgress({ done: index, total: chosen.length, serverName: entry.serverName })
-      try {
-        await addMcp({ target: targetOf(scope), serverName: entry.serverName, spec: entry.spec })
-        imported += 1
-      } catch (cause) {
-        failures.push({ serverName: entry.serverName, reason: cause instanceof Error ? cause.message : String(cause) })
+    setImporting(true)
+    try {
+      const result = await addMcps({
+        target: targetOf(scope),
+        rows: chosen.map(({ entry }) => ({ serverName: entry.serverName, spec: entry.spec })),
+      })
+      const refused = result.outcomes.filter(outcome => outcome.entryId === null)
+      const imported = result.outcomes.length - refused.length
+      setOutcome({
+        imported,
+        failures: refused.map(row => ({ serverName: row.serverName, reason: row.reason ?? t('unavailable') })),
+      })
+      if (imported > 0) onImported()
+      // Nothing was refused, so there is nothing left to read: the dialog closes
+      // and the roster behind it shows what landed.
+      if (refused.length === 0) {
+        onClose()
+        return
       }
+      // Surviving rows are now in the roster, so the source list is re-read to
+      // mark them as existing and keep a second click from colliding.
+      setAttempt(value => value + 1)
+    } catch (cause) {
+      setOutcome({ imported: 0, failures: [{ serverName: '', reason: cause instanceof Error ? cause.message : String(cause) }] })
+    } finally {
+      setImporting(false)
     }
-    setProgress(null)
-    setOutcome({ imported, failures })
-    if (imported > 0) onImported()
-    // Surviving rows are now in the roster, so the source list is re-read to
-    // mark them as existing and keep a second click from colliding.
-    setAttempt(value => value + 1)
   }
 
   const total = allEntries.length
   const importable = allEntries.filter(({ entry }) => selectable(entry)).length
-  /** The preset the select shows; empty while the global plane is the target. */
-  const scopeValue = scope.kind === 'global' ? '' : scope.presetId
-  // A profile whose root Include carries the bundle and user patch layers has no
-  // writable global plane, so a preset is the only place an import can land.
-  // With neither, the dialog explains why nothing can be imported.
-  const noWritablePlane = !globalWritable && presetOptions.length === 0
+  // An agent-plane import needs a preset to address; with none declared there is
+  // nowhere for it to land.
+  const noTarget = plane === 'agent' && presetId === ''
   const footer = (
     <div className={css.formActions}>
-      <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>{t('mcp.import.close')}</Button>
+      <Button variant="outline" size="sm" onClick={onClose} disabled={busy || importing}>{t('mcp.import.close')}</Button>
       <Button
         variant="primary"
         size="sm"
-        disabled={busy || chosen.length === 0 || noWritablePlane}
+        disabled={busy || importing || chosen.length === 0 || noTarget}
         onClick={() => { void runImport() }}
       >
-        {progress === null
-          ? (busy ? t('mcp.import.submitting') : t('mcp.import.submit'))
-          : t('mcp.import.progress')
-            .replace('{i}', String(progress.done + 1))
-            .replace('{n}', String(progress.total))
-            .replace('{name}', progress.serverName)}
+        {importing ? t('mcp.import.submitting') : t('mcp.import.submit')}
       </Button>
     </div>
   )
@@ -281,54 +282,51 @@ export function ClaudeImportDialog({
       footer={footer}
     >
       <div className={css.mcpForm}>
-        {/* One control row: where the batch writes on the left, what is
-            selected on the right. The plane select and the check-all actions
-            share a baseline, so the dialog does not stack three bands before
-            the list. */}
+        {/* One control row: where the batch writes on the left, what is selected
+            on the right, on one baseline. The plane follows the settings tab, so
+            only the agent plane asks which preset. */}
         <div className={css.importToolbar}>
-          <label className={css.importScope}>
-            <span className={css.formLabel}>{t('mcp.import.scope')}</span>
-            <select
-              className={css.formSelect}
-              value={scopeValue}
-              disabled={busy || noWritablePlane}
-              aria-label={t('mcp.import.scope')}
-              onChange={(event) => {
-                const next = event.currentTarget.value
-                setScope(next === '' ? { kind: 'global' } : { kind: 'preset', presetId: next })
-                // The chosen plane changes which names already exist there, so the
-                // dialog returns to "everything importable into it is selected".
-                setExcluded(new Set<string>())
-              }}
-            >
-              {globalWritable ? <option value="">{t('mcp.scopeGlobal')}</option> : null}
-              {presetOptions.map(option => (
-                <option key={option.id} value={option.id}>{`${t('mcp.scopePreset')} · ${option.name}`}</option>
-              ))}
-            </select>
-          </label>
+          {plane === 'agent' ? (
+            <label className={css.importScope}>
+              <span className={css.formLabel}>{t('mcp.form.presetScope')}</span>
+              <select
+                className={css.formSelect}
+                value={presetId}
+                disabled={busy || importing || presetOptions.length === 0}
+                aria-label={t('mcp.form.presetScope')}
+                onChange={(event) => {
+                  setPresetId(event.currentTarget.value)
+                  // The chosen preset changes which names already exist there, so
+                  // the dialog returns to "everything importable is selected".
+                  setExcluded(new Set<string>())
+                }}
+              >
+                {presetOptions.map(option => (
+                  <option key={option.id} value={option.id}>{`${t('mcp.scopePreset')} · ${option.name}`}</option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <span className={css.importScope}>
+              <span className={css.formLabel}>{t('mcp.form.scope')}</span>
+              <span className={css.fieldHint}>{t('mcp.scopeGlobal')}</span>
+            </span>
+          )}
           {view.status === 'ready' && total > 0 ? (
-            <span className={css.toolsActions}>
+            <span className={css.importChecks}>
               <span className={css.toolsCount} role="status">
                 {t('mcp.import.selected').replace('{n}', String(chosen.length)).replace('{m}', String(importable))}
               </span>
-              <button type="button" className={css.mcpAction} disabled={busy} onClick={() => { setAll(true) }}>
+              <button type="button" className={css.mcpAction} disabled={busy || importing} onClick={() => { setAll(true) }}>
                 {t('mcp.import.selectAll')}
               </button>
-              <button type="button" className={css.mcpAction} disabled={busy} onClick={() => { setAll(false) }}>
+              <button type="button" className={css.mcpAction} disabled={busy || importing} onClick={() => { setAll(false) }}>
                 {t('mcp.import.selectNone')}
               </button>
             </span>
           ) : null}
         </div>
-        {noWritablePlane ? (
-          <p className={css.mcpActionError} role="alert">
-            {t('mcp.import.scopeUnavailable').replace('{reason}', globalProblem ?? t('unavailable'))}
-          </p>
-        ) : null}
-        {!noWritablePlane && globalProblem !== undefined ? (
-          <p className={css.fieldHint}>{t('mcp.import.globalReadOnly')}</p>
-        ) : null}
+        {noTarget ? <p className={css.fieldHint}>{t('mcp.form.noPreset')}</p> : null}
         {view.status === 'loading' ? <p className={css.mcpStatus}>{t('mcp.import.loading')}</p> : null}
         {view.status === 'error' ? (
           <div className={css.mcpFailure}>
@@ -386,8 +384,8 @@ export function ClaudeImportDialog({
                 .replace('{m}', String(outcome.failures.length))}
           </p>
         ) : null}
-        {outcome?.failures.map(failure => (
-          <p key={failure.serverName} className={css.mcpActionError} role="alert">
+        {outcome?.failures.map((failure, index) => (
+          <p key={`${failure.serverName}:${index}`} className={css.mcpActionError} role="alert">
             {`${failure.serverName}: ${failure.reason}`}
           </p>
         ))}

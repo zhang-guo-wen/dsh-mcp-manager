@@ -72,11 +72,20 @@ schema 拒绝一个字段会让**整个 `mcp-manager` 命名空间**回退到上
 
 MCP 行有两种来源,更新路径不同:
 
-- **全局**:改 file-backed Include;新增走 `loader.create`,本身**实时生效**。
+- **全局**:改 file-backed Include 的**文件**,再 `Include.refresh()` 让组合重读并重新套用补丁层。
+  **绝不能用 `loader.create`/`loader.update` 写全局行** —— 那会走 `EntryTree` 的写回,`Include.write()`
+  把**带过补丁的树**序列化回文件,bundle 层与用户补丁层就被拍平进用户文件了(这正是旧版把全局判为只读的理由)。
+  文件里永远只有用户自己的行;`refresh()` 之后的活行才是最终结果,写一次就当场生效,不需要重启。
+  另注:`loader.resolve` 看不到 Include 的子行(它只走根 store),所以按叶子 id 或限定 id 在 `tree.entries()` 里找
+  (见 `globalMcpEntry`)。
 - **preset(agent)**:改 **profile patch 里那条 preset 声明行**的 `config.plugins`,经 `configEditor.edit` 写。
   写入本身就是生效:editor 落盘后 reconcile 该 entry,声明行重建、按 diff 挂/摘改动的那一行。
   **不要再写 `agent.cordis.yml`,也不要再调 `tree.refresh()`/`standingKeyFor`** —— 目录预设与增量 refresh
   的契约在 0.1.7 已随 "declare Agent compositions in profile YAML" 一起移除。
+
+**一次写入 = 一次 preset 重挂。** 写 preset 会让整条声明行重建,该 preset 里**每个** MCP 行都会重新挂载并重启
+子进程(`npx -y` 那种 7.5–23 秒,实测)。所以批量场景走 `addMcps`(一次 patch 提交多行,逐行校验、逐行报结果),
+不要循环调 `addMcp` —— 导入 4 台就是 4 次全量重启。
 
 开关 MCP 时 UI 用**行级乐观状态**(`启动中`/`停止中`)+ 后台异步,不要锁整列表。
 启用本质要等 MCP 子进程启动(`npx -y …` / `uvx …` 通常 1-3 秒),那是进程启动耗时,不是插件开销;
@@ -248,13 +257,14 @@ tools to this session, and `mcp_unload` with the same name to release it again.
 1. **全局行**从 `ctx.loader.entries()` 取,`enabled` 用 `!entry.disabled`(`!!js` 由 Loader 求值)。
 2. **preset 行**优先取 live mount 树的 entry(同样 `!entry.disabled` + `entry.fiber.state`),preset 没挂载时
    退回声明,并按 Loader 的规则继承 group 的 `disabled`;`!!js` 在挂载外无法求值,一律报 `conditional` 而不是猜。
-3. **同一批返回 `globalWritable` / `globalProblem`**,因为设置页必须在用户填完表单之前就说明全局平面能否写入,
-   而不是等 `addMcp` 逐条报错。
+3. **同一批返回 `globalWritable`**:设置页必须在用户填完表单之前就说明全局平面能否写入。判据只有一条 ——
+   组合里是否恰好挂着一个 file-backed Include(补丁层不再是障碍,见下)。
 
-**全局平面在真实 profile 里是只读的。** `dsh` 用 `boot(..., readProfilePatches(...))` 挂根 Include,所以
-`tree.config.patches` 永远非空,而 `globalInclude()` 正是因为这个理由拒绝写入(写回会把 bundle 层与用户补丁层拍平)。
-表现:CLI 默认目标的"新增"逐条失败,导入则**改写到弹窗里所选的预设**(插件侧能做的只是提前把原因说清楚:
-导入弹窗不列全局平面,设置页在全局 tab 上直接关闭"新增"和行操作,见「设置页分区」)。
+**全局平面是可写的,只要恰好挂着一个 file-backed Include。** 写的是那个文件、写的是**用户自己的行列表**
+(补丁层不动),然后 `Include.refresh()` 重读文件并重新套用补丁让行当场生效。旧版把它判为只读,是因为走
+`loader.create`/`loader.update` 会触发 `Include.write()` 把带补丁的整棵树序列化回文件 —— 那条路已经不用了
+(见「MCP 行编写」)。真正写不了的只有:一个 Include 都没有、两个以上(定不出是哪个文件)、文件不可写(报
+`mcp/read-only`)。
 
 **设置页刷新时保留已渲染的名册**,不要退回 `loading`:读取本身很快,清空列表只会让页面闪。
 
@@ -300,9 +310,9 @@ mcp-manager:
 名册按**行所在的平面**分成两个 tab(`SegmentedTabs`,来自 `@deepseek-ai/dsh-client-ui-primitives`;编辑弹窗的两个 tab 用同一个原语),标签带该平面的行数,默认停在 Agent 平面(能写、能按需加载的那个)。四条约束:
 
 1. **两个面板都渲染并 `hidden`**,CSS 里有 `.planePanel[hidden]{display:none}` —— 面板自己设了 `display`,UA 的 `[hidden]` 压不过作者样式;`SegmentedTabs` 的 `aria-controls` 也因此始终指向存在的元素。
-2. **全局 tab 必须写明"全部加载"**:全局行由组合直接挂载,不受加载模式影响,工具过滤对它们也不生效(见「预加载闸门」);平面不可写时把 `listMcps` 的 `globalProblem` 原因一并显示,它决定"新增/导入到全局"会失败。
+2. **全局 tab 必须写明"全部加载"**:全局行由组合直接挂载,不受加载模式影响,工具过滤对它们也不生效(见「预加载闸门」)。
 3. **加载方式选择器只在 Agent tab 出现**:它决定的是 preset 行的进上下文时机,放在全局 tab 会暗示它对全局行有效。
-4. **tab 决定新增写到哪,弹窗里不再选范围**(`McpEditor` 的 `plane` 入参,`editorTarget()`):全局 tab → 全局行;Agent tab → 该 tab 里的预设,弹窗只保留"Agent 预设"下拉以便多预设时挑一个,没有可写预设时禁用保存并说明。**编辑**时范围来自被编辑行自身,所以只读显示那一行,不给下拉。**全局平面只读时,全局 tab 的"新增"与行操作直接禁用**(原因就在同一 tab 的说明里),不要放进弹窗再失败。
+4. **tab 决定写入到哪,弹窗里不再选范围**(`McpEditor` 的 `plane` 入参,`editorTarget()`):全局 tab → 全局行;Agent tab → 该 tab 里的预设,弹窗只保留"Agent 预设"下拉以便多预设时挑一个,没有可写预设时禁用保存并说明。**编辑**时范围来自被编辑行自身,所以只读显示那一行,不给下拉。两个 tab 的"新增/导入"与行操作在**该平面不可用时**禁用(全局:没有唯一的 file-backed Include;原因放按钮 `title`),不要放进弹窗再失败。
 
 ### 工具选择 UI(src/client/McpEditor.tsx)
 
@@ -347,32 +357,31 @@ mcp-manager:
 
 八条实现约束:
 
-1. **只读扫描,导入写到所选平面。** 扫描不挂载任何东西、不碰任何 composition;导入逐条调**现有的 `addMcp`**,
-   目标由弹窗里的 scope 选择给出(全局可写时默认全局,否则默认第一个预设),因此校验、冲突检测、原子写与手工新增
-   完全同一条路径。**不要为导入新写一条写入路径** —— 那会绕开上面的每一项。
-   **全局平面在真实 profile 里不可写**(见「名册读取」):`globalProblem` 非空时 scope 只列预设,并在选项下说明原因;
-   两个平面都不可用时才禁用导入并给红字。逐条目进度(`{i}/{n}`)必须显示 —— 一次 `addMcp` 可能等于一次 preset 重挂
-   (该 preset 里每个 MCP 行都会重连),所以这是长耗时路径,不能只有一个"导入中"。
+1. **只读扫描,导入一次 `addMcps` 写完。** 扫描不挂载任何东西、不碰任何 composition;导入把选中的条目**一次**交给
+   Host 的 `addMcps`,由它逐行校验、一次 patch 提交(全局:一次文件写 + 一次 `refresh`;预设:一次
+   `configEditor.edit`,即**一次重挂**)。**不要循环调 `addMcp`**:每台一次就等于该 preset 全量重启一轮,
+   4 台就是 4 轮,`npx -y` 那种一台 7.5–23 秒。也**不要为导入另写写入路径** —— `addMcps` 复用的正是 `addMcp`
+   的校验、冲突检测与原子写。
 2. **一个来源坏掉不能拖垮其它来源。** 文件不存在 → 整个来源不出现;存在但读不出/不是 JSON → 该来源带
    `problem` 返回(`missing`/`unreadable`/`malformed`/`too-large`),其余来源照常导入。
 3. **名称先按 composition 规范预检。** `mcp-client` 的 `serverName` 必须匹配 `/^[A-Za-z0-9_-]{1,32}$/`,
    所以带空格或超长的名字标成 `problem: 'unsupported-name'` 并**预先不勾选**,而不是等导入时报一句
    "serverName must match …"。实测真实 `~/.claude.json` 里 `MiniMax` 合法、`my server` 不合法。
-4. **分批导入,单条失败不中断。** 每台各调一次 `addMcp`,失败记在自己名下,结束时汇总
-   「已导入 N 台,M 台失败」。一台重名不能让其余全部白导。
+4. **一行被拒不影响其余行。** `addMcps` 返回逐行 `outcomes`(`entryId: null` + `reason`),UI 按行汇总
+   「已导入 N 台,M 台失败」并逐条列出原因。**全部成功就关窗** —— 剩下的信息在设置页里(名册会刷新);有失败才留在
+   弹窗里显示原因。
 5. **`env`/`headers` 的值必须跟着 `spec` 走**(否则导进去的服务器连不上),但 UI 只显示键名
    (`envKeys`)。所以**不要往诊断里打 spec** —— 它带着明文凭据。
-6. **导入目标由 scope 字段决定,默认取可写的那个。** 全局可写 → 默认全局(原有行为);全局只读而存在预设 →
-   默认第一个预设并给一行说明;两者都没有 → 红字 + 禁用导入。写入一律经 `addMcp` 的既有分支
-   (全局 `writeEntryListFile` / 预设 `writePresetRows`),**不新增写入路径**。
-   preset 目标的已知代价:每次 `addMcp` 都会让该 preset 重挂一次(其中每个 MCP 行重连),所以逐条导入就是 N 次
-   重挂,必须靠进度条而不是 spinner 交代。
+6. **导入目标跟着设置页当前 tab 走**,弹窗里不再有独立的"导入到"选择:全局 tab → 全局平面(只读显示一行
+   `全局`);Agent tab → 只列**预设**的下拉(多预设时挑一个,默认第一个)。没有可写预设时禁用导入并说明。
+   平面本身不可用(没有唯一的 file-backed Include)时,工具栏的"导入"直接禁用(原因放 `title`)。
 7. **勾选状态只在"打开弹窗"时重置。** 同一次打开里的重扫(批次结束后的 `setAttempt`、重试按钮)必须保留用户
    自己的勾选 —— 曾经每次重扫都 `setExcluded(new Set())`,表现就是"只勾了一个,结果全部又被勾上"。工具栏要有
    `已选 {n}/{m}` 计数:默认本来就是全选,`全选` 按钮本身没有可见变化,没有计数就会被当成"点了没反应"。
    名册侧同理不能清空(见「名册读取」):`servers` 瞬时为空会让 `已存在` 的行重新渲染成已勾选。
-8. **排版与重绘。** 控制行只有一条(左:写入平面的 select;右:`已选 n/m` + 全选/全不选),不要堆成三段;
-   卡片要带 `mcpEditorDialog`(默认卡只有 380px,路径与说明会折成三四行)。`EntryRow` 是 `memo` 且 `toggle` 用
+8. **排版与重绘。** 控制行只有一条(左:写入平面/预设;右:`已选 n/m` + 全选/全不选),两组用
+   `align-items:center` 对齐 —— `已选` 是裸 `span`,容器 `stretch` 会让它和按钮文字错位。卡片要带
+   `mcpEditorDialog`(默认卡只有 380px,路径与说明会折成三四行)。`EntryRow` 是 `memo` 且 `toggle` 用
    `useCallback`,勾选只重绘那一行 —— 真实 Claude 配置几十台时,整列重绘是"卡"的主因。**导入期间不要在 section 上
    按条 toggle `editorBusy`**:每次 toggle 都重绘整个设置页,而遮罩的 `backdrop-filter` 得跟着重新合成,而且遮罩
    本来就挡住了 section 的点击。剩下的大头在宿主侧:遮罩的 `backdrop-filter`(`ui-primitives` 的 `Modal.module.css`,
@@ -439,9 +448,10 @@ client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏�
     比工具列表变化贵得多。加载状态本来就在会话历史里。
 18. **忘了调 `refresh()`**(新注册、模式提交、reconcile 之后) → 模型看到上一版名单:新增的 MCP 行它永远加载不了。
 19. **名册读回 `remote.pluginInventory.list`** → 走 `auditRows` 等每一行的激活,MCP 子进程启动几秒就卡几秒(见「名册读取」)。
-20. **以为全局平面可写** → 真实 profile 的根 Include 带着补丁层,`addMcp({scope:'global'})` 必然报 `mcp/read-only`;
-    设置页必须在动手前用 `listMcps` 的 `globalProblem` 说明。
+20. **用 `loader.create`/`loader.update` 写全局行** → 触发 `Include.write()`,把带补丁的整棵树写回用户的
+    `cordis.yml`,bundle 层与用户补丁层就被拍平了。全局行只能"改文件 + `Include.refresh()`"(见「MCP 行编写」)。
 21. **刷新时把名册清成 `loading`** → 每次新增/开关后页面闪一下;保留上一版名册,只标记 `refreshing`。
+22. **批量导入循环调 `addMcp`** → 每行一次写入 = 该 preset 重挂一次 = 里面每台 MCP 重启一轮;用 `addMcps` 一次提交。
 
 ## 配置
 
@@ -535,6 +545,8 @@ npm run typecheck   # tsc --noEmit -p tsconfig.json
 | D8 | 载体由加载模式决定,规则只决定可见集合 | 模式才是「绑定 vs 缓存」的取舍,规则不该替用户改代价 |
 | D9 | 服务器清单进系统提示,不做成列目录工具 | 模型看不到名字就加载不了,而这段常驻成本可用预算封顶 |
 | D10 | 名册读声明 + live fiber,不等任何行的激活 | 等激活等于把 MCP 子进程启动时间(实测 7.5–23s)算进设置页 |
+| D11 | 全局行写 Include 的文件 + `refresh()`,不走 Loader 写回 | Loader 写回会把带补丁的树拍平进用户的 `cordis.yml` |
+| D12 | 批量新增一次提交(`addMcps`) | 一次 preset 写入 = 该 preset 每台 MCP 重启一轮 |
 
 实现侧的理由与踩坑在本文各节(「延迟加载」「载体选择」「按需清单」「预加载闸门」「工具过滤」);同类插件对比与
 功能路线图归 [docs/competitive-landscape.md](docs/competitive-landscape.md)。

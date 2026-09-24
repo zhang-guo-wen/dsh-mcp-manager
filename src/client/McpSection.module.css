@@ -391,6 +391,7 @@
 
 .toolsActions {
   display: flex;
+  align-items: center;
   gap: 6px;
   margin-left: auto;
 }
@@ -449,6 +450,16 @@
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+}
+
+/* The counter and the bulk toggles read as one control: centering keeps the
+   counter's text level with the button labels instead of stretching its box. */
+.importChecks {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .importList {

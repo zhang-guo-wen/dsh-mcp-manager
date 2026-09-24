@@ -37,6 +37,8 @@ import {
 import { TYPERT_REMOTE, REMOTE_NAMESPACE } from '../remote.ts'
 import type {
   AddMcpRequest,
+  AddMcpsRequest,
+  AddMcpsResult,
   DescribeMcpRequest,
   DescribeMcpResult,
   DisableMcpRequest,
@@ -69,6 +71,7 @@ export const inject = ['slots', 'locale', 'configForms', 'remote']
 /** The namespace service this plugin mounts itself — fetched via `ctx.get`, never injected. */
 interface McpManagerNamespace {
   addMcp(request: AddMcpRequest): Promise<RemoteResult<McpMutationResult>>
+  addMcps(request: AddMcpsRequest): Promise<RemoteResult<AddMcpsResult>>
   editMcp(request: EditMcpRequest): Promise<RemoteResult<McpMutationResult>>
   disableMcp(request: DisableMcpRequest): Promise<RemoteResult<McpMutationResult>>
   describeMcp(request: DescribeMcpRequest): Promise<RemoteResult<DescribeMcpResult>>
@@ -108,13 +111,11 @@ export async function apply(ctx: Context): Promise<void> {
   const readRoster = (): Promise<ListMcpsResult> => unwrapRemote(() => mcpMgr().listMcps({}))
   const mcps = async (): Promise<McpRosterView> => {
     const roster = await readRoster()
-    return {
-      servers: mapMcpServers(roster),
-      ...roster.globalProblem === undefined ? {} : { globalProblem: roster.globalProblem },
-    }
+    return { servers: mapMcpServers(roster), globalWritable: roster.globalWritable }
   }
   const authoring: McpAuthoringActions = {
     addMcp: request => unwrapRemote(() => mcpMgr().addMcp(request)),
+    addMcps: request => unwrapRemote(() => mcpMgr().addMcps(request)),
     editMcp: request => unwrapRemote(() => mcpMgr().editMcp(request)),
     disableMcp: request => unwrapRemote(() => mcpMgr().disableMcp(request)),
     describeMcp: request => unwrapRemote(() => mcpMgr().describeMcp(request)),

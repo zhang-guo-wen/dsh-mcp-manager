@@ -124,16 +124,15 @@ describe('readMcpRoster', () => {
     }])
   })
 
-  it('reports the global plane writable only for an unpatched root Include', () => {
+  it('reports the global plane writable wherever one file-backed Include is mounted', () => {
+    // A patched Include is writable: the value is written to that file and the
+    // Include is reloaded, so its patch layers stay where they are.
     const patched = contextWith([
       loaderEntry({ id: 'include', name: 'cordis:include' }, {
         subtree: { filename: '/tmp/cordis.yml', config: { patches: [{ id: 'ui-theme' }] } },
       }),
     ])
-    expect(readMcpRoster(patched, () => [])).toMatchObject({
-      globalWritable: false,
-      globalProblem: 'patched-include',
-    })
+    expect(readMcpRoster(patched, () => [])).toMatchObject({ globalWritable: true })
 
     const plain = contextWith([
       loaderEntry({ id: 'include', name: 'cordis:include' }, {
@@ -141,13 +140,16 @@ describe('readMcpRoster', () => {
       }),
     ])
     expect(readMcpRoster(plain, () => [])).toMatchObject({ globalWritable: true })
-    expect(readMcpRoster(plain, () => []).globalProblem).toBeUndefined()
 
     // No file-backed Include at all: nothing to write into.
-    expect(readMcpRoster(contextWith([]), () => [])).toMatchObject({
-      globalWritable: false,
-      globalProblem: 'no-include',
-    })
+    expect(readMcpRoster(contextWith([]), () => [])).toMatchObject({ globalWritable: false })
+
+    // Two Includes name no single file to address.
+    const both = contextWith([
+      loaderEntry({ id: 'include', name: 'cordis:include' }, { subtree: { filename: '/tmp/a.yml' } }),
+      loaderEntry({ id: 'include2', name: 'cordis:include' }, { subtree: { filename: '/tmp/b.yml' } }),
+    ])
+    expect(readMcpRoster(both, () => [])).toMatchObject({ globalWritable: false })
   })
 
   it('reports presets without a mounted profile editor as none', () => {

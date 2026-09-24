@@ -15,6 +15,8 @@
 
 import type {
   AddMcpRequest,
+  AddMcpsRequest,
+  AddMcpsResult,
   DescribeMcpRequest,
   DescribeMcpResult,
   DisableMcpRequest,
@@ -23,7 +25,6 @@ import type {
   ListMcpToolsResult,
   ListMcpsResult,
   McpFiberPhase,
-  McpGlobalProblem,
   McpMutationResult,
   ScanClaudeMcpRequest,
   ScanClaudeMcpResult,
@@ -111,6 +112,8 @@ export interface McpPresetOption {
 export interface McpAuthoringActions {
   /** Add one MCP row and resolve after the Host commits it. */
   addMcp: (request: AddMcpRequest) => Promise<McpMutationResult>
+  /** Add a batch of MCP rows in one write and resolve after the Host commits it. */
+  addMcps: (request: AddMcpsRequest) => Promise<AddMcpsResult>
   /** Replace one MCP row and resolve after the Host commits it. */
   editMcp: (request: EditMcpRequest) => Promise<McpMutationResult>
   /** Set one MCP row's disabled flag and resolve after the Host commits it. */
@@ -128,12 +131,11 @@ export interface McpRosterView {
   /** Every MCP row, global plane plus each preset composition, undeduplicated. */
   readonly servers: readonly McpServer[]
   /**
-   * Why the global plane refuses writes, when it does. A profile mounts its
-   * root Include together with the bundle and user patch layers, and Loader
-   * write-back would flatten those layers, so global authoring is unavailable
-   * there and the surface must say so instead of failing row by row.
+   * Whether the global plane accepts writes, which needs one file-backed root
+   * Include. Its patch layers are not a bar: a global write edits that file and
+   * reloads the Include, leaving the layers in place.
    */
-  readonly globalProblem?: McpGlobalProblem
+  readonly globalWritable: boolean
 }
 
 /** Snapshot the section renders. */
@@ -167,6 +169,8 @@ export interface McpSectionFace {
   updateMcpTools: (key: string, patterns: readonly string[]) => void
   /** Add one MCP row through the Claude-compatible Host Remote. */
   addMcp: (request: AddMcpRequest) => Promise<McpMutationResult>
+  /** Add a batch of MCP rows in one write through the Claude-compatible Host Remote. */
+  addMcps: (request: AddMcpsRequest) => Promise<AddMcpsResult>
   /** Edit one MCP row through the Claude-compatible Host Remote. */
   editMcp: (request: EditMcpRequest) => Promise<McpMutationResult>
   /** Enable or disable one MCP row through the Claude-compatible Host Remote. */
@@ -260,6 +264,7 @@ export class McpSettingsController {
       updateMcpDescription: (key, description) => { this.updateMcpDescription(key, description) },
       updateMcpTools: (key, patterns) => { this.updateMcpTools(key, patterns) },
       addMcp: this.authoring.addMcp,
+      addMcps: this.authoring.addMcps,
       editMcp: this.authoring.editMcp,
       disableMcp: this.authoring.disableMcp,
       describeMcp: this.authoring.describeMcp,

@@ -48,8 +48,8 @@ type McpView =
     readonly servers: readonly McpServer[]
     /** Row keys the gate holds unmounted, so an enabled row reads as deferred. */
     readonly suppressed: ReadonlySet<string>
-    /** Why the global plane refuses writes, when it does. */
-    readonly globalProblem?: McpRosterView['globalProblem']
+    /** Whether the global plane has a file-backed Include to write. */
+    readonly globalWritable: boolean
     /** A refresh is in flight over an already rendered roster. */
     readonly refreshing: boolean
   }
@@ -78,13 +78,6 @@ const MODE_LABEL = {
   dynamic: 'mcp.mode.dynamic',
   lazy: 'mcp.mode.lazy',
 } as const satisfies Record<McpLoadingOption, McpSectionKey>
-
-/** Why the global plane refuses writes → localized explanation. */
-const GLOBAL_PROBLEM_KEY = {
-  'patched-include': 'mcp.global.readOnly.patched-include',
-  'no-include': 'mcp.global.readOnly.no-include',
-  'not-writable': 'mcp.global.readOnly.not-writable',
-} as const satisfies Record<NonNullable<McpRosterView['globalProblem']>, McpSectionKey>
 
 /** MCP loading mode → localized one-line explanation. */
 const MODE_DESC = {
@@ -222,7 +215,7 @@ function McpRow({ server, description, suppressed, pending, onEditDescription, o
 /** The MCP management section body. */
 export function McpSection(props: McpSectionProps): ReactNode {
   const {
-    useMcpSettings, t, setMcpLoading, addMcp, editMcp, disableMcp, describeMcp, listMcpTools,
+    useMcpSettings, t, setMcpLoading, addMcp, addMcps, editMcp, disableMcp, describeMcp, listMcpTools,
     suppressedMcps, mcps, presets, updateMcpDescription, updateMcpTools, scanClaudeMcp,
   } = props
   const state = useMcpSettings(snapshot => snapshot)
@@ -243,18 +236,15 @@ export function McpSection(props: McpSectionProps): ReactNode {
   const [plane, setPlane] = useState<McpPlane>('agent')
   const planeTabId = useId()
   const disabled = !state.available || !state.writable
-  /** Localized reason the global plane refuses writes, while it does. */
-  const globalProblemReason = mcpView.status === 'ready' && mcpView.globalProblem !== undefined
-    ? t(GLOBAL_PROBLEM_KEY[mcpView.globalProblem])
-    : undefined
   const servers = mcpView.status === 'ready' ? mcpView.servers : []
   const globalServers = servers.filter(server => server.scope === 'global')
   const agentServers = servers.filter(server => server.scope === 'preset')
   const planeServers = plane === 'global' ? globalServers : agentServers
-  // Every authoring path into the global plane goes through Loader write-back,
-  // which a patched root Include refuses, so on such a deployment that plane is
-  // readable only and its actions are closed rather than left to fail on save.
-  const globalReadOnly = plane === 'global' && globalProblemReason !== undefined
+  // A global write edits the Include's own file, so a patched profile writes
+  // fine; only a composition that mounts no single file-backed Include cannot
+  // address one, and then the global tab's actions are closed.
+  const planeUnavailable = plane === 'global' && mcpView.status === 'ready' && !mcpView.globalWritable
+  const unavailableReason = t('mcp.global.unavailable')
 
   useEffect(() => {
     let current = true
@@ -281,7 +271,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
             status: 'ready',
             servers: roster.servers,
             suppressed: new Set(suppressed),
-            ...roster.globalProblem === undefined ? {} : { globalProblem: roster.globalProblem },
+            globalWritable: roster.globalWritable,
             refreshing: false,
           })
         },
@@ -418,7 +408,6 @@ export function McpSection(props: McpSectionProps): ReactNode {
           {/* A global row is mounted by the composition itself, so nothing here
               decides when it enters context. */}
           <p className={css.fieldHint}>{t('mcp.plane.global.eager')}</p>
-          {globalProblemReason !== undefined ? <p className={css.fieldHint}>{globalProblemReason}</p> : null}
         </div>
         <div
           id={`${planeTabId}-agent-panel`}
@@ -437,15 +426,21 @@ export function McpSection(props: McpSectionProps): ReactNode {
         <div className={css.mcpToolbar}>
           <p className={css.mcpSub}>{t('mcp.subtitle')}</p>
           <span className={css.mcpActions}>
-            <Button variant="outline" size="sm" onClick={openImport} disabled={disabled || editorBusy}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={openImport}
+              disabled={disabled || editorBusy || planeUnavailable}
+              title={planeUnavailable ? unavailableReason : undefined}
+            >
               {t('mcp.import')}
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={openAdd}
-              disabled={editorBusy || globalReadOnly}
-              title={globalReadOnly ? globalProblemReason : undefined}
+              disabled={editorBusy || planeUnavailable}
+              title={planeUnavailable ? unavailableReason : undefined}
             >
               {t('mcp.add')}
             </Button>
@@ -480,7 +475,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
                   onEditDescription={(value) => { updateMcpDescription(key, value) }}
                   onEdit={() => { openEdit(server) }}
                   onToggleDisabled={(enabled) => { toggleDisabled(server, enabled) }}
-                  actionsDisabled={editorBusy || globalReadOnly}
+                  actionsDisabled={editorBusy || planeUnavailable}
                   t={t}
                 />
               )
@@ -513,17 +508,16 @@ export function McpSection(props: McpSectionProps): ReactNode {
         <ClaudeImportDialog
           open={importerOpen}
           // The batch reports its own progress and the mask blocks this section
-          // while it runs, so the wrapper must not toggle the shared busy flag per
-          // entry: each toggle re-rendered this section, and the page behind the
-          // modal is what the mask's backdrop filter has to re-compose.
+          // while it runs, so it must not toggle the shared busy flag per entry:
+          // each toggle re-rendered this section, and the page behind the modal is
+          // what the mask's backdrop filter has to re-compose.
           busy={false}
           error={editorError}
           scanClaudeMcp={scanClaudeMcp}
-          addMcp={addMcp}
+          addMcps={addMcps}
           servers={servers}
           presets={presets}
-          globalWritable={mcpView.status === 'ready' && mcpView.globalProblem === undefined}
-          {...globalProblemReason === undefined ? {} : { globalProblem: globalProblemReason }}
+          plane={plane}
           t={t}
           onClose={() => { setImporterOpen(false) }}
           onImported={() => {
