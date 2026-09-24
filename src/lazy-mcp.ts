@@ -1,10 +1,13 @@
 /**
  * On-demand MCP loading, in two modes.
  *
- * A deployment keeps MCP servers out of every request's tool list — and out of
- * the prompt — by leaving their composition rows disabled, then pulls one in
- * when it is actually needed. `mcp_list` names what is configured and what is
- * running; `mcp_load` starts one; `mcp_unload` stops it again.
+ * A deployment keeps MCP servers out of every request's tool list by leaving
+ * their composition rows disabled, then pulls one in when it is actually
+ * needed. `mcp_load` starts one server for the calling session, `mcp_unload`
+ * releases it again, and the servers a session may pick from are published in
+ * the system prompt rather than in a listing tool (see `mcp-inventory.ts`), so
+ * the tool set stays `mcp_load` + `mcp_unload` under `dynamic` and adds
+ * `mcp_call` under `lazy`.
  *
  * The mode decides how a loaded server reaches the model:
  *
@@ -46,6 +49,7 @@ import {
 import { mcpEntryConfig, type McpEntryConfig } from './mcp-config.ts'
 import type { McpPreloadGate } from './mcp-gate.ts'
 import { mcpRowKey } from './mcp-gate.ts'
+import { renderMcpInventory } from './mcp-inventory.ts'
 import {
   filterMcpTools,
   NO_TOOL_FILTER,
@@ -324,35 +328,69 @@ function watchToolListChanges(mount: MountedNative, row: McpRow, deps: NativeDep
   }
 }
 
-const SERVER_ROW_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    name: { type: 'string', required: true, description: 'MCP serverName namespace.' },
-    scope: { type: 'string', required: true, description: 'Composition that owns the row, e.g. "global" or "preset standard".' },
-    loaded: { type: 'boolean', required: true, description: 'Whether the server is running for this session.' },
-  },
-} as const
+/**
+ * The subset of the system-prompt registry this module uses.
+ *
+ * Every profile mounts it, but the plugin treats it as optional like every
+ * other probed service: without it the on-demand tools still work and only the
+ * inventory section is missing.
+ */
+interface SystemPromptRegistry {
+  section(section: {
+    readonly name: string
+    readonly order: number
+    readonly interpolate?: boolean
+    readonly text: string | ((context: { readonly scope?: unknown }) => string)
+  }): () => void
+  getSectionOrder(name: string): number
+}
+
+/** What one on-demand registration exposes to its owner. */
+export interface McpToolRegistration {
+  /** Unregister every tool, drop the inventory section, and stop every server this registration started. */
+  dispose(): void
+  /**
+   * Re-read the allowed rows and re-render the inventory section. The caller
+   * runs it once before the first request and again whenever a composition row
+   * or the loading mode changes.
+   */
+  refresh(): Promise<void>
+}
+
+/** Live per-row readers the caller owns, so a committed change needs no re-registration. */
+export interface McpRowReaders {
+  /**
+   * One row's tool filter by its settings key. Read at every load, so a
+   * committed rule change applies to the next `mcp_load`.
+   */
+  filterFor(key: string): McpToolFilter
+  /**
+   * One row's authoring description by its settings key. Read on every
+   * inventory refresh, and published to the model in that section.
+   */
+  descriptionFor(key: string): string | undefined
+}
 
 /**
- * Register the on-demand MCP tools in one composition scope.
+ * Register the on-demand MCP tools and the inventory section that names them.
  * @param ctx - scope the tools belong to (a preset row's context).
  * @param mode - how a loaded server reaches the model.
  * @param gate - the preload gate; it decides which composed rows this session
  *   is allowed to load, and holds the rest out of every request.
- * @param filterFor - reads one row's tool filter by its settings key. Called at
- *   every load, so a committed rule change applies to the next `mcp_load`.
- * @returns a disposer that unregisters every tool and stops every server this
- *   registration started. `eager` registers nothing, so its disposer is a no-op.
+ * @param readers - live per-row rule and description readers.
+ * @returns the registration handle. `eager` registers no tool at all, and its
+ *   handle is an inert pair of no-ops.
  */
 export function registerMcpTools(
   ctx: Context,
   mode: McpLoadingMode,
   gate: McpPreloadGate,
-  filterFor: (key: string) => McpToolFilter = () => NO_TOOL_FILTER,
-): () => void {
+  readers: McpRowReaders = { filterFor: () => NO_TOOL_FILTER, descriptionFor: () => undefined },
+): McpToolRegistration {
   const tools = ctx.get('tools') as ToolRegistry | undefined
-  if (tools === undefined || mode === 'eager') return () => {}
+  if (tools === undefined || mode === 'eager') return { dispose: () => {}, refresh: async () => {} }
+  /** The mode whose tools exist; narrowed once so closures need no re-check. */
+  const onDemandMode: 'dynamic' | 'lazy' = mode
   /**
    * The rows this session may load: composed rows the user has not disabled.
    * The gate is re-read first because a preset composition is also rebuilt when
@@ -363,11 +401,6 @@ export function registerMcpTools(
     await gate.reconcile()
     return (await listRows(ctx)).filter(row => gate.stateFor(row.target, row.entryId)?.allowed ?? row.enabled)
   }
-  /** Whether a row's tools are in every request already, without an `mcp_load`. */
-  const preloaded = (row: McpRow): boolean => {
-    const state = gate.stateFor(row.target, row.entryId)
-    return state === undefined ? row.enabled : state.allowed && !state.suppressed
-  }
   /** Loaded servers keyed by agent id, then serverName. */
   const mounted = new Map<string, Map<string, MountedServer>>()
   /** Sessions whose mounts are already bound to their own context disposal. */
@@ -375,6 +408,28 @@ export function registerMcpTools(
   /** Live tool registrations, undone by the returned disposer. */
   const registrations: (() => void)[] = []
   const register = (definition: unknown): void => { registrations.push(tools.register(definition)) }
+
+  /**
+   * The model's only source for loadable server names: no server's tools are in
+   * the request until a session loads one, so the names have to be published.
+   * The text is a snapshot, refreshed through {@link McpToolRegistration.refresh}.
+   */
+  let inventory = ''
+  const systemPrompt = ctx.get('systemPrompt') as SystemPromptRegistry | undefined
+  const inventorySection = systemPrompt?.section({
+    name: 'mcp-manager:on-demand',
+    order: systemPrompt.getSectionOrder('MCP_SERVERS'),
+    // Row descriptions are user text, not templates: `{{...}}` stays literal.
+    interpolate: false,
+    text: () => inventory,
+  })
+  const refresh = async (): Promise<void> => {
+    const rows = await allowedRows()
+    inventory = renderMcpInventory(rows.map(row => {
+      const description = readers.descriptionFor(row.key)
+      return { name: row.serverName, ...description === undefined ? {} : { description } }
+    }), onDemandMode)
+  }
 
   const loadedFor = (agentId: string): Map<string, MountedServer> => {
     const existing = mounted.get(agentId)
@@ -426,43 +481,15 @@ export function registerMcpTools(
     await Promise.allSettled(pending)
   }
   register(defineTool({
-    name: 'mcp_list',
-    description:
-      'List the MCP servers this session may use, their scope, and whether each is running. Disabled '
-      + 'servers are not listed. Servers that are allowed but not running can be started on demand with '
-      + '`mcp_load`; load only what you need, because a running server costs prompt tokens.',
-    parameters: {},
-    output: {
-      schema: { type: 'array', items: SERVER_ROW_SCHEMA },
-      render: (_args, rows) => [{
-        type: 'text',
-        text: rows.length === 0
-          ? '(no MCP servers configured)'
-          : rows.map(row => `${row.name} [${row.scope}] ${row.loaded ? 'running' : 'not loaded'}`).join('\n'),
-      }],
-    },
-    async execute(_args, exec) {
-      const running = exec.agent === undefined ? undefined : mounted.get(exec.agent.id)
-      return (await allowedRows()).map(row => ({
-        name: row.serverName,
-        scope: row.scopeLabel,
-        // "Loaded" means this session already pays for the row's tools: either
-        // the composition preloaded it, or `mcp_load` pulled it in here.
-        loaded: preloaded(row) || running?.has(row.serverName) === true,
-      }))
-    },
-  }))
-
-  register(defineTool({
     name: 'mcp_load',
-    description: mode === 'lazy'
-      ? 'Start one configured but not-running MCP server for THIS session and return its tools. Call the '
-        + 'tools you need afterwards with `mcp_call`, passing the server name and tool name from this result. '
+    description: onDemandMode === 'lazy'
+      ? 'Start one of the MCP servers listed in your system prompt for THIS session and return its tools. Call '
+        + 'the tools you need afterwards with `mcp_call`, passing the server name and tool name from this result. '
         + 'Only the tools this result lists are callable.'
-      : 'Start one configured but not-running MCP server for THIS session and add its tools to the request. '
-        + 'Use `mcp_list` first to see the available names.',
+      : 'Start one of the MCP servers listed in your system prompt for THIS session and add its tools to the '
+        + 'request. Only the tools this result lists are callable.',
     parameters: {
-      server: { type: 'string', required: true, description: 'The MCP serverName to start, as reported by mcp_list.' },
+      server: { type: 'string', required: true, description: 'The MCP server name to start, as listed in your system prompt.' },
     },
     output: {
       schema: {
@@ -521,13 +548,13 @@ export function registerMcpTools(
       const row = (await allowedRows()).find(candidate => candidate.serverName === serverName)
       if (row === undefined) {
         throw new Error(
-          `unknown or disabled MCP server "${serverName}" — call mcp_list for the servers this session may load`,
+          `unknown or disabled MCP server "${serverName}" — load one of the MCP servers listed in your system prompt`,
         )
       }
       const spec = await describeRow(ctx, row)
       const config = mcpEntryConfig(spec, serverName)
-      const filter = filterFor(row.key)
-      const carrier = carrierFor(mode, filter)
+      const filter = readers.filterFor(row.key)
+      const carrier = carrierFor(onDemandMode, filter)
       if (carrier === undefined) throw new Error('mcp_load is not registered under the "eager" loading mode')
 
       if (carrier === 'proxy') {
@@ -607,9 +634,10 @@ export function registerMcpTools(
     },
   }))
 
-  // Registered in every on-demand mode: this proxy is what `lazy` serves, and
-  // the mode is a live setting, so the registration cannot depend on it.
-  register(defineTool({
+  // Registered under `lazy` alone: that mode keeps every tool out of the
+  // request, so this proxy is the only way to invoke one. `dynamic` registers
+  // its tools natively and the model calls them by name.
+  if (onDemandMode === 'lazy') register(defineTool({
     name: 'mcp_call',
     description:
       'Call one tool of an MCP server that `mcp_load` started for THIS session. Use the server and tool names '
@@ -700,10 +728,15 @@ export function registerMcpTools(
     },
   }))
 
-  return () => {
-    for (const dispose of [...registrations].reverse()) dispose()
-    registrations.length = 0
-    void stopAll()
+  return {
+    dispose: () => {
+      for (const dispose of [...registrations].reverse()) dispose()
+      registrations.length = 0
+      inventorySection?.()
+      inventory = ''
+      void stopAll()
+    },
+    refresh,
   }
 }
 

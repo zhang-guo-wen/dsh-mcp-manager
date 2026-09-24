@@ -135,7 +135,7 @@ lilyblessing 记录过一次事故：**运行期写 preset 文件会触发 stand
    （`createScope(ctx, agent)` + `restrict({ deny: inherited.map(t => t.name) })` 屏蔽继承来的 MCP 工具）。
 7. **目录磁盘缓存 + 闲置回收。**
    证据：wings1848 与 ben7am1n 的元数据落盘让搜索不必启动进程；labmimors 的 `catalogTtl` / `idleDisconnect` 是现成参数表。
-   落点：缓存 `listTools` 结果（含 schema），供编辑弹窗与 `mcp_list` 复用；给已加载连接加空闲超时。
+   落点：缓存 `listTools` 结果（含 schema），供编辑弹窗复用；给已加载连接加空闲超时。
 8. **量化并公布 token 收益，同时测出 `dynamic` 的前缀代价。**
    证据：leaforbook 给出 95.6% / 94.4% / 88.8%（合计 9,727 → 581）；wings1848 给出 5,313 → 381；
    labmimors 给出 1,114 B vs 647,962 B；lilyblessing 量化了缓存 miss 的 5–12.5 倍费率；

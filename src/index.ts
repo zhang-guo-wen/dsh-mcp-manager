@@ -80,13 +80,21 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     within => livePresetMounts(within as Fiber | undefined) as readonly GateMount[],
   )
   const gate = createMcpPreloadGate(ctx, () => mcpLoading, mountReader, (message) => { ctx.logger.warn(message) })
-  // The tool registration holds this closure rather than a snapshot, so a
-  // committed rule change applies to the next `mcp_load` without re-registering
-  // anything. Loaded servers keep the tools they were admitted with.
+  // The tool registration holds these closures rather than snapshots, so a
+  // committed rule or description change applies to the next `mcp_load` and to
+  // the next inventory refresh without re-registering anything. Loaded servers
+  // keep the tools they were admitted with.
   let readToolFilter: (key: string) => McpToolFilter = () => NO_TOOL_FILTER
-  let disposeMcpTools = registerMcpTools(ctx, mcpLoading, gate, key => readToolFilter(key))
-  ctx.effect(() => () => { disposeMcpTools(); gate.dispose() }, 'mcp-manager: mcp tools')
-  const resync = (): void => { void gate.reconcile() }
+  const readers = {
+    filterFor: (key: string): McpToolFilter => readToolFilter(key),
+    descriptionFor: (key: string): string | undefined => readSettings().descriptions[key],
+  }
+  let mcpTools = registerMcpTools(ctx, mcpLoading, gate, readers)
+  ctx.effect(() => () => { mcpTools.dispose(); gate.dispose() }, 'mcp-manager: mcp tools')
+  // The gate's answer is what the inventory lists, so every reconcile is
+  // followed by a refresh: the prompt section is served from a snapshot and
+  // cannot await anything while the request is assembled.
+  const resync = (): void => { void gate.reconcile().then(() => mcpTools.refresh()) }
   // A preset mounts its rows when a session first selects it and re-mounts them
   // whenever the composition file changes; both come back through these events,
   // which is what keeps the gate's answer true across a session's lifetime.
@@ -105,6 +113,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }), `mcp-manager: gate follows ${event}`)
   }
   await gate.reconcile()
+  await mcpTools.refresh()
   /**
    * Warn once per commit when rules cannot take effect. `eager` mounts every
    * allowed row through mcp-client, whose registration publishes all discovered
@@ -129,8 +138,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const mode = parseMcpLoadingMode(next.loading)
     if (mode !== mcpLoading) {
       mcpLoading = mode
-      disposeMcpTools()
-      disposeMcpTools = registerMcpTools(ctx, mode, gate, key => readToolFilter(key))
+      mcpTools.dispose()
+      mcpTools = registerMcpTools(ctx, mode, gate, readers)
       resync()
     }
     warnFiltersWithoutEffect(next)

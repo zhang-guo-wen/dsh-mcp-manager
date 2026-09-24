@@ -27,8 +27,9 @@ export interface McpSettingsFlags {
   loading: string
   /**
    * Authoring descriptions for MCP rows, keyed by `<scope>:<serverName>`
-   * (`global:engram` or `preset:standard:mcp-github`). Plugin-owned display
-   * metadata; never reaches the model or the config file.
+   * (`global:engram` or `preset:standard:mcp-github`). The management surface
+   * shows them, and the on-demand inventory publishes them to the model so it
+   * can tell which server to load; they are never written to the config file.
    */
   descriptions: Record<string, string>
   /**
@@ -44,7 +45,7 @@ export interface McpSettingsFlags {
 export interface Config {
   /** Loading mode, read fresh on every commit. */
   loading: Volatile<string>
-  /** Authoring descriptions, keyed by row. */
+  /** Authoring descriptions, keyed by row. Published in the model-facing MCP inventory. */
   descriptions: Volatile<Record<string, string>>
   /** Per-row tool filters, keyed by row. */
   tools: Volatile<Record<string, unknown>>

@@ -12,9 +12,10 @@ kind: "plugin-readme"
 - **MCP management.** Add, edit, enable, and disable MCP servers from the settings page. Global rows and every preset's
   rows are listed with live status. A toggle shows a brief `starting / stopping` state because the child MCP process
   has to come up; the list never blocks on it.
-- **On-demand loading.** A stopped server costs nothing. The model calls `mcp_list`, `mcp_load`, and `mcp_unload` to
-  start a server for the calling session only; loaded tools never leak into another session. Connections are
-  per-session, and a session that ends closes the connections it opened.
+- **On-demand loading.** A stopped server costs nothing. **The system prompt lists every server a session may load
+  (name plus the description you wrote on its row)**, and the model calls `mcp_load` to pull one into that session and
+  `mcp_unload` to release it again; under `lazy` it then invokes tools with `mcp_call`. Loaded tools never leak into
+  another session: connections are per-session, and a session that ends closes the connections it opened.
 - **MCP tool filters.** The edit dialog lists the methods a server publishes with every one checked; an unchecked
   method never enters context — neither listed nor callable. Wildcards are available by writing `mcp-manager.tools`
   yourself.
@@ -76,6 +77,30 @@ at all**, the mode says **when an allowed server enters context**.
 
 Set it in **设置 → Harness 兼容 → MCP 管理 → MCP 加载方式**. The choice is stored in the user's `mcp-manager`
 settings namespace and applies from the next request on, in every session.
+
+### How the model learns which MCP servers exist
+
+Under `dynamic` / `lazy` the system prompt carries the on-demand inventory, one line per loadable server:
+
+```
+MCP servers available on demand: call `mcp_load` with one of these names to add that server's
+tools to this session, and `mcp_unload` with the same name to release it again.
+
+- alibaba-devops-mcp — 云效MCP，任务管理工具，可以操作
+- playwright
+```
+
+- **Only allowed rows are listed**, and the name is exactly what `mcp_load` takes; disabled rows never appear.
+- **The description is the one you wrote on that row** in the settings page, so a good one helps the model pick
+  correctly; an empty one leaves just the name.
+- **Load state is deliberately absent.** Reporting it would rewrite the system prompt on every `mcp_load` and
+  invalidate the whole cache prefix — system, tools, and history — which costs far more than the lines it would add.
+- **Size is bounded**: each description is truncated to 80 characters and all descriptions share a 900-character
+  budget. Past that budget descriptions are dropped first, and **every server name is always listed** — a server the
+  model cannot name is one it can never load.
+- The section is absent when nothing may be loaded, and under `eager` (where every tool is already in the request).
+- It follows the configuration (adding, removing, enabling, or disabling rows, and switching modes) and stays stable
+  within a session.
 
 ### Processes and lifetime
 

@@ -19,6 +19,7 @@ Codex 兼容与 `/btw`,这边负责 MCP。两者各有自己的设置命名空�
 - `src/mcp-carrier.ts` —— 载体选择(`carrierFor`)与原生注册原语(`nativeDefinitions` / `swapNativeTools`)。
   纯逻辑:只 import `node:crypto` 与同仓纯模块,不碰 harness 运行时包,所以 vitest 能直接跑到。
   `src/mcp-tool-name.ts` —— 公开工具名契约,镜像 mcp-client 的 `publicToolName`。
+  `src/mcp-inventory.ts` —— 系统提示里那段按需清单的纯渲染器(预算与截断规则都在这里)。
 - `lib/` —— 构建产物:**已提交进仓库**(`index.mjs` host + `client.js` 浏览器 handoff),
   这样别人可以直接从 git 安装。改完源码**记得 `npm run build` 并把 `lib/` 一起提交**。
 - `cordis.patch.yml` —— 把插件行插入组合的 bundle 层。
@@ -102,8 +103,8 @@ const mod = await ctx.loader.internal.import('@deepseek-ai/dsh-agent-preset-regi
 
 ### 延迟加载(src/lazy-mcp.ts)
 
-**两件事分两个开关:** composition 行上的 `disabled` = 用户**允不允许用**(禁用 = 完全不用:不进
-`mcp_list`,`mcp_load` 拒绝);`loading` 模式 = 允许的服务器**什么时候进上下文**。后者是
+**两件事分两个开关:** composition 行上的 `disabled` = 用户**允不允许用**(禁用 = 完全不用:不进系统提示里的清单,
+`mcp_load` 拒绝);`loading` 模式 = 允许的服务器**什么时候进上下文**。后者是
 `mcp-manager` 用户设置(默认值取自 host 插件的 `Config`)**+ UI 三选一**。三种取值:
 
 - `eager`:允许的行照常挂载;不注册按需工具。
@@ -139,8 +140,8 @@ harness 自己的 `createMcpToolDefinition`(`@deepseek-ai/dsh-mcp-client` 的公
    重新列目录后按**加载时那套规则**重算可见集合,再换一代注册。同一个 mount 上的重同步串行化(`mount.resyncing`),
    因为服务器可能在上一次交换还没完成时再报一次变化。
 
-**`mcp_call` 只服务 `proxy`**:其余载体的行调用它会直接报错让模型按名字调。它在每种按需模式下都注册,因为它服务的
-是 `lazy`,而模式是活设置,注册不能跟着某个模式走。
+**`mcp_call` 只服务 `proxy`**:其余载体的行调用它会直接报错让模型按名字调。因为 `dynamic` 下的工具是原生注册的,
+它**只在 `lazy` 下注册** —— 那个模式不注册任何工具,代理是唯一的调用通道。
 
 **工具定义用 harness 的适配器,不要自己写。** `createMcpToolDefinition` 负责上游 schema、canonical 结果校验、
 `isError`、图片落盘与 PTC 投影;自己拼一个只会得到一个更弱的定义。它在老版本 harness 上不存在时,`native` 载体
@@ -156,8 +157,13 @@ harness 自己的 `createMcpToolDefinition`(`@deepseek-ai/dsh-mcp-client` 的公
 要"绑到 agent 且它的子代理也能用",用 preset 行;要"只给这一个会话",用 `mcp_load`。
 同类插件的做法对比见 [docs/competitive-landscape.md](docs/competitive-landscape.md) 的「作用域分层」。
 
-`mcp_list` / `mcp_load` / `mcp_unload` / `mcp_call` 让一个会话**按需启动**某台 MCP,省掉工具 schema 的 token
-(`mcp_call` 在每种按需模式下都注册 —— 它服务 `lazy`,而模式是活设置;`eager` 下一个按需工具都不注册):
+`mcp_load` / `mcp_unload`(+ `lazy` 下的 `mcp_call`)让一个会话**按需启动**某台 MCP,省掉工具 schema 的 token。
+**服务器清单不做成工具,而是进系统提示**(见下面的「按需清单」),所以工具面只有三个:
+
+- `mcp_load` / `mcp_unload`:两种按需模式下都注册;
+- `mcp_call`:**只在 `lazy` 下注册** —— 那个模式不注册任何工具,它是唯一的调用通道;`dynamic` 下加载进来的工具
+  按 `mcp__<server>__<tool>` 名字直接调;
+- `eager`:一个按需工具都不注册,也没有清单段(那时工具本来就在请求里)。
 
 - 被**禁用**的 composition 行完全不参与:工具不进目录,也不能 `mcp_load`。
 - `mcp_load` 走 **agent 作用域**:无规则时 `exec.agent.ctx.plugin(mcpClientPlugin, config)`,实例随该会话销毁,
@@ -184,6 +190,24 @@ standing 作用域里 `ctx.tools.register`),结果 **preset 每 ~5 秒被重挂�
 `loader/volatile-update` 上先 `dispose()` 掉旧注册(连带停掉它启动的服务器)再按新模式注册 —— 交换对
 **所有会话的下一次请求**生效。`parseMcpLoadingMode` 把无法识别的存量值收敛回 `dynamic`(设置文档是用户可编辑的,不能因为一个
 拼错的值让提交失败)。UI 侧是 `McpSection.tsx` 的 `McpLoadingPicker`(三个 radio),读写 `loading` 字段。
+
+### 按需清单(src/mcp-inventory.ts)
+
+`dynamic`/`lazy` 下请求里没有任何 MCP 工具 schema,所以**服务器名单必须主动出版**:`registerMcpTools` 在
+`systemPrompt.section` 上注册 `mcp-manager:on-demand`,位置用 harness 预留的 `MCP_SERVERS`(与 mcp-client 放
+server instructions 同一个位置)。四条契约:
+
+1. **渲染是纯函数。** `renderMcpInventory(rows, mode)` 只吃「名字 + 描述」,不碰 Loader/preset,所以 vitest 能直接跑。
+2. **段文本是快照,装配时不能 await。** 系统提示装配是同步的,所以注册句柄持有 `inventory` 字符串,由返回的
+   `refresh()` 重读 allowed rows 再渲染;`index.ts` 在 `gate.reconcile()` 之后、以及模式提交后各调一次。
+   漏调的表现是模型看到上一版名单 —— 新增的行它永远加载不了。
+3. **绝不写"是否已加载"。** 那会让每次 `mcp_load` 都重写系统提示 → 整个前缀(系统 + 工具 + 历史)失效,
+   比工具列表变化贵得多。加载状态本来就在会话历史里。
+4. **预算只削描述,不删名字。** 单条 80 字符、整段描述预算 900 字符;超预算先丢描述,**服务器名永远列全**
+   (模型看不到名字的服务器就加载不了)。`interpolate: false` —— 描述是用户文本,`{{...}}` 必须原样保留。
+
+`registerMcpTools` 因此返回 `{ dispose, refresh }` 而不是一个 disposer,第四参数也从单个 `filterFor` 变成
+`{ filterFor, descriptionFor }` 两个活闭包。
 
 ### 预加载闸门(src/mcp-gate.ts)
 
@@ -225,9 +249,10 @@ standing 作用域里 `ctx.tools.register`),结果 **preset 每 ~5 秒被重挂�
    直接得到未知工具;`mcp_call` 对这类行也拒绝(它只服务 `proxy`)。
 2. **过滤不切换载体**(见「载体选择」)。`eager` 下规则不生效 —— 该模式由 harness 的 mcp-client 整台挂载,插件没有
    插手的点 —— `index.ts` 的 `warnFiltersWithoutEffect` 会在启动和每次提交时警告。
-3. **规则 reader 是活闭包而不是快照**:`registerMcpTools(..., key => readToolFilter(key))`,`index.ts` 在
-   `apply` 里把它指向 `readSettings().tools`。所以改规则不需要重建注册,下一次 `mcp_load` 就读到新值;
-   已经加载的服务器保持加载时那套工具(不追溯),服务器自己发 `tools/list_changed` 时也按加载时那套规则重算。
+3. **规则 reader 是活闭包而不是快照**:`registerMcpTools(ctx, mode, gate, { filterFor, descriptionFor })` 收的是读者,
+   `index.ts` 在 `apply` 里把它们指向 `readSettings().tools` / `readSettings().descriptions`。所以改规则不需要重建注册,
+   下一次 `mcp_load` 就读到新值;已经加载的服务器保持加载时那套工具(不追溯),服务器自己发 `tools/list_changed`
+   时也按加载时那套规则重算。
 
 `mcp_load` 的结果带 `hidden` 字段(被隐藏的数量),render 里有一行提示 —— 模型需要知道"还有工具但不可调用",
 否则会照历史里的名字硬调。
@@ -348,3 +373,6 @@ client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏�
 15. **自己拼 MCP 工具定义而不用 `createMcpToolDefinition`** → 丢 canonical 结果校验、`isError`、图片落盘与 PTC 投影。
 16. **复刻工具名时漏掉 mcp-client 的规范化与哈希** → 同一个工具在不同载体下拿到两个名字,`mcp__<serverName>__`
     前缀的命名空间与 toolview 失准。
+17. **在清单段里写"是否已加载"** → 每次 `mcp_load` 都重写系统提示,整个缓存前缀(系统 + 工具 + 历史)失效一次,
+    比工具列表变化贵得多。加载状态本来就在会话历史里。
+18. **忘了调 `refresh()`**(新注册、模式提交、reconcile 之后) → 模型看到上一版名单:新增的 MCP 行它永远加载不了。
