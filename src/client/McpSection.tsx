@@ -108,7 +108,6 @@ function McpLoadingPicker({ value, disabled, onPick, t }: {
   return (
     <div className={css.modeBlock}>
       <span className={css.fieldLabel}>{t('mcp.mode.title')}</span>
-      <span className={css.fieldHint}>{t('mcp.mode.hint')}</span>
       <div className={css.modeGroup} role="radiogroup" aria-label={t('mcp.mode.title')}>
         {MCP_LOADING_OPTIONS.map((mode) => {
           const selected = value === mode
