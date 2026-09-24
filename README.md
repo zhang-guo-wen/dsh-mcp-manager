@@ -7,165 +7,75 @@ kind: "plugin-readme"
 
 [中文](README.zh.md) | English
 
-## What this plugin does
+## Background: DeepSeek Harness
 
-- **MCP management.** Add, edit, enable, and disable MCP servers from the settings page. Global rows and every preset's
-  rows are listed with live status. A toggle shows a brief `starting / stopping` state because the child MCP process
-  has to come up; the list never blocks on it.
-- **On-demand loading.** A stopped server costs nothing. **The system prompt lists every server a session may load
-  (name plus the description you wrote on its row)**, and the model calls `mcp_load` to pull one into that session and
-  `mcp_unload` to release it again; under `lazy` it then invokes tools with `mcp_call`. Loaded tools never leak into
-  another session: connections are per-session, and a session that ends closes the connections it opened.
-- **MCP tool filters.** The edit dialog lists the methods a server publishes with every one checked; an unchecked
-  method never enters context — neither listed nor callable. Wildcards are available by writing `mcp-manager.tools`
-  yourself.
-- **Import an existing Claude Code setup.** One button reads the MCP servers your Claude Code configuration files
-  already declare and imports the ones you tick as global rows — no retyping commands, arguments, and API keys.
+DeepSeek Harness (`dsh`) is the open-source agent harness from DeepSeek AI, where nearly every capability is a plugin on [Cordis](https://github.com/cordiverse/cordis). It is in **developer preview** and iterating fast, so expect compatibility-breaking changes ([docs](https://deepseek-harness.github.io/deepseek-harness/), `0.1.7-alpha.*`); this plugin is a standalone third-party package that resolves `@deepseek-ai/*` from the running host.
 
-MCP management was split out of
-[`dsh-claude-compat`](https://github.com/zhang-guo-wen/dsh-claude-compat) into its own plugin. The two do not depend on
-each other and install separately; with both installed, the settings page shows **Claude 兼容** and **MCP 管理** as
-independent sections.
+## The problem this plugin solves
+
+MCP servers were hand-written composition rows whose whole tool set always sat in context, and an existing Claude Code setup had to be retyped; this plugin manages the rows from the settings page, loads a server on demand with only the tools you pick, and imports your Claude MCP configuration in one click.
 
 ## Screenshots
 
-### MCP 管理 — every configured server, live
+### 设置 → MCP 管理 — loading modes and server rows
 
-![MCP list](docs/mcp-list.png)
+![MCP settings](docs/images/mcp-settings.png)
 
-### MCP 管理 — add or edit a server, including the tool picker
+The three loading modes and the configured servers, each row carrying its plane, live status, Edit, and enable switch.
 
-![MCP editor](docs/mcp-editor.png)
+### 新增 MCP — the JSON configuration and the tool picker
+
+![MCP editor](docs/images/mcp-editor.png)
+
+A server's JSON configuration, and the tools it publishes: every one is ticked by default, and an unticked method never reaches the model.
+
+### 导入 Claude MCP 配置 — pick the servers to bring over
+
+![Import Claude MCP configuration](docs/images/mcp-import-claude.png)
+
+Every MCP server found in the Claude Code configuration files; the ticked ones are imported as global rows.
 
 ## Install
 
-The built `lib/` is committed, so the repository installs and runs directly — no build step on your machine.
-
 ```sh
-# over HTTPS
-npx @deepseek-ai/dsh plugin --profile web add git+https://github.com/zhang-guo-wen/dsh-mcp-manager.git
-
-# or over SSH
-npx @deepseek-ai/dsh plugin --profile web add git+ssh://git@github.com/zhang-guo-wen/dsh-mcp-manager.git
+npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager
 ```
 
-Pin a release tag so a later work-in-progress commit on the default branch is not picked up:
+From the npm registry: <https://www.npmjs.com/package/@guowenzhang/dsh-mcp-manager> — restart the host afterwards; local checkouts, git sources and troubleshooting are in [AGENTS.md](AGENTS.md).
 
-```sh
-npx @deepseek-ai/dsh plugin --profile web add "git+ssh://git@github.com/zhang-guo-wen/dsh-mcp-manager.git#v0.1.0"
-```
+## Usage
 
-To develop against a local checkout, install the directory: pnpm links it, so rebuilding `lib/` takes effect on the
-next start without reinstalling.
+### Loading modes
 
-```sh
-npx @deepseek-ai/dsh plugin --profile web add /absolute/path/to/dsh-mcp-manager
-```
-
-## Use
-
-### MCP loading modes
-
-A row's enable switch and the loading mode answer different questions: the switch says **whether a server may be used
-at all**, the mode says **when an allowed server enters context**.
+The enable switch says **whether a server may be used**; the mode says **when an allowed server enters context**. Set it in **设置 → MCP 管理 → MCP 加载方式**; the choice is stored in the `mcp-manager` settings namespace and applies from the next request on.
 
 | Mode | Behavior |
 |---|---|
 | Load all (`eager`) | Allowed servers mount at session start; their tools are always in the request |
-| Dynamic insert (`dynamic`, default) | Allowed servers stay unmounted; `mcp_load` mounts one into the calling session, so its tools join the request — best tool binding, but the tool list changes once per load. **A filtered row mounts only its visible tools**, which keep the server's real argument schemas |
-| Lazy (`lazy`) | Allowed servers stay unmounted; `mcp_load` connects over the MCP SDK **without registering anything** and returns the tool schemas, and the model calls them through the fixed `mcp_call` proxy — the tool list never changes, so the request-cache prefix is never invalidated |
+| Dynamic insert (`dynamic`, default) | They stay unmounted; `mcp_load` mounts one into the calling session — best tool binding, but the tool list changes once per load. A filtered row mounts only its visible tools |
+| Lazy (`lazy`) | `mcp_load` connects without registering anything and returns the tool schemas, called through the fixed `mcp_call` proxy — the tool list never changes, so the request-cache prefix is never invalidated |
 
-Set it in **设置 → Harness 兼容 → MCP 管理 → MCP 加载方式**. The choice is stored in the user's `mcp-manager`
-settings namespace and applies from the next request on, in every session.
+Under `dynamic` / `lazy` the system prompt lists every loadable server as `name — the description you wrote on its row`, and the model calls `mcp_load` / `mcp_unload` by name. Names are always listed; descriptions are truncated to 80 characters under a 900-character budget. **Load state is deliberately absent** — reporting it would rewrite the system prompt on every `mcp_load` and invalidate the whole cache prefix.
 
-### How the model learns which MCP servers exist
+Connections are per-session: a repeated `mcp_load` reuses one, different sessions each get their own, and a session that ends closes what it opened; `eager` shares one standing instance instead. Toggling a row shows a brief `starting / stopping` state while the child process comes up.
 
-Under `dynamic` / `lazy` the system prompt carries the on-demand inventory, one line per loadable server:
+### Tool filters
 
-```
-MCP servers available on demand: call `mcp_load` with one of these names to add that server's
-tools to this session, and `mcp_unload` with the same name to release it again.
+Settings → MCP 管理 → a row's **Edit** → the **Tools** block lists every method the server publishes, all checked. Unchecking one hides it: it never enters context, and calling it is refused. Filtering does not change the cost model — the loading mode decides that.
 
-- alibaba-devops-mcp — 云效MCP，任务管理工具，可以操作
-- playwright
-```
-
-- **Only allowed rows are listed**, and the name is exactly what `mcp_load` takes; disabled rows never appear.
-- **The description is the one you wrote on that row** in the settings page, so a good one helps the model pick
-  correctly; an empty one leaves just the name.
-- **Load state is deliberately absent.** Reporting it would rewrite the system prompt on every `mcp_load` and
-  invalidate the whole cache prefix — system, tools, and history — which costs far more than the lines it would add.
-- **Size is bounded**: each description is truncated to 80 characters and all descriptions share a 900-character
-  budget. Past that budget descriptions are dropped first, and **every server name is always listed** — a server the
-  model cannot name is one it can never load.
-- The section is absent when nothing may be loaded, and under `eager` (where every tool is already in the request).
-- It follows the configuration (adding, removing, enabling, or disabling rows, and switching modes) and stays stable
-  within a session.
-
-### Processes and lifetime
-
-Under `dynamic` / `lazy`, a server that has not been loaded starts **no process at all** — MCP is stopped when the
-session begins, until some `mcp_load`.
-
-Once loaded, connections are per-session: a repeated `mcp_load` in one session reuses the same one, while **different
-sessions each get their own** (for stdio, one child process each); subagents and forked sessions count as separate
-sessions. **A session that ends closes the connections it opened**, with no `mcp_unload` required. `eager` is the
-opposite — the preset is a standing mount, so one shared instance serves every session.
-
-> MCP rows on the **global plane** (written directly into `cordis.yml`) are outside on-demand loading: they always
-> start, as if permanently `eager`. Put a server in a preset to make it on-demand.
-
-### MCP tool filters
-
-A server often publishes dozens of tools while a session uses a few. The rules decide **which tools are visible**: a
-hidden tool is absent from the `mcp_load` result and `mcp_call` refuses to invoke it. Filtering does **not** change the
-cost model — whether the visible tools enter every request is the **loading mode**'s decision, filter or not.
-
-**In the settings page:** Settings → Harness 兼容 → MCP 管理 → a row's **Edit** → the **Tools** block at the bottom of
-the dialog.
-
-Opening it connects to that server once, lists the methods it publishes, and **checks every one of them**. Unchecking a
-method disables it; the change applies on save. The block carries an `enabled/total` count, `Load tools` (re-read after
-editing the JSON), and `All` / `None`.
-
-- Rules are only rewritten when the server actually answered; a failed connection leaves the stored rules untouched.
-- Everything checked = no rules for that row, so every published tool stays visible (also the state of a new row).
-
-**For wildcards, write them yourself.** Rules live in the `mcp-manager` settings namespace under `tools`, keyed by the
-row key (`preset:<preset id>:<serverName>`, the same key the description map uses):
+For wildcards, write the rules yourself in the `mcp-manager` settings under `tools`, keyed by the row key (`preset:<preset id>:<serverName>`):
 
 | Form | Meaning |
 |---|---|
-| `create_workitem`, `get_workitem` | **Allow list**: one entry without `!` means only matching tools stay visible |
-| `!delete_*` | **Deny list**: when every entry starts with `!`, matching tools are hidden and the rest stay |
+| `create_workitem` | **Allow list**: one entry without `!` keeps only matching tools |
+| `!delete_*` | **Deny list**: when every entry starts with `!`, matching tools are hidden |
 | `*`, `?` | Wildcards: `*` matches any run of characters, `?` matches exactly one |
 
-What the dialog saves is exactly that deny list, so unchecking `delete_workitem` writes:
+Rules are read at the next `mcp_load`; an already-loaded server keeps the tools it was admitted with. `eager` ignores filters, and an unparsable rule set hides nothing.
 
-```yaml
-mcp-manager:
-  tools:
-    "preset:standard-yunxiao:alibaba-devops-mcp":
-      - "!delete_workitem"
-```
+### Importing a Claude Code configuration
 
-What to expect:
-
-- **Rules are read at load time.** A committed change applies to the **next `mcp_load`**; an already-loaded server
-  keeps the tools it was admitted with, and `mcp_unload` followed by `mcp_load` picks up the new rules. When the
-  server itself changes its tool list (`tools/list_changed`), the re-sync keeps the rules the load used.
-- **The loading mode picks the carrier, not the rules.** Under `lazy` a row's tools always take the proxy carrier
-  (`mcp_load` lists, `mcp_call` invokes). Under `dynamic`, a row without rules mounts through the harness as a whole,
-  while **a filtered row registers only its visible tools natively in that session** — they carry the server's real
-  argument schemas in every request, and the hidden ones are never registered at all.
-- **`eager` ignores filters**, because that mode mounts the whole server through the harness's mcp-client. The plugin
-  warns at startup when rules are configured for it.
-- **A malformed rule set hides nothing**: an unparsable value filters nothing, so a typo never empties a server.
-
-### Importing your Claude Code MCP configuration
-
-**设置 → Harness 兼容 → MCP 管理 → 导入 Claude 配置** reads the configuration files Claude Code writes and offers
-every server it finds as a checklist. Selected servers are imported as **global** rows.
+**设置 → MCP 管理 → 导入 Claude 配置** reads the files Claude Code writes and offers every server it finds as a checklist; ticked servers are imported as **global** rows.
 
 | Source | File |
 |---|---|
@@ -174,60 +84,24 @@ every server it finds as a checklist. Selected servers are imported as **global*
 | Claude Code settings | `~/.claude/settings.json`, `settings.local.json` |
 | Project scope | `<project root>/.mcp.json` |
 
-`type` may be omitted, as Claude Code itself writes it: a `command` means stdio and a `url` means streamable HTTP.
+Nothing is modified — the scan only reads — and each server is imported on its own, so one failure does not stop the rest. `env` / `headers` come along so the server can connect, but the dialog shows only those keys' names.
 
-- **Nothing is modified.** The scan only reads; only the rows you tick are written, through the same path as a manually
-  added server (same validation, conflict check, and atomic write).
-- **A server whose name is already taken is not pre-selected**, and one that cannot be imported is labelled with the
-  reason instead of failing silently.
-- **A server is imported on its own.** If one fails, the rest still go through, and the failures are listed with their
-  reasons.
-- **Credentials come along.** An entry's `env` / `headers` are imported verbatim so the server can connect; the dialog
-  only shows the *names* of those keys, never their values.
+## Notes and caveats
 
-## Configuration
-
-| Field | Default | Meaning |
-|---|---|---|
-| `mcpLoading` | `dynamic` | How allowed servers enter context by default; the settings-page choice overrides it |
-
-```yaml
-- name: '@guowenzhang/dsh-mcp-manager'
-  config:
-    mcpLoading: lazy
-```
-
-## Known limitations
-
-- **Enabling a server still waits on the child process** (`npx -y …` / `uvx …`, usually 1–3 seconds). The UI never
-  blocks; installing the server as a direct executable shortens this noticeably.
+- **Enabling a server still waits on the child process** (`npx -y …` / `uvx …`, usually 1–3 seconds). The UI never blocks; installing the server as a direct executable shortens this noticeably.
 - **Opening the edit dialog connects to that server once** (to list its tools), with the same 1–3 second cost.
 - **Global-plane rows ignore the loading mode**: they always mount.
-- **A preset's first mount starts and then kills each server once.** On-demand loading works by unmounting rows at
-  runtime, which cannot beat the child process's spawn, so the first session to use a preset after a host restart pays
-  one short start-up.
-- **Import reads Claude Code and the project `.mcp.json` only.** Cursor, Cline, Roo, and VS Code configuration files
-  are not scanned, and an import always targets the global plane; move a row into a preset afterwards if you want it
-  on-demand.
-- **A filtered row under `dynamic` gets no server instructions and no resource tools.** The harness's mcp-client
-  provides both, and this row registers through the plugin's own carrier instead. The tools themselves — argument
-  binding, results, image projection — match a native mount.
-
-## Development
-
-Build, Cordis/Typert plugin contract, the traps, and the MCP lifecycle details live in [AGENTS.md](AGENTS.md).
-The loading decisions — why three modes, which alternatives were rejected, and how Claude's tool search compares —
-live in [docs/design-decisions.md](docs/design-decisions.md), maintained in Chinese like AGENTS.md. The comparison
-against other DSH MCP plugins and the feature roadmap it produces live in
-[docs/competitive-landscape.md](docs/competitive-landscape.md).
-
-```sh
-npm run build      # host (tsdown) + client (rolldown ModuleLoader handoff)
-npm run typecheck
-npm test           # vitest; the repository-local vitest.config.ts is required
-```
+- **A preset's first mount starts and then kills each server once.** On-demand loading works by unmounting rows at runtime, which cannot beat the child process's spawn, so the first session to use a preset after a host restart pays one short start-up.
+- **Import reads Claude Code and the project `.mcp.json` only.** Cursor, Cline, Roo, and VS Code configuration files are not scanned, and an import always targets the global plane; move a row into a preset afterwards if you want it on-demand.
+- **A filtered row under `dynamic` gets no server instructions and no resource tools.** The harness's mcp-client provides both, and this row registers through the plugin's own carrier instead. The tools themselves — argument binding, results, image projection — match a native mount.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE). This project includes MIT-licensed portions derived from DeepSeek
-Harness; see [NOTICE](NOTICE).
+Apache License 2.0 — see [LICENSE](LICENSE). This project includes MIT-licensed portions derived from DeepSeek Harness; see [NOTICE](NOTICE).
+
+## Further reading
+
+- [AGENTS.md](AGENTS.md) — full install variants, build and wiring, deployment and live-update semantics, release steps, the traps, and the tests.
+- [docs/design-decisions.md](docs/design-decisions.md) — why three loading modes, which alternatives were rejected, and how Claude's tool search compares.
+- [docs/competitive-landscape.md](docs/competitive-landscape.md) — comparison with other DSH MCP plugins and the feature roadmap it produces.
+- [DeepSeek Harness documentation](https://deepseek-harness.github.io/deepseek-harness/).

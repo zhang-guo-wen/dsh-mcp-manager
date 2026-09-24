@@ -4,10 +4,6 @@
 管理 MCP 服务器行(全局平面 + 各 agent preset)、决定允许的服务器何时进上下文、按行过滤工具,
 并提供设置页的「MCP 管理」区块。
 
-它与姊妹插件 `@guowenzhang/dsh-claude-compat` 是**两个仓、两个包**:那边负责 Claude Code /
-Codex 兼容与 `/btw`,这边负责 MCP。两者各有自己的设置命名空间(`context-injection` / `mcp-manager`)、
-自己的设置页区块、自己的 Remote 命名空间,互不 import、互不依赖,可以单独安装与卸载。
-
 它不打包 `@deepseek-ai/*`,运行时从宿主 harness 解析这些包。
 
 ## 目录
@@ -71,9 +67,6 @@ host 侧:`class McpManager extends TypertRemoteService`,构造里 `super(ctx, 'm
 **schema 用 `z.dict(z.any())`,不要在设置 schema 里校验规则。** 设置由用户手写在 active profile 的 `cordis.patch.yml` 里,
 schema 拒绝一个字段会让**整个 `mcp-manager` 命名空间**回退到上一次好的值(warn 后静默失效),
 所以畸形值必须在读取时收敛:`parseMcpToolFilter` 跳过无法解析的条目,空规则不过滤任何东西。
-
-旧的 `context-injection` 命名空间曾经同时装着 Claude/Codex 开关与 MCP 字段;拆分时把 MCP 三项搬到了这里,
-字段名去掉了 `mcp` 前缀(命名空间已经表明归属)。
 
 ## MCP 行编写(src/mcp-authoring.ts)
 
@@ -209,6 +202,16 @@ server instructions 同一个位置)。四条契约:
 `registerMcpTools` 因此返回 `{ dispose, refresh }` 而不是一个 disposer,第四参数也从单个 `filterFor` 变成
 `{ filterFor, descriptionFor }` 两个活闭包。
 
+清单段的原文(每行 `名字 — 描述`,描述取自该行的设置;这段是模型可见文本,改动要同步快照):
+
+```
+MCP servers available on demand: call `mcp_load` with one of these names to add that server's
+tools to this session, and `mcp_unload` with the same name to release it again.
+
+- alibaba-devops-mcp — 云效MCP，任务管理工具，可以操作
+- playwright
+```
+
 ### 预加载闸门(src/mcp-gate.ts)
 
 `dynamic`/`lazy` 下"允许但不预加载"靠 **运行时摘行**实现:gate 读每个 preset 的**声明真值**(声明行
@@ -256,6 +259,15 @@ server instructions 同一个位置)。四条契约:
 
 `mcp_load` 的结果带 `hidden` 字段(被隐藏的数量),render 里有一行提示 —— 模型需要知道"还有工具但不可调用",
 否则会照历史里的名字硬调。
+
+弹窗保存的就是这份 deny 列表 —— 取消勾选 `delete_workitem` 会写成:
+
+```yaml
+mcp-manager:
+  tools:
+    "preset:standard-yunxiao:alibaba-devops-mcp":
+      - "!delete_workitem"
+```
 
 ### 工具选择 UI(src/client/McpEditor.tsx)
 
@@ -335,9 +347,6 @@ dsh plugin --profile web add github:zhang-guo-wen/dsh-mcp-manager               
 `file:` 依赖则可能退化成物理拷贝,那时改源码不会影响正在跑的 dsh,要重装或手动同步 `lib/`。
 client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏览器,不要修改 `HANDOFF_ID`。
 
-它与 `@guowenzhang/dsh-claude-compat` 互相独立:可以只装其中一个。两个都装时,设置页会出现
-「Claude 兼容」与「MCP 管理」两个独立区块。
-
 ## 发版(Release)
 
 `lib/` 是提交进仓库的,所以**发版 = 改版本号 + 构建 + 提交产物 + 打 tag**。别人按 tag 安装,
@@ -376,3 +385,98 @@ client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏�
 17. **在清单段里写"是否已加载"** → 每次 `mcp_load` 都重写系统提示,整个缓存前缀(系统 + 工具 + 历史)失效一次,
     比工具列表变化贵得多。加载状态本来就在会话历史里。
 18. **忘了调 `refresh()`**(新注册、模式提交、reconcile 之后) → 模型看到上一版名单:新增的 MCP 行它永远加载不了。
+
+## 配置
+
+插件行 `config:` 里的 `loading` 给出**允许的服务器默认怎么进上下文**;设置页的选择覆盖它。设置命名空间就是插件行
+的 Config,命名空间名即行 id `mcp-manager`,所以字段名以 `src/settings.ts` 的 `McpSettingsConfig` 为准,写错的名字
+会被 schema 忽略。
+
+| 字段 | 默认 | 含义 |
+|---|---|---|
+| `loading` | `dynamic` | 允许的服务器默认怎么进上下文;设置页的选择覆盖它 |
+
+```yaml
+- name: '@guowenzhang/dsh-mcp-manager'
+  config:
+    loading: lazy
+```
+
+schema 默认值来自同文件的 `Config`(`loading: z.string().default('dynamic').volatile()`);无法识别的存量值由
+`parseMcpLoadingMode` 收敛回 `dynamic`(见「延迟加载」)。`descriptions` 与 `tools` 归用户设置文档,见「设置命名空间」。
+
+## 安装
+
+[部署](#部署)一节给的是本地目录与 `github:` 两种源;其余安装变体:
+
+```sh
+# npm 官方源
+npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager
+
+# HTTPS
+npx @deepseek-ai/dsh plugin --profile web add git+https://github.com/zhang-guo-wen/dsh-mcp-manager.git
+
+# SSH
+npx @deepseek-ai/dsh plugin --profile web add git+ssh://git@github.com/zhang-guo-wen/dsh-mcp-manager.git
+
+# 固定发布 tag:默认分支上后续的临时提交不会被拿到
+npx @deepseek-ai/dsh plugin --profile web add "git+ssh://git@github.com/zhang-guo-wen/dsh-mcp-manager.git#v0.1.0"
+```
+
+卸载(命令转发给 profile 目录里的 pnpm `remove`,并从 profile 清单里摘掉该依赖):
+
+```sh
+npx @deepseek-ai/dsh plugin --profile web remove @guowenzhang/dsh-mcp-manager
+```
+
+## 组合接线
+
+`cordis.patch.yml` 是 bundle 层补丁,把插件行插进任何引用了本 bundle 的 profile:
+
+```yaml
+- insert:
+    - id: mcp-manager
+      name: '@guowenzhang/dsh-mcp-manager'
+```
+
+`package.json` 的 `dsh` 字段声明其余接线:`dsh.bundle.patch` 指向 `./cordis.patch.yml`;`dsh.client.inject` 列出
+浏览器半边依赖的宿主包 —— `@deepseek-ai/dsh-api-gateway`、`@deepseek-ai/dsh-api-remotes`、
+`@deepseek-ai/dsh-client-locale`、`@deepseek-ai/dsh-client-store`、`@deepseek-ai/dsh-client-ui-renderer`、
+`@deepseek-ai/dsh-client-ui-settings`、`@deepseek-ai/dsh-client-ui-slots`,`platform` 为 `web`。入口是
+`main` → `lib/index.mjs`、`./client` → `lib/client.js`,`./cordis.patch.yml` 也作为导出发布。
+
+全局平面的 MCP 行由 file-backed `cordis.yml` 的 Include 提供;preset 平面的行写在 profile patch 里那条 preset
+声明行的 `config.plugins`(见「MCP 行编写」)。
+
+## 生效语义
+
+- **host 半边是进程内模块**:插件代码在 host 启动时被 import,重建 `lib/` 不会替换运行中的代码 —— 必须重启宿主。
+- **client 半边按内容 revision 提供**:Host 用 `lib/client.js` 的内容 revision 更新 bundle URL,改了 client 刷新页面
+  即可;`HANDOFF_ID` 必须等于 `package.json` 的包名,改它会让 Web 启动图找不到该插件。
+- **模式与规则是活设置**:加载模式、行描述、工具过滤提交后对所有会话的**下一次请求**生效,不需要重启。
+
+## 类型检查
+
+```sh
+npm run typecheck   # tsc --noEmit -p tsconfig.json
+```
+
+## 技术决策
+
+加载相关的每条决策(结论、理由、被否决的替代方案、已知代价)归
+[docs/design-decisions.md](docs/design-decisions.md),本仓不维护第二份:
+
+| 编号 | 决策 | 一句话理由 |
+|---|---|---|
+| D1 | 「允不允许用」与「什么时候进上下文」是两个开关 | 两件正交的事用一个枚举表达不了 |
+| D2 | 三种加载模式,默认 `dynamic` | 省 token 与工具绑定质量之间取默认值 |
+| D3 | 按需工具的注册落在 host 平面 | 放 preset 作用域会让 preset 反复重挂 |
+| D4 | 连接按会话隔离,随会话回收 | 一个会话加载的服务器不能漏给别的会话,也不能活过它 |
+| D5 | 预加载靠运行时摘行(gate),不写文件 | preset 是输入不是持久化目标 |
+| D6 | 工具过滤在返回与调用两点强制 | 只挡一处挡不住模型凭记忆直呼工具名 |
+| D7 | `mcp_load` 结果带 `hidden` 计数 | 模型必须知道"还有工具但不可调用" |
+| D8 | 载体由加载模式决定,规则只决定可见集合 | 模式才是「绑定 vs 缓存」的取舍,规则不该替用户改代价 |
+| D9 | 服务器清单进系统提示,不做成列目录工具 | 模型看不到名字就加载不了,而这段常驻成本可用预算封顶 |
+
+实现侧的理由与踩坑在本文各节(「延迟加载」「载体选择」「按需清单」「预加载闸门」「工具过滤」);同类插件对比与
+功能路线图归 [docs/competitive-landscape.md](docs/competitive-landscape.md)。

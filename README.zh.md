@@ -7,148 +7,75 @@ kind: "plugin-readme"
 
 中文 | [English](README.md)
 
-## 这个插件有什么用
+## 背景：DeepSeek Harness
 
-- **MCP 管理。** 在设置页里新增、编辑、启停 MCP 服务器。全局行与各 preset 的行都会列出并显示实时状态。切换时显示
-  短暂的 `启动中 / 停止中`，因为要等 MCP 子进程起来，列表不会因此卡住。
-- **按需加载 MCP。** 停用的服务器不占任何开销。**会话一开始，系统提示里就列出所有可加载的 MCP（名称 + 你在设置页写的
-  描述）**，模型用 `mcp_load` 把某台拉进**当前会话**、用 `mcp_unload` 释放；`lazy` 模式下再用 `mcp_call` 调用工具。
-  已加载的工具不会漏到别的会话：连接按会话隔离，不同会话各起一份，会话结束后自动关闭。
-- **MCP 工具过滤。** 在 MCP 的编辑弹窗里列出这台服务器提供的方法，**默认全部勾选**；取消勾选的方法不会进上下文 ——
-  既不列出也不能调用。需要通配符时也可以手写 `mcp-manager.tools`。
-- **导入已有的 Claude Code 配置。** 一个按钮读取你的 Claude Code 配置文件里已经声明的 MCP 服务器，勾选后导入为
-  全局行 —— 不用重新敲一遍命令、参数和 API key。
+DeepSeek Harness（`dsh`）是 DeepSeek AI 开源的 agent harness，几乎所有能力都是 [Cordis](https://github.com/cordiverse/cordis) 插件。它处于 **developer preview** 阶段、迭代很快，会有破坏性变更（[文档站](https://deepseek-harness.github.io/deepseek-harness/)，`0.1.7-alpha.*`）；本插件是独立第三方包，`@deepseek-ai/*` 运行时从宿主解析。
 
-MCP 服务器管理是从 [`dsh-claude-compat`](https://github.com/zhang-guo-wen/dsh-claude-compat) 拆出来的独立插件：
-两者互不依赖，可以只装其中一个。两个都装时，设置页会出现「Claude 兼容」与「MCP 管理」两个独立区块。
+## 这个插件解决什么问题
+
+MCP 服务器原本只能手写组合行、整套工具常驻上下文，已有的 Claude Code 配置还得照着重敲；本插件在设置页管理这些行，按需加载某台服务器且只加载你勾选的那部分工具，还能一键导入 Claude 的 MCP 配置。
 
 ## 截图
 
-### MCP 管理 —— 列出全部已配置服务器，状态实时
+### 设置 → MCP 管理 —— 加载方式与服务器行
 
-![MCP 列表](docs/mcp-list.png)
+![MCP 管理页](docs/images/mcp-settings.png)
 
-### MCP 管理 —— 新增或编辑服务器，含工具勾选
+三种加载方式，以及已配置的服务器：每行带所属平面、实时状态、「编辑」与启用开关。
 
-![MCP 编辑](docs/mcp-editor.png)
+### 新增 MCP —— JSON 配置与工具勾选
+
+![MCP 编辑弹窗](docs/images/mcp-editor.png)
+
+一台服务器的 JSON 配置，以及它发布的工具列表：默认全部勾选，取消勾选的方法不会交给模型。
+
+### 导入 Claude MCP 配置 —— 勾选要带过来的服务器
+
+![导入 Claude MCP 配置](docs/images/mcp-import-claude.png)
+
+从 Claude Code 的配置文件里读到的每一台 MCP 服务器，勾中的导入为全局行。
 
 ## 安装
 
-构建好的 `lib/` 随仓库提交，所以装完即可运行，**你这边不需要构建**。
-
 ```sh
-# HTTPS
-npx @deepseek-ai/dsh plugin --profile web add git+https://github.com/zhang-guo-wen/dsh-mcp-manager.git
-
-# 或 SSH
-npx @deepseek-ai/dsh plugin --profile web add git+ssh://git@github.com/zhang-guo-wen/dsh-mcp-manager.git
+npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager
 ```
 
-建议锁定发布 tag，这样默认分支上后续的临时提交不会被人拿到：
+来自 npm 官方源：<https://www.npmjs.com/package/@guowenzhang/dsh-mcp-manager>。装完重启宿主；本地目录开发安装、git 源与排查见 [AGENTS.md](AGENTS.md)。
 
-```sh
-npx @deepseek-ai/dsh plugin --profile web add "git+ssh://git@github.com/zhang-guo-wen/dsh-mcp-manager.git#v0.1.0"
-```
+## 用法
 
-对着本地 checkout 开发就装目录，pnpm 会建**软链**，重建 `lib/` 后下次启动即生效：
+### 加载方式
 
-```sh
-npx @deepseek-ai/dsh plugin --profile web add /绝对路径/dsh-mcp-manager
-```
-
-## 使用
-
-### MCP 加载方式
-
-行上的启停开关与加载模式回答两个不同问题：开关决定**这台服务器能不能用**，模式决定**允许的服务器什么时候进上下文**。
+启用开关说的是**这台服务器允不允许用**，加载方式说的是**允许的服务器什么时候进上下文**。在 **设置 → MCP 管理 → MCP 加载方式** 里选；选择存在 `mcp-manager` 设置命名空间，从下一个请求起对所有会话生效。
 
 | 模式 | 行为 |
 |---|---|
 | 全部加载（`eager`） | 允许的服务器在会话开始时就挂载，工具始终在请求里 |
-| 动态插入（`dynamic`，默认） | 允许的服务器默认**不挂载**；`mcp_load` 把一台挂进调用方会话，工具随之加入请求 —— 绑定质量最好，但工具列表每次加载会变一次。**配了工具过滤的行只把可见工具挂进去**，这些工具照旧带服务器给出的真实参数 schema |
-| 惰性（`lazy`） | 允许的服务器默认**不挂载**；`mcp_load` 用 MCP SDK 直连且**不注册任何工具**，只返回工具 schema，模型通过固定的 `mcp_call` 代理调用 —— 工具列表永不变，请求缓存前缀零失效 |
+| 动态插入（`dynamic`，默认） | 允许的服务器默认不挂载；`mcp_load` 把一台挂进调用方会话——绑定质量最好，但工具列表每次加载会变一次。配了工具过滤的行只挂可见工具 |
+| 惰性（`lazy`） | `mcp_load` 只连不注册，把工具 schema 作为结果返回，模型经固定的 `mcp_call` 代理调用——工具列表永不变，请求缓存前缀零失效 |
 
-在 **设置 → Harness 兼容 → MCP 管理 → MCP 加载方式** 里选择。该选择存在用户的 `mcp-manager` 设置命名空间，
-提交后**从下一个请求起对所有会话生效**。
+`dynamic` / `lazy` 下，系统提示按 `名字 — 你在这行写的描述` 列出每一台可加载的服务器，模型按名字调 `mcp_load` / `mcp_unload`。名字永远列全；描述单条截断到 80 字符、整段预算 900 字符。**加载状态刻意不写**——写它会让每次 `mcp_load` 都重写系统提示，整个缓存前缀失效。
 
-### 模型怎么知道有哪些 MCP
+连接按会话隔离：同一会话重复 `mcp_load` 复用一份，不同会话各起一份，会话结束会关掉它开的连接；`eager` 相反，共享一个常驻实例。切换某一行的开关时先短暂显示 `启动中 / 停止中`，因为要等子进程起来。
 
-系统提示里有一段按需加载清单（`dynamic` / `lazy` 下才有），每台可加载的服务器一行：
+### 工具过滤
 
-```
-MCP servers available on demand: call `mcp_load` with one of these names to add that server's
-tools to this session, and `mcp_unload` with the same name to release it again.
+设置 → MCP 管理 → 某一行的 **编辑** → 弹窗底部的 **工具** 区块，列出这台服务器发布的所有方法，默认全勾。取消勾选即隐藏：不进上下文，调用也会被拒绝。过滤不改变代价模型——那由加载方式决定。
 
-- alibaba-devops-mcp — 云效MCP，任务管理工具，可以操作
-- playwright
-```
-
-- **只列允许的行**，名称就是 `mcp_load` 的实参；被禁用（停用）的行不出现。
-- **描述来自设置页每行的描述字段**，写好它能帮模型选对服务器；描述为空就只列名字。
-- **不写"是否已加载"**：那会让每次 `mcp_load` 都重写系统提示，把系统 + 工具 + 历史的整个缓存前缀打断一次，
-  比工具列表变化贵得多。
-- **体积有上限**：单条描述截断到 80 字符，整段描述预算 900 字符；超预算时先丢描述，**服务器名永远列全** ——
-  模型看不到名字的服务器就永远加载不了。
-- 没有任何可加载的服务器、或模式是 `eager` 时，这段完全不出现。
-- 清单跟着配置真值更新（增删/启停 MCP 行、切换加载模式），会话内保持稳定。
-
-### 进程与生命周期
-
-`dynamic` / `lazy` 下，没有加载的服务器**一个进程都不启动** —— 会话开始时 MCP 是停的，直到某次 `mcp_load`。
-
-加载之后，连接按会话隔离：同一会话重复 `mcp_load` 复用同一份，**不同会话各起一份**（stdio 就是各一个子进程），
-子 agent 和 fork 出的会话都算独立会话。**会话结束后，该会话建立的连接会自动关闭**，不需要手动 `mcp_unload`。
-`eager` 相反 —— preset 是常驻挂载，全局共享一个实例，所有会话共用。
-
-> 配在**全局平面**（直接写进 `cordis.yml`）的 MCP 行不归按需加载管：它们总是启动，相当于永远 `eager`。
-> 想让一台服务器按需加载，就把它配在 preset 里。
-
-### MCP 工具过滤
-
-一台服务器动辄几十个工具，常用的可能只有几个。过滤决定**哪些工具可见**：被隐藏的工具不出现在 `mcp_load` 的结果里，
-也不能用 `mcp_call` 调用（调用会被直接拒绝）。注意过滤**不改变代价模型** —— 可见的工具要不要每轮进请求由上面的**加载模式**
-决定，与是否配了规则无关。
-
-**在设置页操作：**设置 → Harness 兼容 → MCP 管理 → 某一行的**编辑** → 弹窗底部的**工具**区块。
-
-打开时会连一次这台服务器，把它提供的方法列出来，**默认全部勾选**。取消勾选的方法即被禁用，保存后生效。
-区块上有 `启用数/总数` 计数、`加载工具列表`（改完 JSON 后重新读）、`全选` / `全不选`。
-
-- 列表只在**服务器应答过**时才写回规则；连不上时保存不会改动已有规则。
-- 全部勾选 = 这条规则被清空，该服务器的工具全部可见（也是新增服务器时的状态）。
-
-**需要通配符时手写：**规则存在 `mcp-manager` 设置命名空间的 `tools` 字段里，键是行标识
-（`preset:<preset id>:<serverName>`，与描述同键）：
+要写通配规则就自己写，规则在 `mcp-manager` 设置的 `tools` 字段里，键是行标识（`preset:<preset id>:<serverName>`）：
 
 | 写法 | 含义 |
 |---|---|
-| `create_workitem`、`get_workitem` | **白名单**：只要有一个不带 `!` 的条目，就只有匹配它的工具可见 |
+| `create_workitem` | **白名单**：只要有一个不带 `!` 的条目，就只有匹配它的工具可见 |
 | `!delete_*` | **黑名单**：条目全是 `!` 开头时，匹配的隐藏，其余保留 |
 | `*`、`?` | 通配符：`*` 匹配任意长度的字符，`?` 匹配单个字符 |
 
-UI 保存的正是展开后的黑名单，例如取消勾选 `delete_workitem` 会写成：
+规则在下一次 `mcp_load` 时读取，已经加载的服务器保持加载时那套工具。`eager` 下规则不生效，无法解析的规则什么都不隐藏。
 
-```yaml
-mcp-manager:
-  tools:
-    "preset:standard-yunxiao:alibaba-devops-mcp":
-      - "!delete_workitem"
-```
+### 导入 Claude Code 的 MCP 配置
 
-几件需要知道的事：
-
-- **规则在加载时读取。** 改完设置后对**下一次 `mcp_load`** 生效；已加载的服务器保持加载时那套工具，`mcp_unload` 后再
-  `mcp_load` 即可换到新规则。服务器自己改工具列表时（`tools/list_changed`）按**加载时那套规则**重新同步。
-- **载体由加载模式决定，不由规则决定。** `lazy` 下行里的工具一律走代理通道（`mcp_load` 列目录 + `mcp_call` 调用）；
-  `dynamic` 下没有规则的行整台交给 harness 原生挂载，**配了规则的行只把可见工具原生注册进当前会话** —— 这些工具每轮请求都带着
-  真实参数 schema，被隐藏的工具则根本没有注册。
-- **`eager` 下规则不生效**，因为该模式由 harness 的 mcp-client 直接挂载整台服务器；启动时会记一条警告说明。
-- **写坏的规则不隐藏任何东西**：无法解析的值按"不过滤"处理，拼错不会让一台服务器的工具凭空消失。
-
-### 导入已有的 Claude Code 配置
-
-**设置 → Harness 兼容 → MCP 管理 → 导入 Claude 配置** 会读取 Claude Code 自己写的配置文件，把找到的服务器列成
-勾选清单，勾中的导入为**全局**行。
+**设置 → MCP 管理 → 导入 Claude 配置** 读取 Claude Code 自己写的那几个文件，把找到的服务器列成勾选清单，勾中的导入为**全局**行。
 
 | 来源 | 文件 |
 |---|---|
@@ -157,53 +84,24 @@ mcp-manager:
 | Claude Code 设置 | `~/.claude/settings.json`、`settings.local.json` |
 | 项目级 | `<项目根>/.mcp.json` |
 
-`type` 可以省略（Claude Code 自己就是这么写的）：有 `command` 即 stdio，有 `url` 即 streamable HTTP。
+扫描只读，不改动任何来源文件；每台服务器各自导入，一台失败不影响其余。`env` / `headers` 会一起带过去（否则连不上），但弹窗只显示这些键的名字。
 
-- **不改动任何来源文件。** 扫描只读；只有你勾中的行会被写入，且走的是与手工新增**完全相同**的路径
-  （同样的校验、冲突检测与原子写）。
-- **名字已被占用的服务器默认不勾选**；无法导入的会直接标出原因，而不是静默失败。
-- **每台独立导入。** 其中一台失败不影响其余，失败项会在结束时连同原因一起列出。
-- **凭据会一并带过来。** 条目里的 `env` / `headers` 原样导入，服务器才连得上；弹窗只显示这些键的**名字**，
-  不显示值。
+## 注意事项
 
-## 配置
-
-| 字段 | 默认 | 含义 |
-|---|---|---|
-| `mcpLoading` | `dynamic` | 允许的服务器默认怎么进上下文；设置页的选择覆盖它 |
-
-```yaml
-- name: '@guowenzhang/dsh-mcp-manager'
-  config:
-    mcpLoading: lazy
-```
-
-## 已知限制
-
-- **启用 MCP 仍需等子进程自身启动**（`npx -y …` / `uvx …` 通常 1–3 秒）。界面不会卡住；把服务器装成直接可执行文件
-  能明显缩短这个时间。
+- **启用 MCP 仍需等子进程自身启动**（`npx -y …` / `uvx …` 通常 1–3 秒）。界面不会卡住；把服务器装成直接可执行文件能明显缩短这个时间。
 - **每次打开编辑弹窗会连一次该服务器**（为了列出工具），同样是 1–3 秒。
 - **全局平面的行不受加载模式管辖**：它们总是挂载。
-- **预设首次挂载时会有一次"启动后又杀掉"**：按需加载靠运行时摘行实现，抢在子进程启动之前拦不住，所以每次
-  宿主重启后第一次使用某个 preset 时会有这一下。
-- **导入只读 Claude Code 与项目的 `.mcp.json`**：不扫 Cursor / Cline / Roo / VS Code 的配置文件；且导入一律落在
-  全局平面，想要按需加载请在导入后把该行移进 preset。
-- **`dynamic` 下配了规则的行拿不到服务器 instructions 与资源工具**：这两样由 harness 的 mcp-client 提供，而这一行走的是插件
-  自己的注册通道。工具本身的参数绑定、结果与图片呈现与原生挂载一致。
-
-## 开发
-
-构建方式、Cordis/Typert 插件契约、各处的坑与 MCP 生命周期细节见 [AGENTS.md](AGENTS.md)。
-加载相关的设计决策(为什么是三种模式、否决过哪些替代方案、Claude 的 tool search 对照)见
-[docs/design-decisions.md](docs/design-decisions.md)。同类插件的对比与下一步功能路线图见
-[docs/competitive-landscape.md](docs/competitive-landscape.md)。
-
-```sh
-npm run build      # host（tsdown）+ client（rolldown ModuleLoader handoff）
-npm run typecheck
-npm test           # vitest；必须带仓根自带的 vitest.config.ts
-```
+- **预设首次挂载时会有一次"启动后又杀掉"**：按需加载靠运行时摘行实现，抢在子进程启动之前拦不住，所以每次宿主重启后第一次使用某个 preset 时会有这一下。
+- **导入只读 Claude Code 与项目的 `.mcp.json`**：不扫 Cursor / Cline / Roo / VS Code 的配置文件；且导入一律落在全局平面，想要按需加载请在导入后把该行移进 preset。
+- **`dynamic` 下配了规则的行拿不到服务器 instructions 与资源工具**：这两样由 harness 的 mcp-client 提供，而这一行走的是插件自己的注册通道。工具本身的参数绑定、结果与图片呈现与原生挂载一致。
 
 ## 许可
 
 Apache License 2.0 —— 见 [LICENSE](LICENSE)。本项目包含源自 DeepSeek Harness 的 MIT 许可部分，见 [NOTICE](NOTICE)。
+
+## 延伸阅读
+
+- [AGENTS.md](AGENTS.md) —— 完整的安装变体、构建与接线、部署与生效语义、发版步骤、易崩清单与测试。
+- [docs/design-decisions.md](docs/design-decisions.md) —— 为什么是三种加载模式、否决过哪些替代方案、Claude 的 tool search 如何对照。
+- [docs/competitive-landscape.md](docs/competitive-landscape.md) —— 同类 DSH MCP 插件对比与由此产生的功能路线图。
+- [DeepSeek Harness 文档](https://deepseek-harness.github.io/deepseek-harness/)。
