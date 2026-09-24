@@ -236,6 +236,28 @@ tools to this session, and `mcp_unload` with the same name to release it again.
 同名坑:**`@Remote` 方法的形参名必须是 `request`**。网关按方法签名推导描述符,写成 `_request` 会让调用方收到
 `args fields do not match the descriptor: unexpected "request"`,而客户端如果吞掉这个错误,表现就是"开关没反应"。
 
+### 名册读取(src/mcp-roster.ts)
+
+设置页的名册走**插件自己的** `mcpManager.listMcps`,**不要**改回 `remote.pluginInventory.list`。
+后者走 agent-preset registry 的 `compositionInventory()` → `diagnostic()` → `auditRows()`,而 `auditRows`
+会 `tree.await()` + 逐行 `fiber.await()`;MCP 行的 `apply` 要等子进程握手,`npx -y` / `uvx` 启动在本机实测
+7.5–23 秒,所以那次读取会让整个设置页(以及每次新增/开关/导入后的刷新)卡住那么久。
+
+`readMcpRoster(ctx, mountReader)` 只读**声明 + live fiber**,不 await 任何激活:
+
+1. **全局行**从 `ctx.loader.entries()` 取,`enabled` 用 `!entry.disabled`(`!!js` 由 Loader 求值)。
+2. **preset 行**优先取 live mount 树的 entry(同样 `!entry.disabled` + `entry.fiber.state`),preset 没挂载时
+   退回声明,并按 Loader 的规则继承 group 的 `disabled`;`!!js` 在挂载外无法求值,一律报 `conditional` 而不是猜。
+3. **同一批返回 `globalWritable` / `globalProblem`**,因为设置页必须在用户填完表单之前就说明全局平面能否写入,
+   而不是等 `addMcp` 逐条报错。
+
+**全局平面在真实 profile 里是只读的。** `dsh` 用 `boot(..., readProfilePatches(...))` 挂根 Include,所以
+`tree.config.patches` 永远非空,而 `globalInclude()` 正是因为这个理由拒绝写入(写回会把 bundle 层与用户补丁层拍平)。
+表现:CLI 默认目标的"新增"逐条失败,导入则**改写到弹窗里所选的预设**(插件侧能做的只是提前把原因说清楚:
+导入弹窗把全局从 scope 里去掉并给出原因,编辑器里全局选项标成不可用)。
+
+**设置页刷新时保留已渲染的名册**,不要退回 `loading`:读取本身很快,清空列表只会让页面闪。
+
 ### 工具过滤(src/mcp-tool-filter.ts)
 
 一台服务器几十个工具、常用只有几个时,`mcp_load` 一次就把全部 schema 倒进会话历史。过滤规则存在
@@ -308,11 +330,14 @@ mcp-manager:
 | 设置 | `~/.claude/settings.json`、`settings.local.json` | `mcpServers` |
 | 项目级 | `<cwd>/.mcp.json` | `mcpServers`,也兼容裸单键映射 |
 
-六条实现约束:
+七条实现约束:
 
-1. **只读,且只写全局。** 扫描不挂载任何东西、不碰任何 composition;导入逐条调**现有的 `addMcp`**
-   (`target: { scope: 'global' }`),因此校验、冲突检测、原子写与手工新增完全同一条路径。
-   **不要为导入新写一条写入路径** —— 那会绕开上面的每一项。
+1. **只读扫描,导入写到所选平面。** 扫描不挂载任何东西、不碰任何 composition;导入逐条调**现有的 `addMcp`**,
+   目标由弹窗里的 scope 选择给出(全局可写时默认全局,否则默认第一个预设),因此校验、冲突检测、原子写与手工新增
+   完全同一条路径。**不要为导入新写一条写入路径** —— 那会绕开上面的每一项。
+   **全局平面在真实 profile 里不可写**(见「名册读取」):`globalProblem` 非空时 scope 只列预设,并在选项下说明原因;
+   两个平面都不可用时才禁用导入并给红字。逐条目进度(`{i}/{n}`)必须显示 —— 一次 `addMcp` 可能等于一次 preset 重挂
+   (该 preset 里每个 MCP 行都会重连),所以这是长耗时路径,不能只有一个"导入中"。
 2. **一个来源坏掉不能拖垮其它来源。** 文件不存在 → 整个来源不出现;存在但读不出/不是 JSON → 该来源带
    `problem` 返回(`missing`/`unreadable`/`malformed`/`too-large`),其余来源照常导入。
 3. **名称先按 composition 规范预检。** `mcp-client` 的 `serverName` 必须匹配 `/^[A-Za-z0-9_-]{1,32}$/`,
@@ -322,8 +347,15 @@ mcp-manager:
    「已导入 N 台,M 台失败」。一台重名不能让其余全部白导。
 5. **`env`/`headers` 的值必须跟着 `spec` 走**(否则导进去的服务器连不上),但 UI 只显示键名
    (`envKeys`)。所以**不要往诊断里打 spec** —— 它带着明文凭据。
-6. **导入只写全局是有意为之**(用户选定的范围)。要导入到 preset 需要在弹窗里加 scope 选择并复用
-   `addMcp` 的 preset 分支,`writePresetRows`(`configEditor.edit`)那套已经就绪。
+6. **导入目标由 scope 字段决定,默认取可写的那个。** 全局可写 → 默认全局(原有行为);全局只读而存在预设 →
+   默认第一个预设并给一行说明;两者都没有 → 红字 + 禁用导入。写入一律经 `addMcp` 的既有分支
+   (全局 `writeEntryListFile` / 预设 `writePresetRows`),**不新增写入路径**。
+   preset 目标的已知代价:每次 `addMcp` 都会让该 preset 重挂一次(其中每个 MCP 行重连),所以逐条导入就是 N 次
+   重挂,必须靠进度条而不是 spinner 交代。
+7. **勾选状态只在"打开弹窗"时重置。** 同一次打开里的重扫(批次结束后的 `setAttempt`、重试按钮)必须保留用户
+   自己的勾选 —— 曾经每次重扫都 `setExcluded(new Set())`,表现就是"只勾了一个,结果全部又被勾上"。工具栏要有
+   `已选 {n}/{m}` 计数:默认本来就是全选,`全选` 按钮本身没有可见变化,没有计数就会被当成"点了没反应"。
+   名册侧同理不能清空(见「名册读取」):`servers` 瞬时为空会让 `已存在` 的行重新渲染成已勾选。
 
 `scanClaudeMcp(cwd, home?)` 的 `home` 可注入,`tests/claude-import.spec.ts` 就是靠它跑临时 fixtures;
 默认取真实 `homedir()`。
@@ -385,6 +417,10 @@ client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏�
 17. **在清单段里写"是否已加载"** → 每次 `mcp_load` 都重写系统提示,整个缓存前缀(系统 + 工具 + 历史)失效一次,
     比工具列表变化贵得多。加载状态本来就在会话历史里。
 18. **忘了调 `refresh()`**(新注册、模式提交、reconcile 之后) → 模型看到上一版名单:新增的 MCP 行它永远加载不了。
+19. **名册读回 `remote.pluginInventory.list`** → 走 `auditRows` 等每一行的激活,MCP 子进程启动几秒就卡几秒(见「名册读取」)。
+20. **以为全局平面可写** → 真实 profile 的根 Include 带着补丁层,`addMcp({scope:'global'})` 必然报 `mcp/read-only`;
+    设置页必须在动手前用 `listMcps` 的 `globalProblem` 说明。
+21. **刷新时把名册清成 `loading`** → 每次新增/开关后页面闪一下;保留上一版名册,只标记 `refreshing`。
 
 ## 配置
 
@@ -477,6 +513,7 @@ npm run typecheck   # tsc --noEmit -p tsconfig.json
 | D7 | `mcp_load` 结果带 `hidden` 计数 | 模型必须知道"还有工具但不可调用" |
 | D8 | 载体由加载模式决定,规则只决定可见集合 | 模式才是「绑定 vs 缓存」的取舍,规则不该替用户改代价 |
 | D9 | 服务器清单进系统提示,不做成列目录工具 | 模型看不到名字就加载不了,而这段常驻成本可用预算封顶 |
+| D10 | 名册读声明 + live fiber,不等任何行的激活 | 等激活等于把 MCP 子进程启动时间(实测 7.5–23s)算进设置页 |
 
 实现侧的理由与踩坑在本文各节(「延迟加载」「载体选择」「按需清单」「预加载闸门」「工具过滤」);同类插件对比与
 功能路线图归 [docs/competitive-landscape.md](docs/competitive-landscape.md)。

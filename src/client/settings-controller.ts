@@ -4,13 +4,12 @@
  * and the per-row tool filters, writes one field per action through the
  * settings scope, and supplies the MCP server roster the section renders.
  *
- * The roster comes from the already-wired `remote.pluginInventory` read of the
- * Loader (loaded from the deployment and preset config files), so it is
- * real-time and reflects both the global plane and every agent-preset
- * composition. Every mcp-client occurrence is surfaced without deduplication,
- * tagged with where it is configured (`global` or a preset id). Descriptions
- * and tool rules are plugin-owned: stored in the `mcp-manager` namespace and
- * merged onto the rows here.
+ * The roster comes from the Host's own `listMcps` read (`src/mcp-roster.ts`),
+ * which answers from declarations and live fibers and therefore never waits for
+ * an MCP child process to connect. Every mcp-client occurrence is surfaced
+ * without deduplication, tagged with where it is configured (`global` or a
+ * preset id). Descriptions and tool rules are plugin-owned: stored in the
+ * `mcp-manager` namespace and merged onto the rows here.
  * @module @guowenzhang/dsh-mcp-manager/client/settings-controller
  */
 
@@ -22,22 +21,21 @@ import type {
   EditMcpRequest,
   ListMcpToolsRequest,
   ListMcpToolsResult,
+  ListMcpsResult,
+  McpFiberPhase,
+  McpGlobalProblem,
   McpMutationResult,
   ScanClaudeMcpRequest,
   ScanClaudeMcpResult,
 } from '../types.ts'
-import type { PluginInventorySnapshot } from '@deepseek-ai/dsh-host-plugin-inventory/types'
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 
 /** Settings namespace registered Host-side by @guowenzhang/dsh-mcp-manager: its Loader row id. */
 export const MCP_SETTINGS_NS = 'mcp-manager'
 
-/** Module specifier of the MCP client bridge whose instances this section lists. */
-export const MCP_CLIENT_MODULE = '@deepseek-ai/dsh-mcp-client'
-
-/** Lifecycle phase of one mcp-client Loader entry (same vocabulary as the inventory). */
-export type McpPhase = PluginInventorySnapshot['entries'][number]['fiberPhase']
+/** Lifecycle phase of one MCP row, as its owning fiber reports it. */
+export type McpPhase = McpFiberPhase
 
 /** Stable key for one MCP row (`<scope>:<name>` or `preset:<id>:<name>`), matching the Host's `mcpRowKey`. */
 export function mcpRowKey(server: McpServer): string {
@@ -117,6 +115,19 @@ export interface McpAuthoringActions {
   scanClaudeMcp: (request: ScanClaudeMcpRequest) => Promise<ScanClaudeMcpResult>
 }
 
+/** The roster read's answer, as the section consumes it. */
+export interface McpRosterView {
+  /** Every MCP row, global plane plus each preset composition, undeduplicated. */
+  readonly servers: readonly McpServer[]
+  /**
+   * Why the global plane refuses writes, when it does. A profile mounts its
+   * root Include together with the bundle and user patch layers, and Loader
+   * write-back would flatten those layers, so global authoring is unavailable
+   * there and the surface must say so instead of failing row by row.
+   */
+  readonly globalProblem?: McpGlobalProblem
+}
+
 /** Snapshot the section renders. */
 export interface McpSectionState {
   /** Whether the namespace is exposed to this client. */
@@ -164,36 +175,34 @@ export interface McpSectionFace {
    * from "enabled, but deliberately not in this request".
    */
   suppressedMcps: () => Promise<readonly string[]>
-  /** Resolve the current loaded MCP roster from the Host plugin inventory. */
-  mcps: () => Promise<readonly McpServer[]>
+  /** Resolve the current MCP roster without waiting for any row's activation. */
+  mcps: () => Promise<McpRosterView>
   /** Resolve the agent presets the editor can target. */
   presets: () => Promise<readonly McpPresetOption[]>
 }
 
 /**
- * Project a Host plugin-inventory snapshot onto the MCP roster, keeping every
+ * Project the Host roster read onto the rows the section renders, keeping every
  * mcp-client occurrence (global plane plus each preset composition) without
  * deduplicating cross-scope repeats. Descriptions are not read here — they are
  * plugin-owned and merged by the section from the `descriptions` map.
- * @param snapshot - the load-time inventory read from the Host.
+ * @param roster - the roster read from the Host.
  * @returns one row per mcp-client occurrence, tagged with its config scope.
  */
-export function mapMcpServers(snapshot: PluginInventorySnapshot): readonly McpServer[] {
+export function mapMcpServers(roster: ListMcpsResult): readonly McpServer[] {
   const rows: McpServer[] = []
-  for (const entry of snapshot.entries) {
-    if (entry.moduleName !== MCP_CLIENT_MODULE) continue
+  for (const entry of roster.entries) {
     rows.push({
       entryId: entry.entryId,
-      serverName: localEntryId(entry.entryId),
+      serverName: localEntryId(entry.entryId ?? ''),
       scope: 'global',
       presetId: undefined,
       enabled: entry.enabled,
       fiberPhase: entry.fiberPhase,
     })
   }
-  for (const preset of snapshot.agentPresets ?? []) {
+  for (const preset of roster.presets) {
     for (const row of preset.rows) {
-      if (row.moduleName !== MCP_CLIENT_MODULE) continue
       rows.push({
         entryId: row.entryId,
         serverName: localEntryId(row.entryId ?? row.moduleName),
@@ -214,14 +223,14 @@ export class McpSettingsController {
 
   /**
    * @param scope - the `mcp-manager` configuration form.
-   * @param mcps - Host-backed MCP roster loader.
+   * @param mcps - Host-backed MCP roster read.
    * @param authoring - Host-backed MCP mutation callbacks.
    * @param presets - Host-backed agent-preset options loader.
    * @param suppressed - Host-backed reader of the rows the gate holds unmounted.
    */
   constructor(
     private readonly scope: ConfigForm<McpSettingsFlags>,
-    private readonly mcps: () => Promise<readonly McpServer[]>,
+    private readonly mcps: () => Promise<McpRosterView>,
     private readonly authoring: McpAuthoringActions,
     private readonly presets: () => Promise<readonly McpPresetOption[]>,
     private readonly suppressed: () => Promise<readonly string[]>,

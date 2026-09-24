@@ -16,6 +16,7 @@ import { findPresetDeclaration, writePresetRows, type PresetDeclaration } from '
 import { assertServerName, mcpEntryConfig, specFromEntryConfig, type McpEntryConfig } from './mcp-config.ts'
 import { scanClaudeMcp } from './claude-import.ts'
 import { connectLazy } from './lazy-mcp.ts'
+import { readMcpRoster } from './mcp-roster.ts'
 import type {
   AddMcpRequest,
   DescribeMcpRequest,
@@ -24,6 +25,8 @@ import type {
   EditMcpRequest,
   ListMcpToolsRequest,
   ListMcpToolsResult,
+  ListMcpsRequest,
+  ListMcpsResult,
   McpGateStateRequest,
   McpGateStateResult,
   McpMutationResult,
@@ -32,7 +35,7 @@ import type {
   ScanClaudeMcpRequest,
   ScanClaudeMcpResult,
 } from './types.ts'
-import type { McpPreloadGate } from './mcp-gate.ts'
+import type { GateMount, McpPreloadGate } from './mcp-gate.ts'
 
 /** How long one editor tool listing may take before the dialog reports failure. */
 const TOOL_LIST_TIMEOUT_MS = 30_000
@@ -92,9 +95,32 @@ export class McpManager extends TypertRemoteService {
    * @param ctx - host context.
    * @param gate - the preload gate the mutations must leave in line with the
    *   current loading mode.
+   * @param mountReader - reader of the live agent-preset mounts, used by the
+   *   roster read to report each preset row's current fiber phase.
    */
-  constructor(ctx: Context, private readonly gate: McpPreloadGate) {
+  constructor(
+    ctx: Context,
+    private readonly gate: McpPreloadGate,
+    private readonly mountReader: (within?: unknown) => readonly GateMount[],
+  ) {
     super(ctx, 'mcpManager')
+  }
+
+  /**
+   * Report every MCP row the running composition declares, with the planes a
+   * mutation can target.
+   *
+   * The read answers from declarations and live fibers only, so the settings
+   * page renders immediately while an MCP server is still starting; nothing here
+   * waits for a row's activation.
+   * @param request - empty placeholder; the roster is host-wide.
+   * @returns the global rows, every declared preset with its rows, and whether
+   *   the global plane accepts writes.
+   */
+  @Remote('listMcps')
+  async listMcps(request: ListMcpsRequest): Promise<ListMcpsResult> {
+    void request
+    return readMcpRoster(this.ctx, this.mountReader)
   }
 
   /**

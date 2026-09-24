@@ -63,7 +63,10 @@ export function mcpRowKey(target: McpTarget, serverName: string): string {
 /** The loader entry surface this gate drives. */
 export interface GateEntry {
   readonly options: EntryOptions
-  readonly fiber?: unknown
+  /** Effective enablement the Loader reports, with a `!!js` node evaluated. */
+  readonly disabled: boolean
+  /** Root fiber; the gate only asks whether one exists, the roster reads its state. */
+  readonly fiber?: { readonly state: number } | undefined
   update(options: Partial<EntryOptions>, create?: boolean, force?: boolean): Promise<void>
 }
 

@@ -36,6 +36,12 @@ interface McpEditorProps {
   /** Connect once with a spec and report the tools it publishes. */
   readonly listMcpTools: (request: ListMcpToolsRequest) => Promise<ListMcpToolsResult>
   readonly presets: () => Promise<readonly McpPresetOption[]>
+  /**
+   * Localized reason the global plane refuses writes. Present when the Host
+   * cannot persist a global row, which makes the global option unusable rather
+   * than failing the save after the user filled the form in.
+   */
+  readonly globalProblemReason?: string
   readonly descriptionInitial: string
   readonly onUpdateDescription: (key: string, value: string) => void
   /** Tool rules this row currently carries, as stored entries. */
@@ -59,7 +65,7 @@ function specJson(describe: DescribeMcpResult | undefined): string {
 }
 
 /** Modal editor: one scope dropdown, title/description fields, a JSON spec box, and the tool list. */
-export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
+export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, globalProblemReason, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
   const [scopeValue, setScopeValue] = useState(server?.scope === 'preset' ? server.presetId ?? '' : '')
   const [presetOptions, setPresetOptions] = useState<readonly McpPresetOption[]>([])
   const [title, setTitle] = useState(server?.serverName ?? '')
@@ -149,6 +155,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       const serverName = (title.trim() !== '' ? title.trim() : parsed.serverName ?? '').trim()
       if (serverName === '') throw new Error(t('mcp.form.required'))
       const spec = parsed.spec
+      if (globalUnavailable && scopeValue === '') throw new Error(globalProblemReason ?? t('unavailable'))
       const target = scopeValue === ''
         ? { scope: 'global' as const }
         : { scope: 'preset' as const, agentPreset: scopeValue }
@@ -186,6 +193,10 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
   const enabledCount = tools === null ? 0 : tools.length - tools.filter(tool => hiddenTools.has(tool.name)).length
   const titleText = mode === 'add' ? t('mcp.form.addTitle') : t('mcp.form.editTitle')
   const showsCurrentPreset = scopeValue !== '' && !presetOptions.some(option => option.id === scopeValue)
+  // A read-only global plane is offered but not selectable in add mode: the
+  // reason is shown under the field so the user picks a preset instead of
+  // discovering the refusal when the save fails.
+  const globalUnavailable = mode === 'add' && globalProblemReason !== undefined
   return (
     <Modal
       open={open}
@@ -213,12 +224,13 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
             aria-label={t('mcp.form.scope')}
             onChange={(event) => { setScopeValue(event.currentTarget.value); setLocalError(null) }}
           >
-            <option value="">{t('mcp.scopeGlobal')}</option>
+            <option value="" disabled={globalUnavailable}>{globalUnavailable ? t('mcp.scopeGlobalReadOnly') : t('mcp.scopeGlobal')}</option>
             {presetOptions.map(option => (
               <option key={option.id} value={option.id}>{option.name}</option>
             ))}
             {showsCurrentPreset ? <option value={scopeValue}>{scopeValue}</option> : null}
           </select>
+          {globalUnavailable ? <span className={css.fieldHint}>{globalProblemReason}</span> : null}
         </label>
         <label className={css.formField}>
           <span className={css.formLabel}>{t('mcp.form.serverName')}</span>

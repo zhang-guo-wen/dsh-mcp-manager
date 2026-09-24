@@ -22,6 +22,7 @@ import {
   mcpRowKey,
   type McpLoadingOption,
   type McpPhase,
+  type McpRosterView,
   type McpSectionFace,
   type McpServer,
 } from './settings-controller.ts'
@@ -46,6 +47,10 @@ type McpView =
     readonly servers: readonly McpServer[]
     /** Row keys the gate holds unmounted, so an enabled row reads as deferred. */
     readonly suppressed: ReadonlySet<string>
+    /** Why the global plane refuses writes, when it does. */
+    readonly globalProblem?: McpRosterView['globalProblem']
+    /** A refresh is in flight over an already rendered roster. */
+    readonly refreshing: boolean
   }
 
 /** Non-empty fiber-phase → localized status key. */
@@ -72,6 +77,13 @@ const MODE_LABEL = {
   dynamic: 'mcp.mode.dynamic',
   lazy: 'mcp.mode.lazy',
 } as const satisfies Record<McpLoadingOption, McpSectionKey>
+
+/** Why the global plane refuses writes → localized explanation. */
+const GLOBAL_PROBLEM_KEY = {
+  'patched-include': 'mcp.global.readOnly.patched-include',
+  'no-include': 'mcp.global.readOnly.no-include',
+  'not-writable': 'mcp.global.readOnly.not-writable',
+} as const satisfies Record<NonNullable<McpRosterView['globalProblem']>, McpSectionKey>
 
 /** MCP loading mode → localized one-line explanation. */
 const MODE_DESC = {
@@ -225,10 +237,17 @@ export function McpSection(props: McpSectionProps): ReactNode {
   const [notice, setNotice] = useState<string | null>(null)
   const [rowPending, setRowPending] = useState<Record<string, 'enabling' | 'disabling'>>({})
   const disabled = !state.available || !state.writable
+  /** Localized reason the global plane refuses writes, while it does. */
+  const globalProblemReason = mcpView.status === 'ready' && mcpView.globalProblem !== undefined
+    ? t(GLOBAL_PROBLEM_KEY[mcpView.globalProblem])
+    : undefined
 
   useEffect(() => {
     let current = true
-    setMcpView({ status: 'loading' })
+    // A refresh keeps the rendered roster: the reads below answer from
+    // declarations, so a mutation's follow-up refresh is quick, and replacing
+    // the list with a loading line would only make the page flicker.
+    setMcpView(previous => previous.status === 'ready' ? { ...previous, refreshing: true } : { status: 'loading' })
     // The gate read is awaited FIRST: it resolves only after the Host has
     // finished applying the loading mode to the composed rows, so the roster
     // read behind it describes the settled state instead of a half-unmounted
@@ -240,12 +259,23 @@ export function McpSection(props: McpSectionProps): ReactNode {
         console.error('[mcp-manager] MCP gate read failed', error)
         return []
       })
-      .then(async (suppressed) => ({ suppressed, servers: await mcps() }))
+      .then(async (suppressed) => ({ suppressed, roster: await mcps() }))
       .then(
-        ({ servers, suppressed }) => {
-          if (current) setMcpView({ status: 'ready', servers, suppressed: new Set(suppressed) })
+        ({ roster, suppressed }) => {
+          if (!current) return
+          setMcpView({
+            status: 'ready',
+            servers: roster.servers,
+            suppressed: new Set(suppressed),
+            ...roster.globalProblem === undefined ? {} : { globalProblem: roster.globalProblem },
+            refreshing: false,
+          })
         },
-        () => { if (current) setMcpView({ status: 'error' }) },
+        () => {
+          // Keep a roster that is already on screen; only a first read reports
+          // the failure as the page's own state.
+          if (current) setMcpView(previous => previous.status === 'ready' ? { ...previous, refreshing: false } : { status: 'error' })
+        },
       )
     return () => { current = false }
   }, [mcps, suppressedMcps, mcpRequest])
@@ -363,6 +393,9 @@ export function McpSection(props: McpSectionProps): ReactNode {
           </span>
         </div>
         {mcpView.status === 'loading' ? <p className={css.mcpStatus}>{t('mcp.loading')}</p> : null}
+        {mcpView.status === 'ready' && mcpView.refreshing ? (
+          <p className={css.mcpStatus} role="status">{t('mcp.loading')}</p>
+        ) : null}
         {mcpView.status === 'error' ? (
           <div className={css.mcpFailure}>
             <p role="alert">{t('mcp.error')}</p>
@@ -407,6 +440,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
           describeMcp={describeMcp}
           listMcpTools={listMcpTools}
           presets={presets}
+          {...globalProblemReason === undefined ? {} : { globalProblemReason }}
           descriptionInitial={editor.server === undefined
             ? ''
             : (editor.server.description ?? state.descriptions[mcpRowKey(editor.server)] ?? '')}
@@ -431,6 +465,9 @@ export function McpSection(props: McpSectionProps): ReactNode {
             }
           }}
           servers={mcpView.status === 'ready' ? mcpView.servers : []}
+          presets={presets}
+          globalWritable={mcpView.status === 'ready' && mcpView.globalProblem === undefined}
+          {...globalProblemReason === undefined ? {} : { globalProblem: globalProblemReason }}
           t={t}
           onClose={() => { setImporterOpen(false) }}
           onImported={() => {

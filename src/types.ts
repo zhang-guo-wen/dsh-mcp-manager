@@ -138,6 +138,67 @@ export interface McpGateStateResult {
   readonly suppressed: readonly string[]
 }
 
+/** Root-fiber lifecycle phase of one MCP row, or null when it owns no fiber. */
+export type McpFiberPhase = 'pending' | 'loading' | 'active' | 'failed' | 'unloading' | null
+
+/** Why the global plane refuses MCP row writes. */
+export type McpGlobalProblem =
+  /** The root Include carries the profile's patch list, so write-back would flatten it. */
+  | 'patched-include'
+  /** The composition mounts no single file-backed Include to address. */
+  | 'no-include'
+  /** The mounted global configuration file is not writable. */
+  | 'not-writable'
+
+/** One MCP client row a composition declares, read without waiting for its activation. */
+export interface McpRosterRow {
+  /** Loader-qualified row id for a global row, the local row id for a preset row. */
+  readonly entryId: string | null
+  /** Module specifier the row names. */
+  readonly moduleName: string
+  /** Effective enablement; `conditional` marks a `!!js` gate only a mount can resolve. */
+  readonly enabled: boolean | 'conditional'
+  /** Root-fiber phase, null when the row currently owns no fiber. */
+  readonly fiberPhase: McpFiberPhase
+}
+
+/** One agent preset that can own MCP rows. */
+export interface McpRosterPreset {
+  /** Preset id used in the composition target. */
+  readonly id: string
+  /** Display name the preset declares, when it declares one. */
+  readonly name?: string
+  /** The preset's MCP rows, in composition order. */
+  readonly rows: readonly McpRosterRow[]
+}
+
+/** Request for the MCP roster read; the roster is host-wide, so it carries no fields. */
+export interface ListMcpsRequest {
+  /** Placeholder field: kept so the gateway derives a one-field descriptor. */
+  readonly unused?: boolean
+}
+
+/**
+ * The MCP rows the running composition declares, plus the planes a mutation can
+ * target. Read from declarations and live fibers only: the read never waits for
+ * a row's activation, so a settings page renders while an MCP server is still
+ * starting.
+ */
+export interface ListMcpsResult {
+  /** Global-plane rows, in Loader order. */
+  readonly entries: readonly McpRosterRow[]
+  /** Every declared preset, with its MCP rows. */
+  readonly presets: readonly McpRosterPreset[]
+  /**
+   * Whether the global plane accepts writes. False when the mounted root
+   * Include carries a patch list, which is the normal profile composition and
+   * makes Loader write-back flatten the bundle and user layers.
+   */
+  readonly globalWritable: boolean
+  /** Why the global plane is read-only, for the settings page to show. */
+  readonly globalProblem?: McpGlobalProblem
+}
+
 /** Request the MCP servers the Claude Code configuration files declare. */
 export interface ScanClaudeMcpRequest {
   /**

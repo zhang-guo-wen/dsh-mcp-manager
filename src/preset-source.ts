@@ -27,6 +27,8 @@ export const AGENT_PRESET_MODULE = '@deepseek-ai/dsh-agent-preset'
 export interface PresetDeclaration {
   /** Preset identity sessions record. */
   readonly id: string
+  /** Display name the declaration carries, when it carries one. */
+  readonly name?: string
   /** The declaration row, addressed by `configEditor.edit`. */
   readonly entry: Entry
   /** Declared child rows, in composition order. */
@@ -36,6 +38,34 @@ export interface PresetDeclaration {
 /** The profile editor, or undefined when this composition mounts none. */
 function profileEditor(ctx: Context): Context['configEditor'] | undefined {
   return ctx.get('configEditor')
+}
+
+/**
+ * Locate every declaration the profile editor owns.
+ *
+ * The read is tolerant on purpose: a declaration whose child list is malformed,
+ * or one that is still missing its preset id, is skipped so a roster read can
+ * still describe the presets that are usable. {@link findPresetDeclaration}
+ * keeps reporting those as errors when a mutation names one.
+ * @param ctx - host context carrying `configEditor`.
+ * @returns declarations in editor order.
+ */
+export function listPresetDeclarations(ctx: Context): PresetDeclaration[] {
+  const editor = profileEditor(ctx)
+  if (editor === undefined) return []
+  const declared: PresetDeclaration[] = []
+  for (const entry of editor.entries()) {
+    if (entry.options.name !== AGENT_PRESET_MODULE) continue
+    const config = entry.options.config as { id?: unknown; name?: unknown; plugins?: unknown } | undefined
+    if (typeof config?.id !== 'string' || config.id === '') continue
+    declared.push({
+      id: config.id,
+      ...typeof config.name === 'string' && config.name !== '' ? { name: config.name } : {},
+      entry,
+      rows: Array.isArray(config.plugins) ? config.plugins as EntryOptions[] : [],
+    })
+  }
+  return declared
 }
 
 /**
@@ -87,7 +117,13 @@ export function findPresetDeclaration(ctx: Context, id: string): PresetDeclarati
     const target: McpTarget = { scope: 'preset', agentPreset: id }
     throw new RemoteError('mcp/not-found', `MCP preset "${id}" was not found`, { target })
   }
-  return { id, entry, rows: declaredRows(entry.options.config, id) }
+  const name = (entry.options.config as { name?: unknown } | undefined)?.name
+  return {
+    id,
+    ...typeof name === 'string' && name !== '' ? { name } : {},
+    entry,
+    rows: declaredRows(entry.options.config, id),
+  }
 }
 
 /**

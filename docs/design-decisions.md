@@ -23,6 +23,7 @@ kind: "package-reference"
 | D7 | `mcp_load` 结果带 `hidden` 计数 | 模型必须知道"还有工具但不可调用" |
 | D8 | 载体由加载模式决定，规则只决定可见集合 | 模式才是「绑定 vs 缓存」的取舍，规则不该替用户改代价 |
 | D9 | 服务器清单进系统提示，不做成列目录工具 | 模型看不到名字就加载不了，而这段常驻成本可用预算封顶 |
+| D10 | 名册读声明 + live fiber，不等任何行的激活 | 等激活等于把 MCP 子进程启动时间（实测 7.5–23s）算进设置页 |
 
 ### D1 允许与进上下文分离
 
@@ -124,6 +125,27 @@ kind: "package-reference"
   段文本是快照，`refresh()` 在每次 `gate.reconcile()` 与模式提交后重算（见 AGENTS.md 的「按需清单」）。
 - **代价**：系统提示里多一段"配置相关"的文本；描述是用户手写的，所以**它现在会到达模型**（设置页的文案与
   `settings.ts` 的契约同步改了）。
+
+### D10 名册读声明 + live fiber，不等激活
+
+- **结论**：设置页的名册由插件自己的 `mcpManager.listMcps`（[`src/mcp-roster.ts`](../src/mcp-roster.ts)）回答：
+  全局行来自 `ctx.loader.entries()`，preset 行优先来自 live mount 树的 entry、没挂载时退回声明；
+  `enabled` / `fiberPhase` 直接读 `entry.disabled` 与 `entry.fiber.state`，**任何一处都不 await 激活**。
+- **理由**：名册原先来自 `remote.pluginInventory.list`，它经 agent-preset registry 的
+  `compositionInventory()` → `diagnostic()` → `auditRows()`，而 `auditRows` 会 `tree.await()` 并逐行
+  `fiber.await()`。MCP 行的 `apply` 要等子进程完成握手，本机实测 `cmd /c npx -y @upstash/context7-mcp`
+  冷启 23.3 秒 / 热启 7.5 秒，`alibabacloud-devops-mcp-server` 8.4 秒；同一次实测里 `loader.create()` 3 毫秒返回、
+  紧接着的 `loader.await()` 等了 5004 毫秒。也就是说：**谁 await 激活，谁就把子进程启动时间算进设置页**——
+  打开页面、每次新增/开关/导入后的刷新都会卡这么久。
+- **被否决**：
+  1. **继续用 `pluginInventory.list`，只在前端做乐观刷新**：前端只能藏住等待，名册内容仍然要等激活；
+     而且撤销一个 `await` 比在 UI 上打补丁小。
+  2. **给名册加缓存**：缓存要自己维护失效点，而声明与 live fiber 本来就同步可读，没有需要缓存的慢读。
+- **代价**：preset 未挂载（声明读）时 `!!js` 的 `disabled` 无法求值，报 `conditional` 而不是猜；
+  group 的 `disabled` 继承规则在本模块复刻了一份（镜像 Loader 的语义，见 AGENTS.md 的「名册读取」）。
+- **顺带记录的宿主事实**：真实 profile 的根 Include 是带着补丁层挂载的（`boot(..., readProfilePatches(...))`），
+  所以 `globalInclude()` 的"补丁层会拍平"守卫必然命中，全局平面**只读**。插件侧只能提前说明，
+  见 AGENTS.md 的「导入 Claude 配置」第 1 条。
 
 ## 先例：Claude 的 MCP 延迟加载
 

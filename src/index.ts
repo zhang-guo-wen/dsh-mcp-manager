@@ -153,5 +153,5 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // the Loader lazily inside its methods, so it must be created unconditionally
   // (a Loader-presence guard here would skip registration when the service is
   // not yet ready and the client would 404 on every MCP mutation).
-  new McpManager(ctx, gate)
+  new McpManager(ctx, gate, mountReader)
 }
