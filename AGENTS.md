@@ -267,14 +267,18 @@ tools to this session, and `mcp_unload` with the same name to release it again.
 - `!` 开头的条目 = 隐藏(deny);只有 deny 条目时是**黑名单**;
 - `*` / `?` 通配,其余正则元字符都转义,大小写敏感。
 
-三条实现约束:
+四条实现约束:
 
 1. **过滤点跟着载体走。** `proxy` 载体两个点都要:`mcp_load` 的返回(模型看不到被隐藏的工具名)与 `mcp_call`
    的入参校验(拿旧名字调用会被拒绝)。`native` 载体只需要前者 —— 被隐藏的工具根本没有注册,模型照历史名字调用
    直接得到未知工具;`mcp_call` 对这类行也拒绝(它只服务 `proxy`)。
 2. **过滤不切换载体**(见「载体选择」)。`eager` 下规则不生效 —— 该模式由 harness 的 mcp-client 整台挂载,插件没有
    插手的点 —— `index.ts` 的 `warnFiltersWithoutEffect` 会在启动和每次提交时警告。
-3. **规则 reader 是活闭包而不是快照**:`registerMcpTools(ctx, mode, gate, { filterFor, descriptionFor })` 收的是读者,
+3. **`global:` 的规则同样不生效,而且 UI 不可改。** 全局行由组合直接挂载,工具已经进了每次请求,规则藏不掉它
+   (`mcp_load` 那份是**另一份**实例)。所以:`warnFiltersWithoutEffect` 在非 `eager` 模式下只对 `global:` 键警告;
+   编辑弹窗的「工具列表」对全局行**整体只读**(按钮与勾选框全禁用 + 给出原因),切 tab 也不会去连一次服务器,
+   保存更不会写规则。要过滤就把行写到 Agent 预设里。
+4. **规则 reader 是活闭包而不是快照**:`registerMcpTools(ctx, mode, gate, { filterFor, descriptionFor })` 收的是读者,
    `index.ts` 在 `apply` 里把它们指向 `readSettings().tools` / `readSettings().descriptions`。所以改规则不需要重建注册,
    下一次 `mcp_load` 就读到新值;已经加载的服务器保持加载时那套工具(不追溯),服务器自己发 `tools/list_changed`
    时也按加载时那套规则重算。
@@ -312,6 +316,8 @@ mcp-manager:
 - **连不上就不动规则。** `tools === null` 时保存只提交连接配置 —— 否则一次连接抖动会清掉用户已有的过滤。
 - **切到「工具列表」tab 才会真起一个 MCP 连接**(stdio 是新的子进程,`npx -y` 那种 1-3 秒):edit 模式首次切过去
   自动拉,add 模式靠按钮,因为新增时表单里的 spec 常常还是空的。只改描述就不进这个 tab,不会白起一个进程。
+- **全局行整块只读**(`toolsReadOnly`):按钮与勾选框禁用、切过去也不连接、保存不写规则,并在原提示位置说明原因
+  (`mcp.form.toolsGlobal`)—— 全局行由组合挂载,规则藏不掉它已经进上下文的工具(见「工具过滤」第 3 条)。
 - **改 client 后必须重建 `lib/client.js`**;Host 用内容 revision 让浏览器加载新 bundle,`HANDOFF_ID` 不得改变。
   改了 CSS module 要核对类名两边都在:JSX 引用了 CSS 里没有的类只得到 `undefined`,静默无样式。
 

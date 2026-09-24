@@ -165,6 +165,9 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
   const pickTab = (next: McpEditorTab): void => {
     setTab(next)
     if (next !== 'tools' || mode !== 'edit' || loading) return
+    // A global row's rules could not take effect, so listing its tools would spawn
+    // a connection for a pane the user cannot use.
+    if (toolsReadOnly) return
     if (tools !== null || toolsBusy) return
     loadToolsFromForm(true)
   }
@@ -235,8 +238,9 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       )
       if (description.trim() !== '') onUpdateDescription(key, description.trim())
       // Only a listing the user actually saw may rewrite the rules; a server
-      // that never answered leaves the stored rules exactly as they were.
-      if (tools !== null) {
+      // that never answered leaves the stored rules exactly as they were. A
+      // global row never lists one, because its rules cannot take effect.
+      if (tools !== null && !toolsReadOnly) {
         onUpdateTools(key, tools.filter(tool => hiddenTools.has(tool.name)).map(tool => `!${tool.name}`))
       }
     } catch (cause) {
@@ -256,6 +260,10 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
   const formDisabled = disabled || busy
   const enabledCount = tools === null ? 0 : tools.length - tools.filter(tool => hiddenTools.has(tool.name)).length
   const titleText = mode === 'add' ? t('mcp.form.addTitle') : t('mcp.form.editTitle')
+  // Rules are enforced by this plugin's own carriers, which only run for rows it
+  // loads. A global row is mounted by the composition, so its tools are in every
+  // request already and a rule could not hide them.
+  const toolsReadOnly = mode === 'edit' ? server?.scope === 'global' : plane === 'global'
   // A new agent row needs a preset to address; with none mounted the save is
   // refused here rather than at the Host, which would report it per request.
   const noPreset = mode === 'add' && plane === 'agent' && presetId === ''
@@ -357,24 +365,24 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
               <button
                 type="button"
                 className={css.mcpAction}
-                disabled={formDisabled || toolsBusy}
+                disabled={formDisabled || toolsBusy || toolsReadOnly}
                 onClick={() => { loadToolsFromForm(tools === null) }}
               >
                 {toolsBusy ? t('mcp.form.toolsLoading') : t('mcp.form.toolsReload')}
               </button>
               {tools !== null && tools.length > 0 ? (
                 <>
-                  <button type="button" className={css.mcpAction} disabled={formDisabled} onClick={() => { setHiddenTools(new Set<string>()) }}>
+                  <button type="button" className={css.mcpAction} disabled={formDisabled || toolsReadOnly} onClick={() => { setHiddenTools(new Set<string>()) }}>
                     {t('mcp.form.toolsAll')}
                   </button>
-                  <button type="button" className={css.mcpAction} disabled={formDisabled} onClick={() => { setHiddenTools(new Set(tools.map(tool => tool.name))) }}>
+                  <button type="button" className={css.mcpAction} disabled={formDisabled || toolsReadOnly} onClick={() => { setHiddenTools(new Set(tools.map(tool => tool.name))) }}>
                     {t('mcp.form.toolsNone')}
                   </button>
                 </>
               ) : null}
             </span>
           </div>
-          <span className={css.fieldHint}>{t('mcp.form.toolsHint')}</span>
+          <span className={css.fieldHint}>{toolsReadOnly ? t('mcp.form.toolsGlobal') : t('mcp.form.toolsHint')}</span>
           {toolsError !== null ? <p className={css.formError} role="alert">{toolsError}</p> : null}
           {tools !== null && tools.length === 0 ? <p className={css.mcpStatus}>{t('mcp.form.toolsEmpty')}</p> : null}
           {tools !== null && tools.length > 0 ? (
@@ -384,7 +392,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
                   <input
                     type="checkbox"
                     checked={!hiddenTools.has(tool.name)}
-                    disabled={formDisabled}
+                    disabled={formDisabled || toolsReadOnly}
                     aria-label={tool.name}
                     onChange={() => { toggleTool(tool.name) }}
                   />

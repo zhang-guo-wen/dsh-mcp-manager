@@ -115,20 +115,31 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   await gate.reconcile()
   await mcpTools.refresh()
   /**
-   * Warn once per commit when rules cannot take effect. `eager` mounts every
-   * allowed row through mcp-client, whose registration publishes all discovered
-   * tools, so a filter configured for that mode is silently useless otherwise.
+   * Warn once per commit when rules cannot take effect, in either of the two
+   * ways a row can bypass this plugin's carriers: `eager` mounts every allowed
+   * row through mcp-client, and a global row is mounted that way whatever the
+   * mode. Both publish all discovered tools, so a rule there is silently useless
+   * otherwise.
    */
   const warnFiltersWithoutEffect = (next: McpSettingsFlags): void => {
-    if (mcpLoading !== 'eager') return
     const configured = Object.entries(next.tools)
       .filter(([, value]) => filterHidesAnything(parseMcpToolFilter(value)))
       .map(([key]) => key)
     if (configured.length === 0) return
+    if (mcpLoading === 'eager') {
+      ctx.logger.warn(
+        `mcp-manager: MCP loading is "eager", so the tool filters for ${configured.join(', ')} have no effect. `
+        + 'eager mounts every enabled row through mcp-client, which registers all discovered tools; '
+        + 'select the "dynamic" or "lazy" loading mode to apply these filters.',
+      )
+      return
+    }
+    const globalRules = configured.filter(key => key.startsWith('global:'))
+    if (globalRules.length === 0) return
     ctx.logger.warn(
-      `mcp-manager: MCP loading is "eager", so the tool filters for ${configured.join(', ')} have no effect. `
-      + 'eager mounts every enabled row through mcp-client, which registers all discovered tools; '
-      + 'select the "dynamic" or "lazy" loading mode to apply these filters.',
+      `mcp-manager: the tool filters for ${globalRules.join(', ')} have no effect. `
+      + 'A global row is mounted by the composition, which registers all of its discovered tools; '
+      + 'author the row inside an agent preset to filter it.',
     )
   }
   // A committed live field is the only way the mode or a filter changes at
