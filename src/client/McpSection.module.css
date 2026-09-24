@@ -436,9 +436,19 @@
 
 .importToolbar {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
+}
+
+/* The plane select holds a reading column rather than the whole card, so the
+   bar carries both controls on one baseline instead of stacking three bands. */
+.importScope {
+  display: flex;
+  flex: 0 1 320px;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
 }
 
 .importList {

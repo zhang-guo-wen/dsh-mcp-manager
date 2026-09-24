@@ -17,7 +17,7 @@
  * @module @guowenzhang/dsh-mcp-manager/client/ClaudeImportDialog
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AddMcpRequest, ClaudeMcpEntry, ClaudeMcpSource, McpTarget, ScanClaudeMcpRequest, ScanClaudeMcpResult } from '../types.ts'
 import type { McpSectionKey } from './locales.ts'
@@ -91,12 +91,20 @@ function configuredNames(servers: readonly McpServer[], scope: ImportScope): Rea
   return names
 }
 
-/** One checkbox line: the server's name, transport, origin, and secret key names. */
-function EntryRow({ entry, checked, disabled, onToggle, t }: {
+/**
+ * One checkbox line: the server's name, transport, origin, and secret key names.
+ *
+ * Memoized, and every prop is stable between renders except `checked`: with a
+ * real Claude configuration the list runs to dozens of rows, and re-rendering
+ * all of them under the modal's blurred backdrop is what makes the dialog feel
+ * slow while the user ticks boxes.
+ */
+const EntryRow = memo(function EntryRow({ entryKey, entry, checked, disabled, onToggle, t }: {
+  readonly entryKey: string
   readonly entry: ClaudeMcpEntry
   readonly checked: boolean
   readonly disabled: boolean
-  readonly onToggle: (next: boolean) => void
+  readonly onToggle: (key: string, next: boolean) => void
   readonly t: Translate
 }): ReactNode {
   const transport = entry.spec.type === 'stdio'
@@ -109,7 +117,7 @@ function EntryRow({ entry, checked, disabled, onToggle, t }: {
         checked={checked}
         disabled={disabled}
         aria-label={entry.serverName}
-        onChange={(event) => { onToggle(event.currentTarget.checked) }}
+        onChange={(event) => { onToggle(entryKey, event.currentTarget.checked) }}
       />
       <span className={css.importMain}>
         <span className={css.importName}>
@@ -129,7 +137,7 @@ function EntryRow({ entry, checked, disabled, onToggle, t }: {
       </span>
     </label>
   )
-}
+})
 
 /** The Claude configuration import dialog. */
 export function ClaudeImportDialog({
@@ -191,14 +199,14 @@ export function ClaudeImportDialog({
     : []
   const chosen = allEntries.filter(({ source, entry }) => selectable(entry) && !excluded.has(keyOf(source, entry)))
 
-  const toggle = (key: string, next: boolean): void => {
+  const toggle = useCallback((key: string, next: boolean): void => {
     setExcluded((previous) => {
       const set = new Set(previous)
       if (next) set.delete(key)
       else set.add(key)
       return set
     })
-  }
+  }, [])
 
   const setAll = (next: boolean): void => {
     setExcluded(next
@@ -268,31 +276,51 @@ export function ClaudeImportDialog({
       title={t('mcp.import.title')}
       closeLabel={t('mcp.import.close')}
       description={t('mcp.import.hint')}
+      className={css.mcpEditorDialog ?? ''}
       contentClassName={css.mcpEditorContent ?? ''}
       footer={footer}
     >
       <div className={css.mcpForm}>
-        <label className={css.formField}>
-          <span className={css.formLabel}>{t('mcp.import.scope')}</span>
-          <select
-            className={css.formSelect}
-            value={scopeValue}
-            disabled={busy || noWritablePlane}
-            aria-label={t('mcp.import.scope')}
-            onChange={(event) => {
-              const next = event.currentTarget.value
-              setScope(next === '' ? { kind: 'global' } : { kind: 'preset', presetId: next })
-              // The chosen plane changes which names already exist there, so the
-              // dialog returns to "everything importable into it is selected".
-              setExcluded(new Set<string>())
-            }}
-          >
-            {globalWritable ? <option value="">{t('mcp.scopeGlobal')}</option> : null}
-            {presetOptions.map(option => (
-              <option key={option.id} value={option.id}>{`${t('mcp.scopePreset')} · ${option.name}`}</option>
-            ))}
-          </select>
-        </label>
+        {/* One control row: where the batch writes on the left, what is
+            selected on the right. The plane select and the check-all actions
+            share a baseline, so the dialog does not stack three bands before
+            the list. */}
+        <div className={css.importToolbar}>
+          <label className={css.importScope}>
+            <span className={css.formLabel}>{t('mcp.import.scope')}</span>
+            <select
+              className={css.formSelect}
+              value={scopeValue}
+              disabled={busy || noWritablePlane}
+              aria-label={t('mcp.import.scope')}
+              onChange={(event) => {
+                const next = event.currentTarget.value
+                setScope(next === '' ? { kind: 'global' } : { kind: 'preset', presetId: next })
+                // The chosen plane changes which names already exist there, so the
+                // dialog returns to "everything importable into it is selected".
+                setExcluded(new Set<string>())
+              }}
+            >
+              {globalWritable ? <option value="">{t('mcp.scopeGlobal')}</option> : null}
+              {presetOptions.map(option => (
+                <option key={option.id} value={option.id}>{`${t('mcp.scopePreset')} · ${option.name}`}</option>
+              ))}
+            </select>
+          </label>
+          {view.status === 'ready' && total > 0 ? (
+            <span className={css.toolsActions}>
+              <span className={css.toolsCount} role="status">
+                {t('mcp.import.selected').replace('{n}', String(chosen.length)).replace('{m}', String(importable))}
+              </span>
+              <button type="button" className={css.mcpAction} disabled={busy} onClick={() => { setAll(true) }}>
+                {t('mcp.import.selectAll')}
+              </button>
+              <button type="button" className={css.mcpAction} disabled={busy} onClick={() => { setAll(false) }}>
+                {t('mcp.import.selectNone')}
+              </button>
+            </span>
+          ) : null}
+        </div>
         {noWritablePlane ? (
           <p className={css.mcpActionError} role="alert">
             {t('mcp.import.scopeUnavailable').replace('{reason}', globalProblem ?? t('unavailable'))}
@@ -318,19 +346,6 @@ export function ClaudeImportDialog({
         ) : null}
         {view.status === 'ready' && total > 0 ? (
           <>
-            <div className={css.importToolbar}>
-              <span className={css.toolsActions}>
-                <span className={css.toolsCount} role="status">
-                  {t('mcp.import.selected').replace('{n}', String(chosen.length)).replace('{m}', String(importable))}
-                </span>
-                <button type="button" className={css.mcpAction} disabled={busy} onClick={() => { setAll(true) }}>
-                  {t('mcp.import.selectAll')}
-                </button>
-                <button type="button" className={css.mcpAction} disabled={busy} onClick={() => { setAll(false) }}>
-                  {t('mcp.import.selectNone')}
-                </button>
-              </span>
-            </div>
             <div className={css.importList}>
               {view.sources.map((source) => (
                 <div key={source.id} className={css.importSource}>
@@ -343,13 +358,15 @@ export function ClaudeImportDialog({
                   ) : null}
                   {source.entries.map((entry) => {
                     const disabled = !selectable(entry)
+                    const entryKey = keyOf(source, entry)
                     return (
                       <EntryRow
-                        key={entry.serverName}
+                        key={entryKey}
+                        entryKey={entryKey}
                         entry={entry}
-                        checked={!disabled && !excluded.has(keyOf(source, entry))}
+                        checked={!disabled && !excluded.has(entryKey)}
                         disabled={disabled}
-                        onToggle={(next) => { toggle(keyOf(source, entry), next) }}
+                        onToggle={toggle}
                         t={t}
                       />
                     )

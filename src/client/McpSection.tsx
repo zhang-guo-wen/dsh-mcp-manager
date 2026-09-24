@@ -512,17 +512,14 @@ export function McpSection(props: McpSectionProps): ReactNode {
         />
         <ClaudeImportDialog
           open={importerOpen}
-          busy={editorBusy}
+          // The batch reports its own progress and the mask blocks this section
+          // while it runs, so the wrapper must not toggle the shared busy flag per
+          // entry: each toggle re-rendered this section, and the page behind the
+          // modal is what the mask's backdrop filter has to re-compose.
+          busy={false}
           error={editorError}
           scanClaudeMcp={scanClaudeMcp}
-          addMcp={async (request) => {
-            setEditorBusy(true)
-            try {
-              return await addMcp(request)
-            } finally {
-              setEditorBusy(false)
-            }
-          }}
+          addMcp={addMcp}
           servers={servers}
           presets={presets}
           globalWritable={mcpView.status === 'ready' && mcpView.globalProblem === undefined}

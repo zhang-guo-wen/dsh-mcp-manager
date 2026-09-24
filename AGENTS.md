@@ -345,7 +345,7 @@ mcp-manager:
 | 设置 | `~/.claude/settings.json`、`settings.local.json` | `mcpServers` |
 | 项目级 | `<cwd>/.mcp.json` | `mcpServers`,也兼容裸单键映射 |
 
-七条实现约束:
+八条实现约束:
 
 1. **只读扫描,导入写到所选平面。** 扫描不挂载任何东西、不碰任何 composition;导入逐条调**现有的 `addMcp`**,
    目标由弹窗里的 scope 选择给出(全局可写时默认全局,否则默认第一个预设),因此校验、冲突检测、原子写与手工新增
@@ -371,6 +371,12 @@ mcp-manager:
    自己的勾选 —— 曾经每次重扫都 `setExcluded(new Set())`,表现就是"只勾了一个,结果全部又被勾上"。工具栏要有
    `已选 {n}/{m}` 计数:默认本来就是全选,`全选` 按钮本身没有可见变化,没有计数就会被当成"点了没反应"。
    名册侧同理不能清空(见「名册读取」):`servers` 瞬时为空会让 `已存在` 的行重新渲染成已勾选。
+8. **排版与重绘。** 控制行只有一条(左:写入平面的 select;右:`已选 n/m` + 全选/全不选),不要堆成三段;
+   卡片要带 `mcpEditorDialog`(默认卡只有 380px,路径与说明会折成三四行)。`EntryRow` 是 `memo` 且 `toggle` 用
+   `useCallback`,勾选只重绘那一行 —— 真实 Claude 配置几十台时,整列重绘是"卡"的主因。**导入期间不要在 section 上
+   按条 toggle `editorBusy`**:每次 toggle 都重绘整个设置页,而遮罩的 `backdrop-filter` 得跟着重新合成,而且遮罩
+   本来就挡住了 section 的点击。剩下的大头在宿主侧:遮罩的 `backdrop-filter`(`ui-primitives` 的 `Modal.module.css`,
+   token `--dsw-mask-blur`)对整页做模糊,插件改不了。
 
 `scanClaudeMcp(cwd, home?)` 的 `home` 可注入,`tests/claude-import.spec.ts` 就是靠它跑临时 fixtures;
 默认取真实 `homedir()`。
