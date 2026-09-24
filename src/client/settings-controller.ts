@@ -37,6 +37,14 @@ export const MCP_SETTINGS_NS = 'mcp-manager'
 /** Lifecycle phase of one MCP row, as its owning fiber reports it. */
 export type McpPhase = McpFiberPhase
 
+/**
+ * Which composition plane the settings page addresses. A global row is mounted
+ * by the composition itself; an agent row lives in an agent preset and takes
+ * part in on-demand loading. The page tabs by this value, and a new row is
+ * written into the plane its tab shows.
+ */
+export type McpPlane = 'global' | 'agent'
+
 /** Stable key for one MCP row (`<scope>:<name>` or `preset:<id>:<name>`), matching the Host's `mcpRowKey`. */
 export function mcpRowKey(server: McpServer): string {
   return server.scope === 'preset' ? `preset:${server.presetId ?? ''}:${server.serverName}` : `${server.scope}:${server.serverName}`

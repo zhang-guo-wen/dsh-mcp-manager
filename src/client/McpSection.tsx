@@ -22,6 +22,7 @@ import {
   mcpRowKey,
   type McpLoadingOption,
   type McpPhase,
+  type McpPlane,
   type McpRosterView,
   type McpSectionFace,
   type McpServer,
@@ -37,9 +38,6 @@ export type McpSectionProps =
 
 /** Localized `t` bound to this section's dictionary namespace. */
 type Translate = McpSectionProps['t']
-
-/** Which composition plane the roster tab shows. */
-type McpPlaneTab = 'global' | 'agent'
 
 /** MCP load view state. */
 type McpView =
@@ -242,7 +240,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
   // The agent plane is where a row can be authored and lazy-loaded, so it opens
   // first; a deployment that configured only global rows sees their count on the
   // other tab.
-  const [plane, setPlane] = useState<McpPlaneTab>('agent')
+  const [plane, setPlane] = useState<McpPlane>('agent')
   const planeTabId = useId()
   const disabled = !state.available || !state.writable
   /** Localized reason the global plane refuses writes, while it does. */
@@ -253,6 +251,10 @@ export function McpSection(props: McpSectionProps): ReactNode {
   const globalServers = servers.filter(server => server.scope === 'global')
   const agentServers = servers.filter(server => server.scope === 'preset')
   const planeServers = plane === 'global' ? globalServers : agentServers
+  // Every authoring path into the global plane goes through Loader write-back,
+  // which a patched root Include refuses, so on such a deployment that plane is
+  // readable only and its actions are closed rather than left to fail on save.
+  const globalReadOnly = plane === 'global' && globalProblemReason !== undefined
 
   useEffect(() => {
     let current = true
@@ -387,7 +389,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
     <div className={css.section}>
       <div className={css.panel}>
         {!state.available ? <p className={css.unavailable}>{t('unavailable')}</p> : null}
-        <SegmentedTabs<McpPlaneTab>
+        <SegmentedTabs<McpPlane>
           label={t('mcp.plane.label')}
           value={plane}
           onChange={setPlane}
@@ -438,7 +440,13 @@ export function McpSection(props: McpSectionProps): ReactNode {
             <Button variant="outline" size="sm" onClick={openImport} disabled={disabled || editorBusy}>
               {t('mcp.import')}
             </Button>
-            <Button variant="outline" size="sm" onClick={openAdd} disabled={editorBusy}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={openAdd}
+              disabled={editorBusy || globalReadOnly}
+              title={globalReadOnly ? globalProblemReason : undefined}
+            >
               {t('mcp.add')}
             </Button>
           </span>
@@ -472,7 +480,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
                   onEditDescription={(value) => { updateMcpDescription(key, value) }}
                   onEdit={() => { openEdit(server) }}
                   onToggleDisabled={(enabled) => { toggleDisabled(server, enabled) }}
-                  actionsDisabled={editorBusy}
+                  actionsDisabled={editorBusy || globalReadOnly}
                   t={t}
                 />
               )
@@ -491,7 +499,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
           describeMcp={describeMcp}
           listMcpTools={listMcpTools}
           presets={presets}
-          {...globalProblemReason === undefined ? {} : { globalProblemReason }}
+          plane={plane}
           descriptionInitial={editor.server === undefined
             ? ''
             : (editor.server.description ?? state.descriptions[mcpRowKey(editor.server)] ?? '')}

@@ -254,7 +254,7 @@ tools to this session, and `mcp_unload` with the same name to release it again.
 **全局平面在真实 profile 里是只读的。** `dsh` 用 `boot(..., readProfilePatches(...))` 挂根 Include,所以
 `tree.config.patches` 永远非空,而 `globalInclude()` 正是因为这个理由拒绝写入(写回会把 bundle 层与用户补丁层拍平)。
 表现:CLI 默认目标的"新增"逐条失败,导入则**改写到弹窗里所选的预设**(插件侧能做的只是提前把原因说清楚:
-导入弹窗把全局从 scope 里去掉并给出原因,编辑器里全局选项标成不可用)。
+导入弹窗不列全局平面,设置页在全局 tab 上直接关闭"新增"和行操作,见「设置页分区」)。
 
 **设置页刷新时保留已渲染的名册**,不要退回 `loading`:读取本身很快,清空列表只会让页面闪。
 
@@ -293,11 +293,12 @@ mcp-manager:
 
 ### 设置页分区(src/client/McpSection.tsx)
 
-名册按**行所在的平面**分成两个 tab(`SegmentedTabs`,来自 `@deepseek-ai/dsh-client-ui-primitives`;编辑弹窗的两个 tab 用同一个原语),标签带该平面的行数,默认停在 Agent 平面(能写、能按需加载的那个)。三条约束:
+名册按**行所在的平面**分成两个 tab(`SegmentedTabs`,来自 `@deepseek-ai/dsh-client-ui-primitives`;编辑弹窗的两个 tab 用同一个原语),标签带该平面的行数,默认停在 Agent 平面(能写、能按需加载的那个)。四条约束:
 
 1. **两个面板都渲染并 `hidden`**,CSS 里有 `.planePanel[hidden]{display:none}` —— 面板自己设了 `display`,UA 的 `[hidden]` 压不过作者样式;`SegmentedTabs` 的 `aria-controls` 也因此始终指向存在的元素。
 2. **全局 tab 必须写明"全部加载"**:全局行由组合直接挂载,不受加载模式影响,工具过滤对它们也不生效(见「预加载闸门」);平面不可写时把 `listMcps` 的 `globalProblem` 原因一并显示,它决定"新增/导入到全局"会失败。
 3. **加载方式选择器只在 Agent tab 出现**:它决定的是 preset 行的进上下文时机,放在全局 tab 会暗示它对全局行有效。
+4. **tab 决定新增写到哪,弹窗里不再选范围**(`McpEditor` 的 `plane` 入参,`editorTarget()`):全局 tab → 全局行;Agent tab → 该 tab 里的预设,弹窗只保留"Agent 预设"下拉以便多预设时挑一个,没有可写预设时禁用保存并说明。**编辑**时范围来自被编辑行自身,所以只读显示那一行,不给下拉。**全局平面只读时,全局 tab 的"新增"与行操作直接禁用**(原因就在同一 tab 的说明里),不要放进弹窗再失败。
 
 ### 工具选择 UI(src/client/McpEditor.tsx)
 
