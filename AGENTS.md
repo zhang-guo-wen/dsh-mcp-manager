@@ -291,6 +291,14 @@ mcp-manager:
       - "!delete_workitem"
 ```
 
+### 设置页分区(src/client/McpSection.tsx)
+
+名册按**行所在的平面**分成两个 tab(`SegmentedTabs`,来自 `@deepseek-ai/dsh-client-ui-primitives`;编辑弹窗的两个 tab 用同一个原语),标签带该平面的行数,默认停在 Agent 平面(能写、能按需加载的那个)。三条约束:
+
+1. **两个面板都渲染并 `hidden`**,CSS 里有 `.planePanel[hidden]{display:none}` —— 面板自己设了 `display`,UA 的 `[hidden]` 压不过作者样式;`SegmentedTabs` 的 `aria-controls` 也因此始终指向存在的元素。
+2. **全局 tab 必须写明"全部加载"**:全局行由组合直接挂载,不受加载模式影响,工具过滤对它们也不生效(见「预加载闸门」);平面不可写时把 `listMcps` 的 `globalProblem` 原因一并显示,它决定"新增/导入到全局"会失败。
+3. **加载方式选择器只在 Agent tab 出现**:它决定的是 preset 行的进上下文时机,放在全局 tab 会暗示它对全局行有效。
+
 ### 工具选择 UI(src/client/McpEditor.tsx)
 
 编辑弹窗分成「配置」与「工具列表」两个 tab,后者是规则的可视化入口:勾选 = 可见,取消勾选 = 隐藏,默认全勾。

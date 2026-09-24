@@ -34,6 +34,19 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* One tab's own controls, above the shared roster. The pane sets its own
+   display, which would otherwise beat the user-agent `[hidden]` rule and leave
+   the unselected plane's controls on screen. */
+.planePanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.planePanel[hidden] {
+  display: none;
+}
+
 .mcpToolbar {
   display: flex;
   align-items: center;

@@ -1,16 +1,16 @@
 /**
  * MCP management settings section: the server roster with its loading mode.
  *
- * The section lists the MCP servers the Host has configured — global plane plus
- * every agent-preset composition, surfaced without deduplication and tagged with
- * its config scope — and offers the three settings this plugin owns: when an
- * allowed server enters context, each row's authoring description, and each
- * row's tool filter.
+ * The roster is split by the plane a row lives in — the global plane or an agent
+ * preset — because the two differ in kind: preset rows take part in on-demand
+ * loading, while global rows are always mounted and ignore the loading mode and
+ * the tool filters. Each plane gets its own tab, with that difference stated.
+ * Both planes are surfaced without deduplication.
  * @module @guowenzhang/dsh-mcp-manager/client/McpSection
  */
 
-import { useEffect, useState, type ReactNode } from 'react'
-import { Button, StateDot, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useEffect, useId, useState, type ReactNode } from 'react'
+import { Button, SegmentedTabs, StateDot, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AddMcpRequest, EditMcpRequest } from '../types.ts'
@@ -37,6 +37,9 @@ export type McpSectionProps =
 
 /** Localized `t` bound to this section's dictionary namespace. */
 type Translate = McpSectionProps['t']
+
+/** Which composition plane the roster tab shows. */
+type McpPlaneTab = 'global' | 'agent'
 
 /** MCP load view state. */
 type McpView =
@@ -236,11 +239,20 @@ export function McpSection(props: McpSectionProps): ReactNode {
   const [mcpActionError, setMcpActionError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [rowPending, setRowPending] = useState<Record<string, 'enabling' | 'disabling'>>({})
+  // The agent plane is where a row can be authored and lazy-loaded, so it opens
+  // first; a deployment that configured only global rows sees their count on the
+  // other tab.
+  const [plane, setPlane] = useState<McpPlaneTab>('agent')
+  const planeTabId = useId()
   const disabled = !state.available || !state.writable
   /** Localized reason the global plane refuses writes, while it does. */
   const globalProblemReason = mcpView.status === 'ready' && mcpView.globalProblem !== undefined
     ? t(GLOBAL_PROBLEM_KEY[mcpView.globalProblem])
     : undefined
+  const servers = mcpView.status === 'ready' ? mcpView.servers : []
+  const globalServers = servers.filter(server => server.scope === 'global')
+  const agentServers = servers.filter(server => server.scope === 'preset')
+  const planeServers = plane === 'global' ? globalServers : agentServers
 
   useEffect(() => {
     let current = true
@@ -375,12 +387,51 @@ export function McpSection(props: McpSectionProps): ReactNode {
     <div className={css.section}>
       <div className={css.panel}>
         {!state.available ? <p className={css.unavailable}>{t('unavailable')}</p> : null}
-        <McpLoadingPicker
-          value={state.loading}
-          disabled={disabled}
-          onPick={pickMode}
-          t={t}
+        <SegmentedTabs<McpPlaneTab>
+          label={t('mcp.plane.label')}
+          value={plane}
+          onChange={setPlane}
+          items={[
+            {
+              value: 'global',
+              label: t('mcp.plane.tab').replace('{label}', t('mcp.plane.global')).replace('{n}', String(globalServers.length)),
+              id: `${planeTabId}-global-tab`,
+              panelId: `${planeTabId}-global-panel`,
+            },
+            {
+              value: 'agent',
+              label: t('mcp.plane.tab').replace('{label}', t('mcp.plane.agent')).replace('{n}', String(agentServers.length)),
+              id: `${planeTabId}-agent-tab`,
+              panelId: `${planeTabId}-agent-panel`,
+            },
+          ]}
         />
+        <div
+          id={`${planeTabId}-global-panel`}
+          role="tabpanel"
+          aria-labelledby={`${planeTabId}-global-tab`}
+          className={css.planePanel}
+          hidden={plane !== 'global'}
+        >
+          {/* A global row is mounted by the composition itself, so nothing here
+              decides when it enters context. */}
+          <p className={css.fieldHint}>{t('mcp.plane.global.eager')}</p>
+          {globalProblemReason !== undefined ? <p className={css.fieldHint}>{globalProblemReason}</p> : null}
+        </div>
+        <div
+          id={`${planeTabId}-agent-panel`}
+          role="tabpanel"
+          aria-labelledby={`${planeTabId}-agent-tab`}
+          className={css.planePanel}
+          hidden={plane !== 'agent'}
+        >
+          <McpLoadingPicker
+            value={state.loading}
+            disabled={disabled}
+            onPick={pickMode}
+            t={t}
+          />
+        </div>
         <div className={css.mcpToolbar}>
           <p className={css.mcpSub}>{t('mcp.subtitle')}</p>
           <span className={css.mcpActions}>
@@ -404,12 +455,12 @@ export function McpSection(props: McpSectionProps): ReactNode {
             </button>
           </div>
         ) : null}
-        {mcpView.status === 'ready' && mcpView.servers.length === 0 ? (
-          <p className={css.empty}>{t('mcp.empty')}</p>
+        {mcpView.status === 'ready' && planeServers.length === 0 ? (
+          <p className={css.empty}>{plane === 'global' ? t('mcp.empty.global') : t('mcp.empty.agent')}</p>
         ) : null}
-        {mcpView.status === 'ready' && mcpView.servers.length > 0 ? (
+        {mcpView.status === 'ready' && planeServers.length > 0 ? (
           <div className={css.mcpList}>
-            {mcpView.servers.map((server) => {
+            {planeServers.map((server) => {
               const key = mcpRowKey(server)
               return (
                 <McpRow
@@ -464,7 +515,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
               setEditorBusy(false)
             }
           }}
-          servers={mcpView.status === 'ready' ? mcpView.servers : []}
+          servers={servers}
           presets={presets}
           globalWritable={mcpView.status === 'ready' && mcpView.globalProblem === undefined}
           {...globalProblemReason === undefined ? {} : { globalProblem: globalProblemReason }}
