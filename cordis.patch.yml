@@ -1,0 +1,3 @@
+- insert:
+    - id: mcp-manager
+      name: '@guowenzhang/dsh-mcp-manager'
