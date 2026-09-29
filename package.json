@@ -1,7 +1,7 @@
 {
   "name": "@guowenzhang/dsh-mcp-manager",
   "description": "MCP server management for DeepSeek Harness: author composition rows, choose when an allowed server loads, and filter which of its tools a session may call",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "license": "Apache-2.0",
   "publishConfig": {
@@ -158,6 +158,7 @@
     }
   },
   "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.4",
     "js-yaml": "^4.1.0"
   },
   "devDependencies": {

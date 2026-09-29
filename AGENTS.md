@@ -41,6 +41,11 @@
 
 - host 插件导出 `{ name, inject, Config, apply }`;`apply(ctx, config)` 里注册能力,注册一律走 `ctx.effect(...)` 收口。
 - 依赖的服务用 `ctx.get('x')` 取,**不要** `ctx.x` 属性访问 —— 未 inject 的服务属性在 Cordis 的 inject guard 下会抛错。
+- **顶层静态 import 的宿主包必须在 manifest 里落地。** profile 只安装插件的 `dependencies`,其余裸模块名靠宿主
+  的运行时解析从"安装闭包"供给;闭包里没有这个包时,表现就是启动告警 `failed to import`(终端不给原因,根因在
+  `$DSH_HOME/logs/startup-*.log`)。所以:身份敏感的宿主包(模块级状态按同一性比较,如 `dsh-scope`、`dsh-mcp-client`)写
+  `peerDependencies` + `devDependencies`;纯函数包(无实例内状态,如 `schemastery`)写 `dependencies`,让 profile 一定装到它。
+  本地 `link:` 安装常常照跑,因为源码目录自己的 `node_modules` 恰好有这些包 —— 别用本地能跑证明声明齐了。
 - client 半边必须打成 `window.__ModuleLoader__.load({ id, factory })` 手接格式;`HANDOFF_ID` 必须始终等于
   `package.json` 的包名。Host 用内容 revision 更新 bundle URL;不要通过修改 handoff id 做缓存失效,否则 Web 启动图找不到该插件。
 
@@ -452,6 +457,9 @@ client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏�
     `cordis.yml`,bundle 层与用户补丁层就被拍平了。全局行只能"改文件 + `Include.refresh()`"(见「MCP 行编写」)。
 21. **刷新时把名册清成 `loading`** → 每次新增/开关后页面闪一下;保留上一版名册,只标记 `refreshing`。
 22. **批量导入循环调 `addMcp`** → 每行一次写入 = 该 preset 重挂一次 = 里面每台 MCP 重启一轮;用 `addMcps` 一次提交。
+23. **顶层静态 import 的宿主包没写进 manifest** → profile 只装插件的 `dependencies`,其余裸模块名靠宿主安装闭包供给;
+    闭包里没有它(或版本线不同)就是导入失败,而**终端只显示 `failed to import`**、根因在 `$DSH_HOME/logs/startup-*.log`。
+    本地 `link:` 安装会照跑(源码目录自己的 `node_modules` 恰好有),所以本地能跑不代表声明齐了(见「插件契约(Cordis)」)。
 
 ## 配置
 
