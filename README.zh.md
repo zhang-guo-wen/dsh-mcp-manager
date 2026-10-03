@@ -1,11 +1,13 @@
 ---
-description: "MCP server management for DeepSeek Harness: author composition rows, choose when an allowed server loads, and filter which of its tools a session may call."
+description: "MCP server management for DeepSeek Harness: author composition rows, choose when an allowed server loads, and filter which of its tools a session may call"
 kind: "plugin-readme"
 ---
 
 # @guowenzhang/dsh-mcp-manager
 
 中文 | [English](README.md)
+
+DeepSeek Harness 的 MCP 服务管理：编辑组合配置行、决定被允许的服务何时加载，并过滤会话可调用的工具
 
 ## 背景：DeepSeek Harness
 
