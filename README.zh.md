@@ -40,8 +40,10 @@ MCP 服务器原本只能手写组合行、整套工具常驻上下文，已有�
 ## 安装
 
 ```sh
-npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager
+npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager@^1.0.1
 ```
+
+前置条件：`pnpm` 在 `PATH` 上（`dsh plugin` 会把参数转发给它），Node.js 用 ≥22.18 或 ≥24.2 —— v23.x 下 `dsh` CLI 会静默退出、什么都不装（[讨论 #6273](https://github.com/deepseek-ai/deepseek-harness/discussions/6273)）。`@^1.0.1` 这个下限是有意的：pnpm 11 默认拒绝发布不满 24 小时的新版本，只写包名会解析到 1.0.0，而它缺少 `@deepseek-ai/schemastery` 依赖。
 
 来自 npm 官方源：<https://www.npmjs.com/package/@guowenzhang/dsh-mcp-manager>。装完重启宿主；本地目录开发安装、git 源与排查见 [AGENTS.md](AGENTS.md)。
 
@@ -60,6 +62,8 @@ npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager
 `dynamic` / `lazy` 下，系统提示按 `名字 — 你在这行写的描述` 列出每一台可加载的服务器，模型按名字调 `mcp_load` / `mcp_unload`。名字永远列全；描述单条截断到 80 字符、整段预算 900 字符。**加载状态刻意不写**——写它会让每次 `mcp_load` 都重写系统提示，整个缓存前缀失效。
 
 连接按会话隔离：同一会话重复 `mcp_load` 复用一份，不同会话各起一份，会话结束会关掉它开的连接；`eager` 相反，共享一个常驻实例。切换某一行的开关时先短暂显示 `启动中 / 停止中`，因为要等子进程起来。
+
+`dsh-resource-manager` 提供的资源仓库 MCP 也使用这三种模式，包括全局资源。资源管理器仍负责同步与凭据；它的 MCP Tab 会显示托管状态和当前模式。资源 MCP 不写入用户的组合文件，也不作为可编辑的组合行出现在本页。
 
 ### 工具过滤
 

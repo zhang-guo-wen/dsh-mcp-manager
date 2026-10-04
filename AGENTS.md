@@ -110,6 +110,8 @@ const mod = await ctx.loader.internal.import('@deepseek-ai/dsh-agent-preset-regi
 
 ### 延迟加载(src/lazy-mcp.ts)
 
+资源仓库 MCP 由 `src/external-mcp.ts` 的内存注册表接收：`mcpManager.replaceExternalMcps(owner, ownerCtx, rows)` / `removeExternalMcps(owner)`。它们不写组合文件；`eager` 下由管理器在提供方作用域挂载，`dynamic` / `lazy` 下进入按需清单和 `mcp_load`。Agent 行必须有真实 scope key，缺失时拒绝托管，不能降级成全局行。资源管理器仍拥有仓库同步、凭据和原始配置。
+
 **两件事分两个开关:** composition 行上的 `disabled` = 用户**允不允许用**(禁用 = 完全不用:不进系统提示里的清单,
 `mcp_load` 拒绝);`loading` 模式 = 允许的服务器**什么时候进上下文**。后者是
 `mcp-manager` 用户设置(默认值取自 host 插件的 `Config`)**+ UI 三选一**。三种取值:

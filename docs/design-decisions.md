@@ -26,6 +26,7 @@ kind: "package-reference"
 | D10 | 名册读声明 + live fiber，不等任何行的激活 | 等激活等于把 MCP 子进程启动时间（实测 7.5–23s）算进设置页 |
 | D11 | 全局行写 Include 的文件 + `refresh()`，不走 Loader 写回 | Loader 写回会把带补丁的树拍平进用户的 `cordis.yml` |
 | D12 | 批量新增一次提交（`addMcps`） | 一次 preset 写入 = 该 preset 每台 MCP 重启一轮 |
+| D13 | 资源仓库 MCP 经内存接口交给管理器 | 保留资源管理器的数据所有权，同时让加载模式统一生效 |
 
 ### D1 允许与进上下文分离
 
@@ -179,6 +180,14 @@ kind: "package-reference"
   （两处都做了）；批内任一行在锁定文件后仍冲突时，会把整批标成失败（保守，不部分写）。
 - **实现**：`addMany` / `writeGlobalBatch` / `writePresetBatch`；客户端一次调用，全部成功即关窗，有失败才留在
   弹窗里逐条列出（见 AGENTS.md 的「导入 Claude 配置」）。
+
+### D13 资源仓库 MCP 的内存交接
+
+- **结论**：`dsh-resource-manager` 保留仓库同步、文件校验、凭据和 Agent 作用域，向运行中的 `mcpManager` 服务提交已解析的 MCP 定义。管理器持有定义和常驻连接，`dynamic` / `lazy` 时把它们加入按需清单并由 `mcp_load` 加载；不改写用户组合文件。
+- **理由**：资源管理器原先直接 `ctx.plugin(mcp-client)`，这条路径绕过组合行闸门，无法响应加载方式。强行把资源写进 profile patch 会混淆仓库来源与用户配置，还会触发 preset 整体重挂。
+- **作用域**：全局资源对所有 Agent 可见；Agent 资源只有在调用方 scope 链包含资源所属的 preset scope 时可见。Agent scope 不可辨认时拒绝托管，防止专属 MCP 泄漏给别的 Agent。
+- **切换**：交接前释放资源管理器旧连接。管理器更换定义时释放按需会话连接；切换加载方式时先回收旧载体再按新模式注册。管理器离线时资源管理器恢复原有直接加载。
+- **界面**：资源管理器的 MCP Tab 展示托管状态及当前模式；资源配置与密钥仍从该页维护。管理器的组合行编辑器不把内存定义写回用户配置。
 
 ## 先例：Claude 的 MCP 延迟加载
 

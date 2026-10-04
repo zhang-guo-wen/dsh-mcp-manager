@@ -50,6 +50,7 @@ import { mcpEntryConfig, type McpEntryConfig } from './mcp-config.ts'
 import type { McpPreloadGate } from './mcp-gate.ts'
 import { mcpRowKey } from './mcp-gate.ts'
 import { renderMcpInventory } from './mcp-inventory.ts'
+import type { ExternalMcpRegistry } from './external-mcp.ts'
 import {
   filterMcpTools,
   NO_TOOL_FILTER,
@@ -83,6 +84,10 @@ interface McpRow {
   readonly key: string
   readonly scopeLabel: string
   readonly enabled: boolean
+  readonly externalConfig?: McpEntryConfig
+  readonly externalScope?: object
+  readonly externalKind?: 'global' | 'agent'
+  readonly externalDescription?: string
 }
 
 /** The mcp-client host plugin object, resolved from the harness module graph. */
@@ -145,7 +150,7 @@ function leafId(id: string): string {
 }
 
 /** Resolve the mcp-client plugin from the Loader's module graph (same instance the composition mounts). */
-async function resolveMcpClient(ctx: Context): Promise<McpClientModule> {
+export async function resolveMcpClient(ctx: Context): Promise<McpClientModule> {
   const loader = ctx.get('loader') as
     | { internal?: { import(spec: string, base: string, options: object): Promise<unknown> } }
     | undefined
@@ -163,7 +168,7 @@ async function resolveMcpClient(ctx: Context): Promise<McpClientModule> {
 }
 
 /** Every configured mcp-client row: Loader entries (global) plus each agent preset's composition rows. */
-async function listRows(ctx: Context): Promise<McpRow[]> {
+async function listRows(ctx: Context, external?: ExternalMcpRegistry): Promise<McpRow[]> {
   const rows: McpRow[] = []
   const loader = ctx.get('loader') as
     | { entries(): Iterable<{ id: string; disabled?: boolean; options: { name?: string; group?: boolean } }> }
@@ -206,6 +211,18 @@ async function listRows(ctx: Context): Promise<McpRow[]> {
       }
     }
   }
+  for (const row of external?.rows() ?? []) rows.push({
+    target: { scope: 'global' },
+    entryId: row.owner,
+    serverName: row.serverName,
+    key: `external:${row.owner}:${row.serverName}`,
+    scopeLabel: row.owner,
+    enabled: true,
+    externalConfig: row.config,
+    externalKind: row.scope,
+    ...(row.description === undefined ? {} : { externalDescription: row.description }),
+    ...(row.scopeKey === undefined ? {} : { externalScope: row.scopeKey }),
+  })
   return rows
 }
 
@@ -219,9 +236,9 @@ async function describeRow(ctx: Context, row: McpRow): Promise<McpSpec> {
 }
 
 /** The tool names one server published into an agent's scope (dynamic mode). */
-function toolNamesFor(tools: ToolRegistry, agentCtx: Context, serverName: string): string[] {
+function toolNamesFor(tools: ToolRegistry, agentCtx: Context, serverName: string, external?: ExternalMcpRegistry): string[] {
   const prefix = `mcp__${serverName}__`
-  return tools.schemas(scopeOf(agentCtx)).map(schema => schema.name).filter(name => name.startsWith(prefix))
+  return tools.schemas(external ? external.scopeOf(agentCtx) : scopeOf(agentCtx)).map(schema => schema.name).filter(name => name.startsWith(prefix))
 }
 
 /**
@@ -348,7 +365,7 @@ interface SystemPromptRegistry {
 /** What one on-demand registration exposes to its owner. */
 export interface McpToolRegistration {
   /** Unregister every tool, drop the inventory section, and stop every server this registration started. */
-  dispose(): void
+  dispose(): Promise<void>
   /**
    * Re-read the allowed rows and re-render the inventory section. The caller
    * runs it once before the first request and again whenever a composition row
@@ -386,9 +403,10 @@ export function registerMcpTools(
   mode: McpLoadingMode,
   gate: McpPreloadGate,
   readers: McpRowReaders = { filterFor: () => NO_TOOL_FILTER, descriptionFor: () => undefined },
+  external?: ExternalMcpRegistry,
 ): McpToolRegistration {
   const tools = ctx.get('tools') as ToolRegistry | undefined
-  if (tools === undefined || mode === 'eager') return { dispose: () => {}, refresh: async () => {} }
+  if (tools === undefined || mode === 'eager') return { dispose: async () => {}, refresh: async () => {} }
   /** The mode whose tools exist; narrowed once so closures need no re-check. */
   const onDemandMode: 'dynamic' | 'lazy' = mode
   /**
@@ -397,9 +415,22 @@ export function registerMcpTools(
    * its file changes, and a row that just came back would otherwise be treated
    * as still absent.
    */
-  const allowedRows = async (): Promise<McpRow[]> => {
+  const allowedRows = async (scope?: object): Promise<McpRow[]> => {
     await gate.reconcile()
-    return (await listRows(ctx)).filter(row => gate.stateFor(row.target, row.entryId)?.allowed ?? row.enabled)
+    return (await listRows(ctx, external)).filter(row =>
+      row.externalConfig === undefined
+        ? (gate.stateFor(row.target, row.entryId)?.allowed ?? row.enabled)
+        : external?.visible({
+          owner: row.entryId, serverName: row.serverName, config: row.externalConfig,
+          scope: row.externalKind ?? 'global',
+          scopeKey: row.externalScope,
+        }, scope) === true,
+    ).sort((a, b) => {
+      const priority = (row: McpRow): number => row.externalKind === 'agent'
+        ? external?.scopeDistance(row.externalScope, scope) ?? Number.MAX_SAFE_INTEGER
+        : row.externalConfig === undefined ? 1_000_000 : 2_000_000
+      return priority(a) - priority(b)
+    })
   }
   /** Loaded servers keyed by agent id, then serverName. */
   const mounted = new Map<string, Map<string, MountedServer>>()
@@ -414,21 +445,35 @@ export function registerMcpTools(
    * the request until a session loads one, so the names have to be published.
    * The text is a snapshot, refreshed through {@link McpToolRegistration.refresh}.
    */
-  let inventory = ''
+  let inventoryRows: McpRow[] = []
   const systemPrompt = ctx.get('systemPrompt') as SystemPromptRegistry | undefined
   const inventorySection = systemPrompt?.section({
     name: 'mcp-manager:on-demand',
     order: systemPrompt.getSectionOrder('MCP_SERVERS'),
     // Row descriptions are user text, not templates: `{{...}}` stays literal.
     interpolate: false,
-    text: () => inventory,
+    text: context => renderMcpInventory(inventoryRows.filter(row =>
+      row.externalConfig === undefined || row.externalKind === 'global'
+        || (context.scope !== undefined && external?.visible({
+          owner: row.entryId, serverName: row.serverName, config: row.externalConfig!,
+          scope: row.externalKind ?? 'global',
+          scopeKey: row.externalScope,
+        }, context.scope as object) === true),
+    ).sort((a, b) => {
+      const priority = (row: McpRow): number => row.externalKind === 'agent'
+        ? external?.scopeDistance(row.externalScope, context.scope as object | undefined) ?? Number.MAX_SAFE_INTEGER
+        : row.externalConfig === undefined ? 1_000_000 : 2_000_000
+      return priority(a) - priority(b)
+    }).map(row => {
+      const description = row.externalDescription ?? readers.descriptionFor(row.key)
+      return { name: row.serverName, ...(description === undefined ? {} : { description }) }
+    }), onDemandMode),
   })
   const refresh = async (): Promise<void> => {
-    const rows = await allowedRows()
-    inventory = renderMcpInventory(rows.map(row => {
-      const description = readers.descriptionFor(row.key)
-      return { name: row.serverName, ...description === undefined ? {} : { description } }
-    }), onDemandMode)
+    await gate.reconcile()
+    inventoryRows = (await listRows(ctx, external)).filter(row =>
+      row.externalConfig !== undefined || (gate.stateFor(row.target, row.entryId)?.allowed ?? row.enabled),
+    )
   }
 
   const loadedFor = (agentId: string): Map<string, MountedServer> => {
@@ -540,19 +585,18 @@ export function registerMcpTools(
           // published; the two carriers that keep the discovered tools report
           // the schemas they admitted.
           tools: existing.carrier === 'mount'
-            ? toolNamesFor(tools, agent.ctx, serverName).map(name => ({ name, description: '', schema: '' }))
+            ? toolNamesFor(tools, agent.ctx, serverName, external).map(name => ({ name, description: '', schema: '' }))
             : describeTools(existing, serverName),
           hidden: existing.carrier === 'mount' ? 0 : existing.hidden,
         }
       }
-      const row = (await allowedRows()).find(candidate => candidate.serverName === serverName)
+      const row = (await allowedRows(external ? external.scopeOf(agent.ctx) : scopeOf(agent.ctx))).find(candidate => candidate.serverName === serverName)
       if (row === undefined) {
         throw new Error(
           `unknown or disabled MCP server "${serverName}" — load one of the MCP servers listed in your system prompt`,
         )
       }
-      const spec = await describeRow(ctx, row)
-      const config = mcpEntryConfig(spec, serverName)
+      const config = row.externalConfig ?? mcpEntryConfig(await describeRow(ctx, row), serverName)
       const filter = readers.filterFor(row.key)
       const carrier = carrierFor(onDemandMode, filter)
       if (carrier === undefined) throw new Error('mcp_load is not registered under the "eager" loading mode')
@@ -628,7 +672,7 @@ export function registerMcpTools(
       bindAgentScope(agent)
       return {
         server: serverName,
-        tools: toolNamesFor(tools, agent.ctx, serverName).map(name => ({ name, description: '', schema: '' })),
+        tools: toolNamesFor(tools, agent.ctx, serverName, external).map(name => ({ name, description: '', schema: '' })),
         hidden: 0,
       }
     },
@@ -729,12 +773,12 @@ export function registerMcpTools(
   }))
 
   return {
-    dispose: () => {
+    dispose: async () => {
       for (const dispose of [...registrations].reverse()) dispose()
       registrations.length = 0
       inventorySection?.()
-      inventory = ''
-      void stopAll()
+      inventoryRows = []
+      await stopAll()
     },
     refresh,
   }

@@ -39,6 +39,7 @@ import type {
   ScanClaudeMcpResult,
 } from './types.ts'
 import type { GateMount, McpPreloadGate } from './mcp-gate.ts'
+import type { ExternalMcpDefinition, ExternalMcpRegistry } from './external-mcp.ts'
 
 /** How long one editor tool listing may take before the dialog reports failure. */
 const TOOL_LIST_TIMEOUT_MS = 30_000
@@ -118,8 +119,23 @@ export class McpManager extends TypertRemoteService {
     ctx: Context,
     private readonly gate: McpPreloadGate,
     private readonly mountReader: (within?: unknown) => readonly GateMount[],
+    private readonly external: ExternalMcpRegistry,
+    private readonly loadingMode: () => 'eager' | 'dynamic' | 'lazy',
   ) {
     super(ctx, 'mcpManager')
+  }
+
+  /** Register MCP definitions supplied by a resource plugin without writing user configuration. */
+  async replaceExternalMcps(owner: string, ownerCtx: Context, rows: readonly ExternalMcpDefinition[]): Promise<void> {
+    await this.external.replace(owner, ownerCtx, rows)
+  }
+
+  async removeExternalMcps(owner: string): Promise<void> {
+    await this.external.remove(owner)
+  }
+
+  managedMcpMode(): 'eager' | 'dynamic' | 'lazy' {
+    return this.loadingMode()
   }
 
   /**

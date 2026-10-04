@@ -14,7 +14,8 @@
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import { livePresetMounts } from '@deepseek-ai/dsh-agent-preset-registry'
 import { McpManager } from './mcp-remote.ts'
-import { parseMcpLoadingMode, registerMcpTools } from './lazy-mcp.ts'
+import { parseMcpLoadingMode, registerMcpTools, resolveMcpClient } from './lazy-mcp.ts'
+import { ExternalMcpRegistry, type ScopeLookup } from './external-mcp.ts'
 import { createMcpPreloadGate, MCP_ROW_EVENTS, resolvePresetMounts, type GateMount } from './mcp-gate.ts'
 import { MCP_CLIENT_MODULE } from './mcp-authoring.ts'
 import {
@@ -38,6 +39,7 @@ export { carrierFor } from './mcp-carrier.ts'
 export type { McpCarrier } from './mcp-carrier.ts'
 export { MCP_LOADING_MODES, parseMcpLoadingMode, registerMcpTools } from './lazy-mcp.ts'
 export type { McpLoadingMode } from './lazy-mcp.ts'
+export type { ExternalMcpDefinition } from './external-mcp.ts'
 export { admits, filterHidesAnything, filterMcpTools, parseMcpToolFilter, toolRuleEntries } from './mcp-tool-filter.ts'
 export type { McpToolFilter, McpToolSelection } from './mcp-tool-filter.ts'
 export { mcpRowKey } from './mcp-gate.ts'
@@ -89,8 +91,31 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     filterFor: (key: string): McpToolFilter => readToolFilter(key),
     descriptionFor: (key: string): string | undefined => readSettings().descriptions[key],
   }
-  let mcpTools = registerMcpTools(ctx, mcpLoading, gate, readers)
-  ctx.effect(() => () => { mcpTools.dispose(); gate.dispose() }, 'mcp-manager: mcp tools')
+  const loader = ctx.get('loader') as { internal?: { import(spec: string, base: string, options: object): Promise<unknown> } }
+  if (!loader.internal) throw new Error('mcp-manager: Harness module loader is unavailable')
+  const scopes = await loader.internal.import('@deepseek-ai/dsh-scope', ctx.baseUrl ?? import.meta.url, {}) as ScopeLookup
+  if (typeof scopes.scopeOf !== 'function' || typeof scopes.scopeChainOf !== 'function') {
+    throw new Error('mcp-manager: Harness scope helpers are unavailable')
+  }
+  const external = new ExternalMcpRegistry(
+    () => mcpLoading,
+    async (ownerCtx, entryConfig) => {
+      const module = await resolveMcpClient(ctx)
+      const handle = await ownerCtx.plugin(
+        { name: module.name, inject: module.inject, apply: module.apply } as never,
+        { ...entryConfig, failOnStartupError: true } as never,
+      ) as unknown as { dispose(): Promise<void> }
+      return handle
+    },
+    async () => {
+      await mcpTools.dispose()
+      mcpTools = registerMcpTools(ctx, mcpLoading, gate, readers, external)
+      await mcpTools.refresh()
+    },
+    scopes,
+  )
+  let mcpTools = registerMcpTools(ctx, mcpLoading, gate, readers, external)
+  ctx.effect(() => async () => { await external.dispose(async () => { await mcpTools.dispose(); gate.dispose() }) }, 'mcp-manager: mcp tools')
   // The gate's answer is what the inventory lists, so every reconcile is
   // followed by a refresh: the prompt section is served from a snapshot and
   // cannot await anything while the request is assembled.
@@ -144,18 +169,25 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }
   // A committed live field is the only way the mode or a filter changes at
   // runtime; the Loader commits every volatile reference before it fires.
-  const commit = (): void => {
+  const commit = async (): Promise<void> => {
     const next = readSettings()
     const mode = parseMcpLoadingMode(next.loading)
     if (mode !== mcpLoading) {
-      mcpLoading = mode
-      mcpTools.dispose()
-      mcpTools = registerMcpTools(ctx, mode, gate, readers)
-      resync()
+      await external.transition(
+        async () => { await mcpTools.dispose(); mcpLoading = mode },
+        async () => {
+          mcpTools = registerMcpTools(ctx, mode, gate, readers, external)
+          await gate.reconcile()
+          await mcpTools.refresh()
+        },
+      )
     }
     warnFiltersWithoutEffect(next)
   }
-  ctx.effect(() => ctx.on('loader/volatile-update', () => { commit() }), 'mcp-manager: settings commits')
+  let commits: Promise<void> = Promise.resolve()
+  ctx.effect(() => ctx.on('loader/volatile-update', () => {
+    commits = commits.then(commit, commit).catch(error => { ctx.logger.warn(`mcp-manager: settings reload failed: ${String(error)}`) })
+  }), 'mcp-manager: settings commits')
   readToolFilter = key => parseMcpToolFilter(readSettings().tools[key])
   warnFiltersWithoutEffect(readSettings())
 
@@ -164,5 +196,5 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // the Loader lazily inside its methods, so it must be created unconditionally
   // (a Loader-presence guard here would skip registration when the service is
   // not yet ready and the client would 404 on every MCP mutation).
-  new McpManager(ctx, gate, mountReader)
+  new McpManager(ctx, gate, mountReader, external, () => mcpLoading)
 }

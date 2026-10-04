@@ -40,8 +40,10 @@ Every MCP server found in the Claude Code configuration files; the ticked ones a
 ## Install
 
 ```sh
-npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager
+npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager@^1.0.1
 ```
+
+Prerequisites: `pnpm` on `PATH` (`dsh plugin` forwards to it), and Node.js ≥22.18 or ≥24.2 — on v23.x the `dsh` CLI exits silently and installs nothing ([discussion #6273](https://github.com/deepseek-ai/deepseek-harness/discussions/6273)). The `@^1.0.1` floor is deliberate: pnpm 11 withholds versions younger than 24 hours, and a bare package name resolves to 1.0.0, which lacks the `@deepseek-ai/schemastery` dependency.
 
 From the npm registry: <https://www.npmjs.com/package/@guowenzhang/dsh-mcp-manager> — restart the host afterwards; local checkouts, git sources and troubleshooting are in [AGENTS.md](AGENTS.md).
 
@@ -60,6 +62,8 @@ The enable switch says **whether a server may be used**; the mode says **when an
 Under `dynamic` / `lazy` the system prompt lists every loadable server as `name — the description you wrote on its row`, and the model calls `mcp_load` / `mcp_unload` by name. Names are always listed; descriptions are truncated to 80 characters under a 900-character budget. **Load state is deliberately absent** — reporting it would rewrite the system prompt on every `mcp_load` and invalidate the whole cache prefix.
 
 Connections are per-session: a repeated `mcp_load` reuses one, different sessions each get their own, and a session that ends closes what it opened; `eager` shares one standing instance instead. Toggling a row shows a brief `starting / stopping` state while the child process comes up.
+
+Repository MCPs supplied by `dsh-resource-manager` use these modes too, including global resources. The resource plugin retains synchronization and credential ownership; its MCP tab shows management status and the current mode. Repository MCPs do not write user composition files or appear as editable composition rows here.
 
 ### Tool filters
 
