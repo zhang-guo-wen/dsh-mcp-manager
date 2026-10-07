@@ -96,17 +96,15 @@ MCP 行有两种来源,更新路径不同:
 启用本质要等 MCP 子进程启动(`npx -y …` / `uvx …` 通常 1-3 秒),那是进程启动耗时,不是插件开销;
 用直接可执行文件替代 `npx -y` 能显著缩短。
 
-**关键坑:模块实例不共享。** 插件里 `import { livePresetMounts } from '@deepseek-ai/dsh-agent-preset-registry'`
-可能解析到**与 harness 使用的不一样的副本**(harness 从源码经 tsx 加载,插件拿到构建版 `lib/index.js`),
-导致模块级状态为空(`livePresetMounts()` 返回 0)。要经 loader 的内部解析器取同一实例:
+**新版 registry 已移除 `livePresetMounts`，不能再静态或动态依赖它。**
+`src/preset-mounts.ts` 从公开 Loader entry 的 `parent.tree` 定位 detached 树，再用经 loader 内部解析的
+scope 帮助函数与 `agentPresets.composedPreset` 读取代次身份。短命空 scope 探针马上销毁，不重组真实 Agent，
+不读 registry 私有 generations/bindings。root-local weak state 保存每代的原始禁用元数据，避免 manager-only
+HMR/关闭再启用把旧 suppression 当成用户禁用；树销毁后不强持有它。
 
-```ts
-const mod = await ctx.loader.internal.import('@deepseek-ai/dsh-agent-preset-registry', ctx.baseUrl, {}) as {
-  livePresetMounts(within?: unknown): readonly { presetId: string; tree: { entries(): Iterable<unknown> } }[]
-}
-```
-
-声明真值不走这个模块:它由 `configEditor`(`ctx.get('configEditor')`)提供,见 `src/preset-source.ts`。
+当前声明的编写与未挂载名册仍由 `configEditor`(`ctx.get('configEditor')`)提供，见 `src/preset-source.ts`。
+运行时 gate/按需加载读每代快照，不拿最新声明覆盖旧会话；不调用等待激活的 `compositionInventory()`。
+实现理由和替代方案见 `docs/design-decisions.md` D14。
 
 ### 延迟加载(src/lazy-mcp.ts)
 
@@ -230,8 +228,8 @@ tools to this session, and `mcp_unload` with the same name to release it again.
 
 ### 预加载闸门(src/mcp-gate.ts)
 
-`dynamic`/`lazy` 下"允许但不预加载"靠 **运行时摘行**实现:gate 读每个 preset 的**声明真值**(声明行
-`config.plugins` 里那一行的 `disabled`)得到 allowed,再让 live 行满足
+`dynamic`/`lazy` 下"允许但不预加载"靠 **运行时摘行**实现:gate 读每个 preset 代次的**声明快照**，
+继承祖先分组禁用，并用该行 Loader evaluator 求 `!!js`（拒绝求值则不允许），再让 live 行满足
 `mounted === (allowed && mode === 'eager')`,用 `entry.update({disabled})` 驱动挂载/卸载。
 **必须读声明,不能读 live 行** —— live 行正是 gate 自己摘掉的,读回来会把摘过的行永久锁死。
 四条必须记住的性质:
@@ -239,14 +237,15 @@ tools to this session, and `mcp_unload` with the same name to release it again.
 1. **不写声明。** preset 树是 registry 的内存树(`PresetTree`),`write()` 是空实现,所以内存里摘行不会
    碰用户的 profile patch。**全局平面的行绝不动** —— 它们的树是 file-backed `Include`,`write()` 会把
    闸门的状态写回配置,所以全局行永远是"常驻挂载",不受加载模式影响。
-2. **触发点。** 插件 `apply` 时 preset 还没挂载(`mounts=0`),所以主触发是 `tools/change`(**无过滤广播**),
-   另订阅 `loader/entry-init` / `agent-preset/selected`。`reconcile()` 内部串行化,幂等,可重放。
+2. **触发点。** `tools/change`、`loader/entry-init`、`loader/partial-dispose`、相关 `internal/status` 和
+   `agent-preset/selected` 都使快照失效。entry-init 在 parent/options 赋值前发出，必须下一 microtask 再观察。
+   同步批次合并，`reconcile()` 内部串行化、幂等、可重放。
 3. **一次 reconcile 会真的 kill 掉 MCP 子进程**(`entry.update` 走 `Entry._dispose`),所以设置页先等
    `gateState`(它内部 await reconcile)再读名册,否则会看到"摘到一半"的名册。
 4. **行是"先挂载、再被摘掉"的,所以每次 preset 首次挂载会有一次真实的启动+杀掉。** gate 是事件驱动的事后
    纠正,而 stdio 的 spawn 在 `mcp-client.apply` 里立刻发生,reconcile 还要读声明,抢不过。
-   宿主启动时不会启动(那时 preset 未挂载);第一个使用该 preset 的会话会触发这一次,因为 preset 是
-   standing mount,每个 host 生命周期只发生一次。要消除它需要 harness 侧让 `mcp-client` 在 apply 早期
+   新版 registry 在声明注册时就激活，所以这次启动可能发生在宿主启动或声明重建时，不只在首个会话。
+   同一代次由选用它的会话共享。要消除它需要 harness 侧让 `mcp-client` 在 apply 早期
    就知道自己被抑制,插件做不到。
 
 同名坑:**`@Remote` 方法的形参名必须是 `request`**。网关按方法签名推导描述符,写成 `_request` 会让调用方收到
@@ -401,7 +400,11 @@ mcp-manager:
 
 `npm test` 跑 `vitest run`,配置在仓根 `vitest.config.ts`。**必须带这份本地配置**:本仓是 harness checkout
 的**兄弟目录**而不是它的 workspace,裸 `vitest run` 会继承 harness 根配置,一个 spec 都收不到
-(`No test files found`)。配置把 `root` 钉在本仓、只收 `tests/**/*.spec.ts`。
+(`No test files found`)。配置把 `root` 钉在本仓，排除需要真实源码的 `*.harness.spec.ts`。
+
+`npm run test:harness` 先重建分发产物，再跑真实 Loader/registry/scope 的兼容测试。
+默认宿主位置为 `../../deepseek-harness`，可用 `DSH_HARNESS_ROOT` 指定其它 checkout。
+覆盖导入/启动、pending Host injection、分组与表达式禁用、旧代/子代理、manager-only 重载和清单隔离。
 
 ## 部署
 
@@ -442,7 +445,7 @@ client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏�
 6. CSS module 里 JSX 引用但 CSS 未定义的类 → `undefined`,静默无样式(改样式后核对类名齐全)。
 7. `HANDOFF_ID` 不等于包名 → bundle 加载后没有注册启动图等待的 factory,Web 汇总为 `import failed`。
 8. **把 live preset 行当"声明真值"读** → gate 会把自己摘掉的行当成用户禁用,切回 `eager` 也永远不再挂载。
-9. 直接用模块级 `livePresetMounts` 而不经 loader 解析 → 模块实例不同、返回空、更新无效。
+9. 依赖 `livePresetMounts` → 新版 registry 已删除导出，ESM 链接直接失败；使用 `src/preset-mounts.ts` 的公开接口适配。
 10. **写 preset 行绕过 `configEditor.edit`**(或再去写 `agent.cordis.yml`) → profile patch 没落盘,运行态也不会 reconcile,UI 开关不动。
 11. **在设置 schema 里校验 `tools` 值** → 一个写错的规则让整个命名空间回退,用户所有 MCP 设置静默失效。
 12. **把 `env`/`headers` 的值打进日志或错误消息** → 明文凭据落进会话与日志文件;导入的服务器恰恰都是带 token 的。

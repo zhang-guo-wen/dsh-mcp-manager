@@ -11,13 +11,14 @@
  * @module @guowenzhang/dsh-mcp-manager
  */
 
-import type { Context, Fiber } from '@deepseek-ai/cordis'
-import { livePresetMounts } from '@deepseek-ai/dsh-agent-preset-registry'
+import type { Context } from '@deepseek-ai/cordis'
 import { McpManager } from './mcp-remote.ts'
 import { parseMcpLoadingMode, registerMcpTools, resolveMcpClient } from './lazy-mcp.ts'
 import { ExternalMcpRegistry, type ScopeLookup } from './external-mcp.ts'
-import { createMcpPreloadGate, MCP_ROW_EVENTS, resolvePresetMounts, type GateMount } from './mcp-gate.ts'
+import { createMcpPreloadGate, MCP_ROW_EVENTS } from './mcp-gate.ts'
+import { createPresetMountReader, type PresetScopeLookup } from './preset-mounts.ts'
 import { MCP_CLIENT_MODULE } from './mcp-authoring.ts'
+import { AGENT_PRESET_MODULE } from './preset-source.ts'
 import {
   filterHidesAnything,
   NO_TOOL_FILTER,
@@ -77,10 +78,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // every request. The gate holds the composed rows to that second answer, and
   // the tool set is re-registered with the new mode on every commit.
   let mcpLoading = parseMcpLoadingMode(readSettings().loading)
-  const mountReader = await resolvePresetMounts(
-    ctx,
-    within => livePresetMounts(within as Fiber | undefined) as readonly GateMount[],
-  )
+  const loader = ctx.get('loader') as { internal?: { import(spec: string, base: string, options: object): Promise<unknown> } }
+  if (!loader.internal) throw new Error('mcp-manager: Harness module loader is unavailable')
+  const scopes = await loader.internal.import('@deepseek-ai/dsh-scope', ctx.baseUrl ?? import.meta.url, {}) as ScopeLookup & PresetScopeLookup
+  if (typeof scopes.scopeOf !== 'function' || typeof scopes.scopeChainOf !== 'function' || typeof scopes.createScope !== 'function') {
+    throw new Error('mcp-manager: Harness scope helpers are unavailable')
+  }
+  const mountReader = createPresetMountReader(ctx, scopes)
+  ctx.effect(() => () => { mountReader.dispose() }, 'mcp-manager: preset mount reader')
   const gate = createMcpPreloadGate(ctx, () => mcpLoading, mountReader, (message) => { ctx.logger.warn(message) })
   // The tool registration holds these closures rather than snapshots, so a
   // committed rule or description change applies to the next `mcp_load` and to
@@ -90,12 +95,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const readers = {
     filterFor: (key: string): McpToolFilter => readToolFilter(key),
     descriptionFor: (key: string): string | undefined => readSettings().descriptions[key],
-  }
-  const loader = ctx.get('loader') as { internal?: { import(spec: string, base: string, options: object): Promise<unknown> } }
-  if (!loader.internal) throw new Error('mcp-manager: Harness module loader is unavailable')
-  const scopes = await loader.internal.import('@deepseek-ai/dsh-scope', ctx.baseUrl ?? import.meta.url, {}) as ScopeLookup
-  if (typeof scopes.scopeOf !== 'function' || typeof scopes.scopeChainOf !== 'function') {
-    throw new Error('mcp-manager: Harness scope helpers are unavailable')
   }
   const external = new ExternalMcpRegistry(
     () => mcpLoading,
@@ -114,14 +113,37 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     },
     scopes,
   )
+  // Register the Remote service before any inventory refresh. Preset rows may
+  // depend on it, and activation-sensitive registry diagnostics are never read.
+  new McpManager(ctx, gate, mountReader, external, () => mcpLoading)
   let mcpTools = registerMcpTools(ctx, mcpLoading, gate, readers, external)
   ctx.effect(() => async () => { await external.dispose(async () => { await mcpTools.dispose(); gate.dispose() }) }, 'mcp-manager: mcp tools')
   // The gate's answer is what the inventory lists, so every reconcile is
   // followed by a refresh: the prompt section is served from a snapshot and
   // cannot await anything while the request is assembled.
-  const resync = (): void => { void gate.reconcile().then(() => mcpTools.refresh()) }
-  // A preset mounts its rows when a session first selects it and re-mounts them
-  // whenever the composition file changes; both come back through these events,
+  let syncing = false
+  let dirty = false
+  let stopped = false
+  ctx.effect(() => () => { stopped = true }, 'mcp-manager: row synchronization')
+  const resync = (): void => {
+    if (stopped) return
+    dirty = true
+    if (syncing) return
+    syncing = true
+    void (async () => {
+      try {
+        while (dirty && !stopped) {
+          dirty = false
+          await gate.reconcile()
+          await mcpTools.refresh()
+        }
+      } catch (error) {
+        ctx.logger.warn(`mcp-manager: row synchronization failed: ${String(error)}`)
+      } finally { syncing = false }
+    })()
+  }
+  // Presets activate when declared and publish another generation whenever
+  // their composition changes; both come back through these events,
   // which is what keeps the gate's answer true across a session's lifetime.
   // `agent-preset/selected` is emitted on the context without a declaration in
   // the Cordis event map, so the listener surface is stated here.
@@ -131,8 +153,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   for (const event of MCP_ROW_EVENTS) {
     ctx.effect(() => events.on(event, (...args) => {
       if (event === 'loader/entry-init') {
-        const entry = args[0] as { options?: { name?: string } } | undefined
-        if (entry?.options?.name !== MCP_CLIENT_MODULE) return
+        // Loader emits this before assigning parent/options. Observe on the
+        // next microtask, not synchronously against an empty entry.
+        queueMicrotask(() => { mountReader.observe(args[0]); resync() })
+        return
+      }
+      if (event === 'internal/status') {
+        const fiber = args[0] as { entry?: { options?: { name?: string } } } | undefined
+        const moduleName = fiber?.entry?.options?.name
+        if (moduleName !== MCP_CLIENT_MODULE && moduleName !== AGENT_PRESET_MODULE) return
       }
       resync()
     }), `mcp-manager: gate follows ${event}`)
@@ -190,11 +219,4 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }), 'mcp-manager: settings commits')
   readToolFilter = key => parseMcpToolFilter(readSettings().tools[key])
   warnFiltersWithoutEffect(readSettings())
-
-  // MCP authoring Remote: register the `mcpManager` Typert service so the
-  // browser half can mount it with `ctx.remote.$mount`. The service resolves
-  // the Loader lazily inside its methods, so it must be created unconditionally
-  // (a Loader-presence guard here would skip registration when the service is
-  // not yet ready and the client would 404 on every MCP mutation).
-  new McpManager(ctx, gate, mountReader, external, () => mcpLoading)
 }

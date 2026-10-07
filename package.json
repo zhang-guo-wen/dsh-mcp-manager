@@ -63,6 +63,7 @@
   "scripts": {
     "build": "tsdown -c tsdown.config.ts && node build-client.mjs",
     "test": "vitest run",
+    "test:harness": "npm run build && vitest run --config vitest.harness.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "peerDependencies": {
@@ -85,7 +86,6 @@
     "@deepseek-ai/dsh-scope": ">=0.1.7-0",
     "@deepseek-ai/dsh-tools": ">=0.1.7-0",
     "@deepseek-ai/dsh-typert-protocol": ">=0.1.7-0",
-    "@modelcontextprotocol/sdk": "*",
     "react": "*",
     "react-dom": "*"
   },
@@ -147,9 +147,6 @@
     "@deepseek-ai/dsh-typert-protocol": {
       "optional": true
     },
-    "@modelcontextprotocol/sdk": {
-      "optional": true
-    },
     "react": {
       "optional": true
     },
@@ -159,6 +156,7 @@
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.4",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "js-yaml": "^4.1.0"
   },
   "devDependencies": {
@@ -182,7 +180,6 @@
     "@deepseek-ai/dsh-scope": ">=0.1.7-0",
     "@deepseek-ai/dsh-tools": ">=0.1.7-0",
     "@deepseek-ai/dsh-typert-protocol": ">=0.1.7-0",
-    "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.5.0",
     "@types/react": "~18.3.1",

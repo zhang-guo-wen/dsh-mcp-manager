@@ -9,6 +9,7 @@ export default defineConfig({
   test: {
     root: import.meta.dirname,
     include: ['tests/**/*.spec.ts'],
+    exclude: ['tests/**/*.harness.spec.ts', '**/node_modules/**'],
     environment: 'node',
   },
 })

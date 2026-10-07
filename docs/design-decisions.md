@@ -27,6 +27,7 @@ kind: "package-reference"
 | D11 | 全局行写 Include 的文件 + `refresh()`，不走 Loader 写回 | Loader 写回会把带补丁的树拍平进用户的 `cordis.yml` |
 | D12 | 批量新增一次提交（`addMcps`） | 一次 preset 写入 = 该 preset 每台 MCP 重启一轮 |
 | D13 | 资源仓库 MCP 经内存接口交给管理器 | 保留资源管理器的数据所有权，同时让加载模式统一生效 |
+| D14 | 预设读取经公开 Loader/scope 接口，按代次保存声明 | 不依赖已移除导出，不等待激活，不把旧会话改成新声明 |
 
 ### D1 允许与进上下文分离
 
@@ -188,6 +189,15 @@ kind: "package-reference"
 - **作用域**：全局资源对所有 Agent 可见；Agent 资源只有在调用方 scope 链包含资源所属的 preset scope 时可见。Agent scope 不可辨认时拒绝托管，防止专属 MCP 泄漏给别的 Agent。
 - **切换**：交接前释放资源管理器旧连接。管理器更换定义时释放按需会话连接；切换加载方式时先回收旧载体再按新模式注册。管理器离线时资源管理器恢复原有直接加载。
 - **界面**：资源管理器的 MCP Tab 展示托管状态及当前模式；资源配置与密钥仍从该页维护。管理器的组合行编辑器不把内存定义写回用户配置。
+
+### D14 新注册表的预设代次适配（2026-10-07）
+
+- **结论**：移除顶层 `livePresetMounts` 导入。通过 `ctx.registry.values()` 的 live fibers 及 `entry.parent.tree` 定位 Loader 树；使用宿主内部解析得到的 `createScope` 创建短命、空的父 scope 探针，交给 `agentPresets.composedPreset` 读取身份，随即销毁。不读注册表私有 generations/bindings，不给真实 Agent 重组。
+- **代次**：gate 首次接触树时保存不含连接凭据的声明元数据，按每代自己的祖先 `disabled` 和 Loader `evaluate` 判断允许状态。恢复 `eager` 前等待旧 fiber 的卸载收尾，避免旧连接尚未关闭就挂新连接。root-local WeakMap / WeakRef 让 manager-only HMR 或关闭再启用不会把上一次抑制当成用户禁用；宿主树销毁后不保留强引用。模式作用于所有保留代次，清单与连接配置只对加入该代的 Agent 可见。
+- **非阻塞**：设置名册可以读未挂载声明；按需清单只能读已发布、带 scope 的代次。初始化、刷新和 `mcp_load` 不调用 `compositionInventory`，避免 `diagnostic → loader.await` 等待 manager 自身。未知或拒绝求值的 `!!js` 不授权加载。
+- **宿主准入**：初始声明快照来自经过宿主 compatibility preflight 的树，因此不撤销宿主已经拒绝的 MCP 行。全局 Include 行仍不被 gate 改写。
+- **被否决**：空挂载表静默降级（按需模式变常驻）；`inspectCompositions` 代替树（只给 detached 模块引用，无法摘行）；按模块名单猜 preset（同内容可以属于多个预设）；用最新 profile 声明控制旧代（破坏已有会话）；为 activation audit 加 timeout（等待环仍存在）。
+- **测试**：`npm test` 覆盖纯 allowance/gate；`npm run test:harness` 先重建实际分发产物，再对真实源码 Loader/registry/scope 验证导入、启动、pending injection、禁用矩阵、代次保留、manager 重载和作用域隔离。`DSH_HARNESS_ROOT` 可指定宿主 checkout。
 
 ## 先例：Claude 的 MCP 延迟加载
 

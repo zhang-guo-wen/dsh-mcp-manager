@@ -33,7 +33,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type { McpToolDefinitionOptions } from '@deepseek-ai/dsh-mcp-client'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { scopeOf } from '@deepseek-ai/dsh-scope'
+import { scopeChainOf, scopeOf } from '@deepseek-ai/dsh-scope'
 import { MCP_CLIENT_MODULE } from './mcp-authoring.ts'
 import {
   carrierFor,
@@ -46,7 +46,7 @@ import {
   type McpToolAdapter,
   type ToolRegistry,
 } from './mcp-carrier.ts'
-import { mcpEntryConfig, type McpEntryConfig } from './mcp-config.ts'
+import { mcpEntryConfig, specFromEntryConfig, type McpEntryConfig } from './mcp-config.ts'
 import type { McpPreloadGate } from './mcp-gate.ts'
 import { mcpRowKey } from './mcp-gate.ts'
 import { renderMcpInventory } from './mcp-inventory.ts'
@@ -84,6 +84,8 @@ interface McpRow {
   readonly key: string
   readonly scopeLabel: string
   readonly enabled: boolean
+  readonly presetScope?: object
+  readonly presetConfig?: unknown
   readonly externalConfig?: McpEntryConfig
   readonly externalScope?: object
   readonly externalKind?: 'global' | 'agent'
@@ -167,8 +169,8 @@ export async function resolveMcpClient(ctx: Context): Promise<McpClientModule> {
   return await import('@deepseek-ai/dsh-mcp-client') as McpClientModule
 }
 
-/** Every configured mcp-client row: Loader entries (global) plus each agent preset's composition rows. */
-async function listRows(ctx: Context, external?: ExternalMcpRegistry): Promise<McpRow[]> {
+/** Nonblocking declaration/status read: never calls the registry activation audit. */
+export function listMcpRows(ctx: Context, gate: McpPreloadGate, external?: ExternalMcpRegistry): McpRow[] {
   const rows: McpRow[] = []
   const loader = ctx.get('loader') as
     | { entries(): Iterable<{ id: string; disabled?: boolean; options: { name?: string; group?: boolean } }> }
@@ -185,32 +187,20 @@ async function listRows(ctx: Context, external?: ExternalMcpRegistry): Promise<M
       enabled: entry.disabled !== true,
     })
   }
-  const presets = ctx.get('agentPresets') as
-    | {
-      compositionInventory(): Promise<readonly {
-        readonly id: string
-        readonly rows: readonly { readonly entryId: string | null; readonly moduleName: string; readonly enabled: boolean | 'conditional' }[]
-      }[]>
-    }
-    | undefined
-  if (presets !== undefined) {
-    for (const preset of await presets.compositionInventory()) {
-      for (const row of preset.rows) {
-        if (row.moduleName !== MCP_CLIENT_MODULE) continue
-        const entryId = row.entryId ?? ''
-        const serverName = leafId(entryId)
-        const target: McpTarget = { scope: 'preset', agentPreset: preset.id }
-        rows.push({
-          target,
-          entryId,
-          serverName,
-          key: mcpRowKey(target, serverName),
-          scopeLabel: `preset ${preset.id}`,
-          enabled: row.enabled === true,
-        })
-      }
+  const revisions = gate.presetRows?.() ?? []
+  for (const preset of revisions) {
+    for (const row of preset.rows) {
+      const serverName = leafId(row.entryId)
+      const target: McpTarget = { scope: 'preset', agentPreset: preset.presetId }
+      rows.push({
+        target, entryId: row.entryId, serverName, key: mcpRowKey(target, serverName),
+        scopeLabel: `preset ${preset.presetId}`, enabled: row.allowed,
+        ...(preset.scope === undefined ? {} : { presetScope: preset.scope }), presetConfig: row.config,
+      })
     }
   }
+  // Unpublished/disabled presets remain visible in the settings roster, but
+  // cannot authorize a session load without a retained generation scope.
   for (const row of external?.rows() ?? []) rows.push({
     target: { scope: 'global' },
     entryId: row.owner,
@@ -232,6 +222,7 @@ async function describeRow(ctx: Context, row: McpRow): Promise<McpSpec> {
     | { describeMcp(request: { target: McpTarget; entryId: string }): Promise<{ spec: McpSpec }> }
     | undefined
   if (owner === undefined) throw new Error('mcp_load requires the mcpManager service')
+  if (row.presetConfig !== undefined) return specFromEntryConfig(row.presetConfig as McpEntryConfig)
   return (await owner.describeMcp({ target: row.target, entryId: row.entryId })).spec
 }
 
@@ -417,9 +408,11 @@ export function registerMcpTools(
    */
   const allowedRows = async (scope?: object): Promise<McpRow[]> => {
     await gate.reconcile()
-    return (await listRows(ctx, external)).filter(row =>
+    return listMcpRows(ctx, gate, external).filter(row =>
       row.externalConfig === undefined
-        ? (gate.stateFor(row.target, row.entryId)?.allowed ?? row.enabled)
+        ? row.enabled && (row.presetScope === undefined || scope !== undefined
+          && (external ? external.scopeDistance(row.presetScope, scope) < Number.MAX_SAFE_INTEGER
+            : scopeChainOf(scope).includes(row.presetScope)))
         : external?.visible({
           owner: row.entryId, serverName: row.serverName, config: row.externalConfig,
           scope: row.externalKind ?? 'global',
@@ -453,7 +446,11 @@ export function registerMcpTools(
     // Row descriptions are user text, not templates: `{{...}}` stays literal.
     interpolate: false,
     text: context => renderMcpInventory(inventoryRows.filter(row =>
-      row.externalConfig === undefined || row.externalKind === 'global'
+      row.presetScope !== undefined
+        ? context.scope !== undefined && (external
+          ? external.scopeDistance(row.presetScope, context.scope as object) < Number.MAX_SAFE_INTEGER
+          : scopeChainOf(context.scope as object).includes(row.presetScope))
+        : row.externalConfig === undefined || row.externalKind === 'global'
         || (context.scope !== undefined && external?.visible({
           owner: row.entryId, serverName: row.serverName, config: row.externalConfig!,
           scope: row.externalKind ?? 'global',
@@ -471,8 +468,8 @@ export function registerMcpTools(
   })
   const refresh = async (): Promise<void> => {
     await gate.reconcile()
-    inventoryRows = (await listRows(ctx, external)).filter(row =>
-      row.externalConfig !== undefined || (gate.stateFor(row.target, row.entryId)?.allowed ?? row.enabled),
+    inventoryRows = listMcpRows(ctx, gate, external).filter(row =>
+      row.externalConfig !== undefined || row.enabled,
     )
   }
 

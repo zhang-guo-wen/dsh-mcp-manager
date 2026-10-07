@@ -21,9 +21,10 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { isJsExpr, type EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
+import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { MCP_CLIENT_MODULE, presetLeafId } from './mcp-authoring.ts'
 import type { GateMount } from './mcp-gate.ts'
+import { declaredMcpRows } from './mcp-allowance.ts'
 import { listPresetDeclarations } from './preset-source.ts'
 import type { ListMcpsResult, McpFiberPhase, McpRosterPreset, McpRosterRow } from './types.ts'
 
@@ -87,51 +88,6 @@ function isMcpRow(options: EntryOptions): boolean {
 }
 
 /**
- * Enablement of one declared row, following the Loader's own reading: any
- * literal `true` disables, anything else enables, and a `!!js` expression stays
- * `conditional` because only a mount can evaluate it.
- * @param contributions - the row's own `disabled` node and its groups', outermost first.
- * @returns true (enabled), false (disabled), or `conditional`.
- */
-function declaredEnablement(...contributions: readonly unknown[]): boolean | 'conditional' {
-  let conditional = false
-  for (const value of contributions) {
-    if (isJsExpr(value)) conditional = true
-    else if (Boolean(value)) return false
-  }
-  return conditional ? 'conditional' : true
-}
-
-/**
- * Collect the MCP rows of one declared composition, descending into groups the
- * way the Loader does: a group's `disabled` is inherited by its children.
- * @param rows - declared child rows at the current level.
- * @param inherited - `disabled` nodes contributed by owning groups.
- * @param found - accumulator receiving one source per MCP row.
- */
-function declaredMcpRows(
-  rows: readonly EntryOptions[],
-  inherited: readonly unknown[],
-  found: RosterRowSource[],
-): void {
-  for (const row of rows) {
-    if (row.group === true) {
-      const children = Array.isArray(row.config) ? row.config as EntryOptions[] : []
-      declaredMcpRows(children, [...inherited, row.disabled], found)
-      continue
-    }
-    if (!isMcpRow(row)) continue
-    found.push({
-      entryId: typeof row.id === 'string' && row.id !== '' ? row.id : null,
-      options: row,
-      live: false,
-      enabled: declaredEnablement(...inherited, row.disabled),
-      state: undefined,
-    })
-  }
-}
-
-/**
  * Read every MCP row the running composition declares, plus the planes a
  * mutation can target.
  *
@@ -172,7 +128,10 @@ export function readMcpRoster(
     const mount = mounts.find(candidate => candidate.presetId === declaration.id)
     const sources: RosterRowSource[] = []
     if (mount === undefined) {
-      declaredMcpRows(declaration.rows, [], sources)
+      for (const row of declaredMcpRows(declaration.rows, MCP_CLIENT_MODULE)) sources.push({
+        entryId: typeof row.options.id === 'string' && row.options.id !== '' ? row.options.id : null,
+        options: row.options, live: false, enabled: row.enabled, state: undefined,
+      })
     } else {
       for (const row of mount.tree.entries()) {
         if (!isMcpRow(row.options)) continue

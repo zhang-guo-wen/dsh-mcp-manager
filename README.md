@@ -7,7 +7,7 @@ kind: "plugin-readme"
 
 [中文](README.zh.md) | English
 
-MCP server management for DeepSeek Harness: author composition rows, choose when an allowed server loads, and filter which of its tools a session may call
+Manage MCP servers from DeepSeek Harness settings: add or edit connections, choose how Agent-preset servers load, select the tools available to the model, and batch-import an existing Claude Code setup.
 
 ## Background: DeepSeek Harness
 
@@ -19,23 +19,20 @@ MCP servers were hand-written composition rows whose whole tool set always sat i
 
 ## Screenshots
 
-### 设置 → MCP 管理 — loading modes and server rows
+### MCP management
 
 ![MCP settings](docs/images/mcp-settings.png)
 
-The three loading modes and the configured servers, each row carrying its plane, live status, Edit, and enable switch.
+Manage configured servers, check their status, edit their configuration, and enable or disable them. Agent-preset servers support three loading modes; global rows always load.
 
-### 新增 MCP — the JSON configuration and the tool picker
+### Configure a server and import Claude MCP settings
 
-![MCP editor](docs/images/mcp-editor.png)
+[![Left: MCP configuration and tool selection; right: importing Claude MCP settings](docs/images/mcp-editor-import.png)](docs/images/mcp-editor-import.png)
 
-A server's JSON configuration, and the tools it publishes: every one is ticked by default, and an unticked method never reaches the model.
+- **Left — configuration and tools:** paste the server's JSON configuration and select the tools the model may use. Tool filtering applies to Agent-preset rows under `dynamic` / `lazy`, not to global rows or `eager` mode.
+- **Right — Claude import:** scan existing Claude Code settings, select servers, and import them together without modifying the source files. The destination follows the active **Global / Agent** tab; on the Agent tab, choose a preset.
 
-### 导入 Claude MCP 配置 — pick the servers to bring over
-
-![Import Claude MCP configuration](docs/images/mcp-import-claude.png)
-
-Every MCP server found in the Claude Code configuration files; the ticked ones are imported as global rows.
+The two dialogs are shown side by side; click the image for full size. These screenshots show an earlier UI; the current editor has separate Configuration / Tools tabs, and import is no longer limited to global rows.
 
 ## Install
 
@@ -46,6 +43,12 @@ npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager@^1.0.
 Prerequisites: `pnpm` on `PATH` (`dsh plugin` forwards to it), and Node.js ≥22.18 or ≥24.2 — on v23.x the `dsh` CLI exits silently and installs nothing ([discussion #6273](https://github.com/deepseek-ai/deepseek-harness/discussions/6273)). The `@^1.0.1` floor is deliberate: pnpm 11 withholds versions younger than 24 hours, and a bare package name resolves to 1.0.0, which lacks the `@deepseek-ai/schemastery` dependency.
 
 From the npm registry: <https://www.npmjs.com/package/@guowenzhang/dsh-mcp-manager> — restart the host afterwards; local checkouts, git sources and troubleshooting are in [AGENTS.md](AGENTS.md).
+
+## Host compatibility
+
+The local source adapts to the registry without `livePresetMounts` (tested against DSH `0.2.1-alpha.1`) while preserving on-demand loading, retained preset revisions, and session isolation. The plugin declares its MCP SDK as a runtime dependency instead of relying on the newer host to carry the old SDK. This fix has not been published to npm; the npm command above does not include unpublished local changes.
+
+After rebuilding a local `link:` installation, restart the host and refresh the browser; a page refresh alone does not replace loaded Host code. If the host rejects an older `@deepseek-ai/dsh-mcp-client` as incompatible, the management page still lists its rows as disabled. Update that client separately; this plugin never bypasses host compatibility checks.
 
 ## Usage
 
@@ -67,7 +70,7 @@ Repository MCPs supplied by `dsh-resource-manager` use these modes too, includin
 
 ### Tool filters
 
-Settings → MCP 管理 → a row's **Edit** → the **Tools** tab lists every method the server publishes, all checked. Unchecking one hides it: it never enters context, and calling it is refused. Filtering does not change the cost model — the loading mode decides that.
+Settings → MCP management → an Agent-preset row's **Edit** → **Tools** lists the server's tools, all checked by default. Under `dynamic` / `lazy`, unchecking a tool prevents the next load from exposing it to the model. Global rows show this tab as read-only, and `eager` ignores filters.
 
 For wildcards, write the rules yourself in the `mcp-manager` settings under `tools`, keyed by the row key (`preset:<preset id>:<serverName>`):
 
@@ -81,7 +84,7 @@ Rules are read at the next `mcp_load`; an already-loaded server keeps the tools 
 
 ### Importing a Claude Code configuration
 
-**设置 → MCP 管理 → 导入 Claude 配置** reads the files Claude Code writes and offers every server it finds as a checklist; ticked servers are imported as **global** rows.
+**Settings → MCP management → Import Claude configuration** scans Claude Code's configuration files and lists the servers for selection. Selected servers are imported into the active **Global / Agent** tab; on the Agent tab, choose the destination preset.
 
 | Source | File |
 |---|---|
@@ -90,15 +93,15 @@ Rules are read at the next `mcp_load`; an already-loaded server keeps the tools 
 | Claude Code settings | `~/.claude/settings.json`, `settings.local.json` |
 | Project scope | `<project root>/.mcp.json` |
 
-Nothing is modified — the scan only reads — and each server is imported on its own, so one failure does not stop the rest. `env` / `headers` come along so the server can connect, but the dialog shows only those keys' names.
+Source files are read-only. Selected servers are validated individually and accepted rows are saved in one batch; one rejected row does not stop the rest. `env` / `headers` are preserved so the server can connect, but the dialog shows only the key names.
 
 ## Notes and caveats
 
 - **Enabling a server still waits on the child process** (`npx -y …` / `uvx …`, usually 1–3 seconds). The UI never blocks; installing the server as a direct executable shortens this noticeably.
 - **Switching to the edit dialog's Tools tab connects to that server once** (to list its tools), with the same 1–3 second cost; renaming a row only never connects.
 - **Global-plane rows ignore the loading mode**: they always mount.
-- **A preset's first mount starts and then kills each server once.** On-demand loading works by unmounting rows at runtime, which cannot beat the child process's spawn, so the first session to use a preset after a host restart pays one short start-up.
-- **Import reads Claude Code and the project `.mcp.json` only.** Cursor, Cline, Roo, and VS Code configuration files are not scanned, and an import always targets the global plane; move a row into a preset afterwards if you want it on-demand.
+- **A preset's first mount starts and then kills each server once.** Runtime unmounting cannot beat the child process's spawn. Newer hosts activate presets on declaration registration, so this cost can occur during host startup or configuration rebuilds.
+- **Import reads Claude Code and the project `.mcp.json` only.** Cursor, Cline, Roo, and VS Code configuration files are not scanned. For on-demand loading and tool filtering, import from the Agent tab into a preset.
 - **A filtered row under `dynamic` gets no server instructions and no resource tools.** The harness's mcp-client provides both, and this row registers through the plugin's own carrier instead. The tools themselves — argument binding, results, image projection — match a native mount.
 
 ## License

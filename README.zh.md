@@ -7,7 +7,7 @@ kind: "plugin-readme"
 
 中文 | [English](README.md)
 
-DeepSeek Harness 的 MCP 服务管理：编辑组合配置行、决定被允许的服务何时加载，并过滤会话可调用的工具
+在 DeepSeek Harness 设置页集中管理 MCP：新增或编辑连接、选择 Agent 预设的加载方式、筛选模型可用的工具，并批量导入已有的 Claude Code 配置。
 
 ## 背景：DeepSeek Harness
 
@@ -19,23 +19,20 @@ MCP 服务器原本只能手写组合行、整套工具常驻上下文，已有�
 
 ## 截图
 
-### 设置 → MCP 管理 —— 加载方式与服务器行
+### MCP 管理页
 
 ![MCP 管理页](docs/images/mcp-settings.png)
 
-三种加载方式，以及已配置的服务器：每行带所属平面、实时状态、「编辑」与启用开关。
+集中查看服务器状态、编辑连接配置、切换启用开关。Agent 预设中的服务器支持三种加载方式；全局行始终加载。
 
-### 新增 MCP —— JSON 配置与工具勾选
+### 配置服务器与导入 Claude MCP
 
-![MCP 编辑弹窗](docs/images/mcp-editor.png)
+[![左：MCP 配置与工具勾选；右：导入 Claude MCP 配置](docs/images/mcp-editor-import.png)](docs/images/mcp-editor-import.png)
 
-一台服务器的 JSON 配置，以及它发布的工具列表：默认全部勾选，取消勾选的方法不会交给模型。
+- **左图：配置与工具勾选**。粘贴服务器的 JSON 配置，选择允许模型使用的工具。工具过滤仅对 Agent 预设行的 `dynamic` / `lazy` 模式生效，全局行与 `eager` 模式不支持过滤。
+- **右图：导入 Claude 配置**。扫描已有的 Claude Code 配置，勾选服务器后批量导入，不修改来源文件。导入位置跟随当前的 **全局 / Agent** 标签；在 Agent 标签下可选择目标预设。
 
-### 导入 Claude MCP 配置 —— 勾选要带过来的服务器
-
-![导入 Claude MCP 配置](docs/images/mcp-import-claude.png)
-
-从 Claude Code 的配置文件里读到的每一台 MCP 服务器，勾中的导入为全局行。
+两张弹窗横向并排展示，点击图片可查看原尺寸。截图为早期界面示例：当前编辑器已将「配置 / 工具列表」分为两个标签，导入也不再限定为全局行。
 
 ## 安装
 
@@ -46,6 +43,12 @@ npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager@^1.0.
 前置条件：`pnpm` 在 `PATH` 上（`dsh plugin` 会把参数转发给它），Node.js 用 ≥22.18 或 ≥24.2 —— v23.x 下 `dsh` CLI 会静默退出、什么都不装（[讨论 #6273](https://github.com/deepseek-ai/deepseek-harness/discussions/6273)）。`@^1.0.1` 这个下限是有意的：pnpm 11 默认拒绝发布不满 24 小时的新版本，只写包名会解析到 1.0.0，而它缺少 `@deepseek-ai/schemastery` 依赖。
 
 来自 npm 官方源：<https://www.npmjs.com/package/@guowenzhang/dsh-mcp-manager>。装完重启宿主；本地目录开发安装、git 源与排查见 [AGENTS.md](AGENTS.md)。
+
+## 宿主兼容性
+
+本地源码已适配移除 `livePresetMounts` 的新注册表（验证版本：DSH `0.2.1-alpha.1`），并保留按需加载、预设代次和会话隔离。运行时 MCP SDK 由本插件依赖提供，不要求新版宿主继续携带旧 SDK。此修复尚未发布到 npm，以上 npm 命令不会取得本地未发布的修改。
+
+本地 `link:` 安装重建后需要重启宿主，再刷新浏览器；只刷新页面不会替换已经加载的 Host 代码。如果宿主将旧版 `@deepseek-ai/dsh-mcp-client` 行判为不兼容，管理页会保留这些行并显示禁用状态；需要另行更新该客户端，插件不会绕过宿主的兼容性检查。
 
 ## 用法
 
@@ -67,7 +70,7 @@ npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager@^1.0.
 
 ### 工具过滤
 
-设置 → MCP 管理 → 某一行的 **编辑** → **工具列表** tab，列出这台服务器发布的所有方法，默认全勾。取消勾选即隐藏：不进上下文，调用也会被拒绝。过滤不改变代价模型——那由加载方式决定。
+设置 → MCP 管理 → Agent 预设行的 **编辑** → **工具列表**，列出服务器发布的工具，默认全勾。`dynamic` / `lazy` 下取消勾选，下一次加载时就不会向模型提供该工具。全局行的工具列表只读，`eager` 模式忽略过滤规则。
 
 要写通配规则就自己写，规则在 `mcp-manager` 设置的 `tools` 字段里，键是行标识（`preset:<preset id>:<serverName>`）：
 
@@ -81,7 +84,7 @@ npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager@^1.0.
 
 ### 导入 Claude Code 的 MCP 配置
 
-**设置 → MCP 管理 → 导入 Claude 配置** 读取 Claude Code 自己写的那几个文件，把找到的服务器列成勾选清单，勾中的导入为**全局**行。
+**设置 → MCP 管理 → 导入 Claude 配置** 扫描 Claude Code 的配置文件，将找到的服务器列成勾选清单。勾选后导入当前的 **全局 / Agent** 标签；在 Agent 标签下选择目标预设。
 
 | 来源 | 文件 |
 |---|---|
@@ -90,15 +93,15 @@ npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager@^1.0.
 | Claude Code 设置 | `~/.claude/settings.json`、`settings.local.json` |
 | 项目级 | `<项目根>/.mcp.json` |
 
-扫描只读，不改动任何来源文件；每台服务器各自导入，一台失败不影响其余。`env` / `headers` 会一起带过去（否则连不上），但弹窗只显示这些键的名字。
+扫描只读，不改动来源文件；选中的服务器逐行校验，通过的行一次批量保存，一行被拒不影响其余。`env` / `headers` 会一起保留，确保服务器可连接；弹窗只显示键名。
 
 ## 注意事项
 
 - **启用 MCP 仍需等子进程自身启动**（`npx -y …` / `uvx …` 通常 1–3 秒）。界面不会卡住；把服务器装成直接可执行文件能明显缩短这个时间。
 - **切到编辑弹窗的「工具列表」tab 会连一次该服务器**（为了列出工具），同样是 1–3 秒；只改描述就不会连。
 - **全局平面的行不受加载模式管辖**：它们总是挂载。
-- **预设首次挂载时会有一次"启动后又杀掉"**：按需加载靠运行时摘行实现，抢在子进程启动之前拦不住，所以每次宿主重启后第一次使用某个 preset 时会有这一下。
-- **导入只读 Claude Code 与项目的 `.mcp.json`**：不扫 Cursor / Cline / Roo / VS Code 的配置文件；且导入一律落在全局平面，想要按需加载请在导入后把该行移进 preset。
+- **预设首次挂载时会有一次"启动后又杀掉"**：按需加载靠运行时摘行实现，抢在子进程启动之前拦不住；新版宿主在声明注册时激活预设，因此这次启动可能出现在宿主启动或配置重建时。
+- **导入只读 Claude Code 与项目的 `.mcp.json`**：不扫 Cursor / Cline / Roo / VS Code 的配置文件。需要按需加载与工具过滤时，请从 Agent 标签导入到预设。
 - **`dynamic` 下配了规则的行拿不到服务器 instructions 与资源工具**：这两样由 harness 的 mcp-client 提供，而这一行走的是插件自己的注册通道。工具本身的参数绑定、结果与图片呈现与原生挂载一致。
 
 ## 许可
