@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-mcp-manager",
+    "description": "Manage MCP servers, choose when allowed servers load, and filter the tools available to a session."
+  }
+}

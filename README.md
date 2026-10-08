@@ -13,6 +13,8 @@ Adding MCP servers to DeepSeek Harness is inconvenient, and loading every config
 
 This plugin adds server creation, editing, and Claude Code configuration import to the settings page. With on-demand loading, the initial context contains only MCP names and descriptions; the model enables servers as needed during a session. Tool filtering lets you load only the tools you select.
 
+In the plugin list, display names and descriptions follow the Harness language setting in English or Chinese (English is the default fallback); English names use the package name without its npm scope, Chinese names describe the purpose, and installation still uses the unchanged real package name.
+
 ## Screenshots
 
 **MCP management**
