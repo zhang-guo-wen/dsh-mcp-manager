@@ -111,7 +111,13 @@ export async function apply(ctx: Context): Promise<void> {
   const readRoster = (): Promise<ListMcpsResult> => unwrapRemote(() => mcpMgr().listMcps({}))
   const mcps = async (): Promise<McpRosterView> => {
     const roster = await readRoster()
-    return { servers: mapMcpServers(roster), globalWritable: roster.globalWritable }
+    return {
+      servers: mapMcpServers(roster),
+      // The same read carries the preset names, so the agent plane's filter
+      // labels its options without asking the Host a second time.
+      presets: roster.presets.map(preset => ({ id: preset.id, name: preset.name ?? preset.id })),
+      globalWritable: roster.globalWritable,
+    }
   }
   const authoring: McpAuthoringActions = {
     addMcp: request => unwrapRemote(() => mcpMgr().addMcp(request)),

@@ -54,6 +54,34 @@
   gap: 12px;
 }
 
+/* The roster's title and the agent-plane filter read as one control group:
+   both describe the list underneath, and the toolbar must keep them together
+   when the section is narrower than its reading column. */
+.mcpToolbarLead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* A compact select, unlike the editor's full-width form field: it shares the
+   row with the title and the plane's action buttons. */
+.mcpFilterSelect {
+  box-sizing: border-box;
+  max-width: 240px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12.5px;
+}
+
+.mcpFilterSelect:focus {
+  border-color: var(--dsw-alias-state-business-primary);
+  outline: none;
+}
+
 /* ---- MCP loading mode ---- */
 .modeBlock {
   display: flex;

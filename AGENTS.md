@@ -20,6 +20,10 @@
   这样别人可以直接从 git 安装。改完源码**记得 `npm run build` 并把 `lib/` 一起提交**。
 - `cordis.patch.yml` —— 把插件行插入组合的 bundle 层。
 - `src/remote.ts` —— 手写的客户端 `TYPERT_REMOTE` 贡献对象。
+- `src/client/agent-filter.ts` —— Agent 平面按预设过滤的纯规则(可选值、收窄后的行)。它只认 roster 行的
+  `scope` / `presetId` 两个字段,不 import 任何 harness 包,所以 vitest 能直接跑 —— 而 `settings-controller.ts`
+  会经 `@deepseek-ai/dsh-client-store` 拉进 `zustand`,在 Node 里加载即报 `Cannot find package 'zustand'`。
+  所以过滤规则放这里,不要挪回 controller。
 - `docs/design-decisions.md` —— 加载相关决策的参考页(为什么这样设计、否决过什么、Claude 先例对照)。
   改加载模式、闸门、工具过滤的语义时先读它,并把新决策补进去。
 - `docs/competitive-landscape.md` —— 同类插件对比与功能路线图(社区三簇做法、逐维度差距、P0-P3 待办)。
@@ -313,12 +317,13 @@ mcp-manager:
 
 ### 设置页分区(src/client/McpSection.tsx)
 
-名册按**行所在的平面**分成两个 tab(`SegmentedTabs`,来自 `@deepseek-ai/dsh-client-ui-primitives`;编辑弹窗的两个 tab 用同一个原语),标签带该平面的行数,默认停在 Agent 平面(能写、能按需加载的那个)。四条约束:
+名册按**行所在的平面**分成两个 tab(`SegmentedTabs`,来自 `@deepseek-ai/dsh-client-ui-primitives`;编辑弹窗的两个 tab 用同一个原语),标签带该平面的行数,默认停在 Agent 平面(能写、能按需加载的那个)。五条约束:
 
 1. **两个面板都渲染并 `hidden`**,CSS 里有 `.planePanel[hidden]{display:none}` —— 面板自己设了 `display`,UA 的 `[hidden]` 压不过作者样式;`SegmentedTabs` 的 `aria-controls` 也因此始终指向存在的元素。
 2. **全局 tab 必须写明"全部加载"**:全局行由组合直接挂载,不受加载模式影响,工具过滤对它们也不生效(见「预加载闸门」)。
 3. **加载方式选择器只在 Agent tab 出现**:它决定的是 preset 行的进上下文时机,放在全局 tab 会暗示它对全局行有效。
 4. **tab 决定写入到哪,弹窗里不再选范围**(`McpEditor` 的 `plane` 入参,`editorTarget()`):全局 tab → 全局行;Agent tab → 该 tab 里的预设,弹窗只保留"Agent 预设"下拉以便多预设时挑一个,没有可写预设时禁用保存并说明。**编辑**时范围来自被编辑行自身,所以只读显示那一行,不给下拉。两个 tab 的"新增/导入"与行操作在**该平面不可用时**禁用(全局:没有唯一的 file-backed Include;原因放按钮 `title`),不要放进弹窗再失败。
+5. **Agent 平面按预设过滤名册**:预设一多,54 行那种列表就没法看,所以「已加载的 MCP 服务器」那一行有一个下拉(只在 Agent tab 出现,与加载方式选择器同理)。**选项由当前名册推出**(`mcpAgentFilterOptions`,只列真正持有行的预设、按行数降序),不用另一个 RPC 拉预设列表;预设名在同一次 `listMcps` 里带着,不必再读一次。`全部 Agent 预设`用空串当哨兵值(预设 id 非空),下拉的 `value` 与列表共用同一个校验后的值 —— 名册刷新后选中项消失时回退到"全部",不会留下一个空列表,也不会出现"下拉显示 A、列表渲染 B"。标签上的计数始终是平面总数,不是过滤后的行数。规则在 `src/client/agent-filter.ts`(纯函数),回归测试见 `tests/agent-filter.spec.ts`。
 
 ### 工具选择 UI(src/client/McpEditor.tsx)
 

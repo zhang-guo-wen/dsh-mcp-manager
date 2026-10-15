@@ -42,6 +42,7 @@ See [AGENTS.md](https://github.com/zhang-guo-wen/dsh-mcp-manager/blob/master/AGE
 ## Notes
 
 - **For profile composition rows, on-demand loading and tool filtering apply to Agent-preset MCP servers**. Global composition rows always load, and Load all (`eager`) does not support filtering either. Add or import servers into an Agent preset to save context. Repository MCP servers handed over by Resource Manager can also load on demand, including global resources.
+- **Narrow a long Agent list by preset**: on the Agent tab, the dropdown beside "Loaded MCP servers" filters the list by agent preset and starts on all presets; the tab counts always show the plane's total.
 - **Dynamic insert (`dynamic`, default)** adds tools to the current session when needed. **Lazy loading (`lazy`)** calls tools through a fixed proxy without changing the tool list. The model uses `mcp_load` / `mcp_unload` to load and unload servers on demand.
 - Tool filters take effect on the next load; already-loaded servers are not updated automatically. Loading a server or listing its tools requires a connection and may wait for a child process to start. A preset's first activation may also briefly start and stop its MCP servers.
 - Import reads only Claude Code and project MCP configurations without modifying the source files. Filtered servers in `dynamic` mode do not provide server instructions or resource tools.

@@ -9,6 +9,9 @@ export const NS = 'settings.mcpManager'
 const zh = {
   'nav': 'MCP 管理',
   'mcp.subtitle': '已加载的 MCP 服务器',
+  'mcp.filter.label': '按 Agent 预设过滤',
+  'mcp.filter.all': '全部 Agent 预设（{n}）',
+  'mcp.filter.option': '{name}（{n}）',
   'mcp.plane.label': 'MCP 行来源',
   'mcp.plane.tab': '{label}（{n}）',
   'mcp.plane.global': '全局',
@@ -133,6 +136,9 @@ export type McpSectionKey = keyof typeof zh
 const en: Record<McpSectionKey, string> = {
   'nav': 'MCP Management',
   'mcp.subtitle': 'Loaded MCP servers',
+  'mcp.filter.label': 'Filter by agent preset',
+  'mcp.filter.all': 'All agent presets ({n})',
+  'mcp.filter.option': '{name} ({n})',
   'mcp.plane.label': 'MCP row source',
   'mcp.plane.tab': '{label} ({n})',
   'mcp.plane.global': 'Global',

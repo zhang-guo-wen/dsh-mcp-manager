@@ -23,10 +23,12 @@ import {
   type McpLoadingOption,
   type McpPhase,
   type McpPlane,
+  type McpPresetOption,
   type McpRosterView,
   type McpSectionFace,
   type McpServer,
 } from './settings-controller.ts'
+import { MCP_ALL_PRESETS, mcpAgentFilterOptions, narrowMcpRows } from './agent-filter.ts'
 import type { McpSectionKey } from './locales.ts'
 import css from './McpSection.module.css'
 
@@ -46,6 +48,8 @@ type McpView =
   | {
     readonly status: 'ready'
     readonly servers: readonly McpServer[]
+    /** Presets the same read declared, for the agent plane's filter labels. */
+    readonly presets: readonly McpPresetOption[]
     /** Row keys the gate holds unmounted, so an enabled row reads as deferred. */
     readonly suppressed: ReadonlySet<string>
     /** Whether the global plane has a file-backed Include to write. */
@@ -234,12 +238,21 @@ export function McpSection(props: McpSectionProps): ReactNode {
   // first; a deployment that configured only global rows sees their count on the
   // other tab.
   const [plane, setPlane] = useState<McpPlane>('agent')
+  // Which agent preset the roster list is narrowed to; `MCP_ALL_PRESETS` shows
+  // every preset, which is what a first visit needs.
+  const [agentFilter, setAgentFilter] = useState<string>(MCP_ALL_PRESETS)
   const planeTabId = useId()
   const disabled = !state.available || !state.writable
   const servers = mcpView.status === 'ready' ? mcpView.servers : []
+  const presetNames = mcpView.status === 'ready' ? mcpView.presets : []
   const globalServers = servers.filter(server => server.scope === 'global')
-  const agentServers = servers.filter(server => server.scope === 'preset')
-  const planeServers = plane === 'global' ? globalServers : agentServers
+  const agentServers = narrowMcpRows(servers, MCP_ALL_PRESETS)
+  // Only presets that own rows are offered, so each option leads to a non-empty
+  // list; a filter value whose rows disappeared falls back to every preset
+  // rather than leaving the tab blank.
+  const presetFilter = mcpAgentFilterOptions(servers, presetNames)
+  const activePreset = presetFilter.some(option => option.id === agentFilter) ? agentFilter : MCP_ALL_PRESETS
+  const planeServers = plane === 'global' ? globalServers : narrowMcpRows(servers, activePreset)
   // A global write edits the Include's own file, so a patched profile writes
   // fine; only a composition that mounts no single file-backed Include cannot
   // address one, and then the global tab's actions are closed.
@@ -270,6 +283,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
           setMcpView({
             status: 'ready',
             servers: roster.servers,
+            presets: roster.presets,
             suppressed: new Set(suppressed),
             globalWritable: roster.globalWritable,
             refreshing: false,
@@ -424,7 +438,28 @@ export function McpSection(props: McpSectionProps): ReactNode {
           />
         </div>
         <div className={css.mcpToolbar}>
-          <p className={css.mcpSub}>{t('mcp.subtitle')}</p>
+          <div className={css.mcpToolbarLead}>
+            <p className={css.mcpSub}>{t('mcp.subtitle')}</p>
+            {/* The filter narrows the list it sits next to, so it belongs on the
+                list's own row — and only on the plane it can narrow. */}
+            {plane === 'agent' && presetFilter.length > 0 ? (
+              <select
+                className={css.mcpFilterSelect}
+                value={activePreset}
+                aria-label={t('mcp.filter.label')}
+                onChange={(event) => { setAgentFilter(event.currentTarget.value) }}
+              >
+                <option value={MCP_ALL_PRESETS}>
+                  {t('mcp.filter.all').replace('{n}', String(agentServers.length))}
+                </option>
+                {presetFilter.map(option => (
+                  <option key={option.id} value={option.id}>
+                    {t('mcp.filter.option').replace('{name}', option.name).replace('{n}', String(option.count))}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+          </div>
           <span className={css.mcpActions}>
             <Button
               variant="outline"

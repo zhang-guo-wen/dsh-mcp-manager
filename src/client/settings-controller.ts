@@ -131,6 +131,11 @@ export interface McpRosterView {
   /** Every MCP row, global plane plus each preset composition, undeduplicated. */
   readonly servers: readonly McpServer[]
   /**
+   * Every preset the same read declared, so the agent plane's filter can label
+   * its options without a second roster read.
+   */
+  readonly presets: readonly McpPresetOption[]
+  /**
    * Whether the global plane accepts writes, which needs one file-backed root
    * Include. Its patch layers are not a bar: a global write edits that file and
    * reloads the Include, leaving the layers in place.
