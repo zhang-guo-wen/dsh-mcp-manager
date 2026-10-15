@@ -15,6 +15,7 @@ import {
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import { findPresetDeclaration, writePresetRows, type PresetDeclaration } from './preset-source.ts'
 import { assertServerName, mcpEntryConfig, specFromEntryConfig, type McpEntryConfig } from './mcp-config.ts'
+import { describeMcpConfigIssues, diagnoseRowConfig } from './mcp-diagnostics.ts'
 import { scanClaudeMcp } from './claude-import.ts'
 import { connectLazy } from './lazy-mcp.ts'
 import { readMcpRoster } from './mcp-roster.ts'
@@ -557,6 +558,7 @@ export class McpManager extends TypertRemoteService {
         throw invalid(target, 'the MCP row has no valid serverName')
       }
       const rowId = entry.options.id
+      if (!request.disabled) assertRunnableConfig(target, entry.options.config)
       const written = await this.writeGlobalOne(include, target, {
         id: rowId, name: MCP_CLIENT_MODULE, disabled: request.disabled,
       }, (fileRows) => {
@@ -571,6 +573,7 @@ export class McpManager extends TypertRemoteService {
     await writePresetRows(this.ctx, preset, { id: entryId, name: MCP_CLIENT_MODULE, disabled: request.disabled }, (rows) => {
       const row = this.presetMcpRow(rows, entryId, target)
       serverName = serverNameOf(row) ?? entryId
+      if (!request.disabled) assertRunnableConfig(target, row.config)
     }, this.warnPatch)
     return { target, entryId, serverName, disabled: request.disabled }
   }
@@ -786,6 +789,24 @@ function configFromSpec(spec: McpSpec, serverName: string, target: McpTarget) {
   } catch (cause) {
     const reason = String(cause)
     throw invalid(target, reason)
+  }
+}
+
+/**
+ * Refuse to switch a row on while its connection config cannot start.
+ *
+ * The settings page closes the same door in the UI, but a row can also be
+ * enabled by hand-editing the profile patch, so the check runs Host-side where
+ * every path passes. Disabling is always allowed: a row that cannot start still
+ * has to be removable.
+ * @param target - the row being enabled, for the error's scope.
+ * @param config - the row's composed `mcp-client` config.
+ * @throws an MCP Remote error naming every gap.
+ */
+function assertRunnableConfig(target: McpTarget, config: unknown): void {
+  const issues = diagnoseRowConfig(config)
+  if (issues.length > 0) {
+    throw invalid(target, `this MCP row is not configured and cannot be enabled: ${describeMcpConfigIssues(issues)}`)
   }
 }
 

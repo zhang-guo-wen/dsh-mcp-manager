@@ -252,8 +252,41 @@ tools to this session, and `mcp_unload` with the same name to release it again.
    同一代次由选用它的会话共享。要消除它需要 harness 侧让 `mcp-client` 在 apply 早期
    就知道自己被抑制,插件做不到。
 
-同名坑:**`@Remote` 方法的形参名必须是 `request`**。网关按方法签名推导描述符,写成 `_request` 会让调用方收到
+同名坑:**`@Remote` 方法的形参名必须是 `request`**。网关按方法签名推导 descriptors,写成 `_request` 会让调用方收到
 `args fields do not match the descriptor: unexpected "request"`,而客户端如果吞掉这个错误,表现就是"开关没反应"。
+
+第 5 条性质:**配置不完整的行也不挂载,和"模式不预加载"共用同一条摘行路径。**
+`allowed` 是 `declaredRow.enabled === true && diagnoseRowConfig(declaredRow.options.config).length === 0`
+(见「配置诊断」)。区别在语义与 UI:模式造成的未挂载不该显示成状态,配置造成的必须显示且不许开启。
+全局行不受这条影响(性质 1:不写声明),它们的配置问题只由名册标记。
+
+### 配置诊断(src/mcp-diagnostics.ts、src/mcp-variable-refs.ts)
+
+**「按需可用」不是状态,「配置不完整」才是。** 早期版本在 `dynamic`/`lazy` 下给每一行都标「待加载」——
+那是模式的必然结果,等于给整张列表加噪声,而真正需要用户动手的"少填了东西"被淹没。现在只有配置不完整
+才显示标记(`mcp.status.unconfigured`),并按下面的口径拦截。
+
+判定三类,纯函数、环境由参数传入,所以 vitest 直接跑:
+
+| kind | 判定 | 保存时 | 之后 |
+|---|---|---|---|
+| `missing-command` / `missing-url` | `command` 或 `url` 为空 | **拒绝** | —— |
+| `unsupported-config` | transport 无法识别,或声明连 spec 都解析不出 | **拒绝** | —— |
+| `unreachable-variable` | `${env:NAME}` 在本进程解析不出(未设或空白) | 接受 | 保持「未配置」,不许开启 |
+| `empty-credential` | credential 形状的 `env`/`headers` 键存在但值为空 | 接受 | 保持「未配置」,不许开启 |
+
+- **`${env:NAME}` 是 `dsh-resource-manager` 已有的拼写**,不要发明第二套:`resolveMcpVariables` 用它解析资源
+  MCP,而且**变量缺失的资源 MCP 根本不会交接**给本插件。本插件只**诊断**这个引用,不解析、不管理变量。
+- **两条输入形状都要认**:preset 声明里是 Claude spec(`command`/`url`,常无 `type`),全局行与托管行是归一化
+  的 `mcp-client` config(`transport`)。`diagnoseRowConfig` 用 `specFromObject` 归一再判定;`specFromObject`
+  的推断规则只有一份(见「MCP JSON 兼容」)。`diagnoseMcpConfig` 只管已归一的 config。
+- **三个拦截点**:gate 不挂载 preset 行;`mcp_load` 在 `describeRow` 之后报出原因;`mcp-remote.ts` 的
+  `assertRunnableConfig` 在**开启**开关时拒绝(`disable` 永远允许,否则起不来的行会无法移除)。
+- **浏览器没有环境**:编辑器只把结构性错误挡在保存前,变量类问题由 Host 在名册读回时判定;保存成功但尚未完整
+  时,弹窗用 `mcp.form.pendingConfig` 说明该行为何还不能开启。所以 `diagnoseMcpSpec` 的 `env` 是**必填参数**,
+  客户端显式传 `{}`;`mcp-variable-refs.ts` 不引用 `process.env`,才能安全打进浏览器包。
+- **全局行只能标记、不能摘**:全局行的树是 file-backed `Include`(性质 1),闸门动它会把状态写回用户配置。
+  所以全局行的配置问题表现为「未配置」+ 开关不可开,而不是运行时摘除。
 
 ### 名册读取(src/mcp-roster.ts)
 
@@ -265,8 +298,12 @@ tools to this session, and `mcp_unload` with the same name to release it again.
 `readMcpRoster(ctx, mountReader)` 只读**声明 + live fiber**,不 await 任何激活:
 
 1. **全局行**从 `ctx.loader.entries()` 取,`enabled` 用 `!entry.disabled`(`!!js` 由 Loader 求值)。
-2. **preset 行**优先取 live mount 树的 entry(同样 `!entry.disabled` + `entry.fiber.state`),preset 没挂载时
-   退回声明,并按 Loader 的规则继承 group 的 `disabled`;`!!js` 在挂载外无法求值,一律报 `conditional` 而不是猜。
+2. **preset 行**优先取 live mount 树的 entry(拿 `entry.fiber.state`),**但 `enabled` 取该代次声明**,
+   不是 live 行的 `!entry.disabled`。preset 没挂载时退回声明,并按 Loader 的规则继承 group 的 `disabled`;
+   `!!js` 在挂载外无法求值,一律报 `conditional` 而不是猜。
+   **live 行的 `disabled` 是 gate 自己的产物** —— `dynamic`/`lazy` 下 gate 真的会把每个 allowed 行设成 disabled,
+   把它当成用户意图会让整个 preset 平面显示成"已禁用"(实测回归:宿主未重启 + 新 client 时整列变「已禁用」)。
+   声明才是"用户允不允许"的答案;live 只提供 fiber 相位。
 3. **同一批返回 `globalWritable`**:设置页必须在用户填完表单之前就说明全局平面能否写入。判据只有一条 ——
    组合里是否恰好挂着一个 file-backed Include(补丁层不再是障碍,见下)。
 
@@ -470,6 +507,13 @@ client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏�
 23. **顶层静态 import 的宿主包没写进 manifest** → profile 只装插件的 `dependencies`,其余裸模块名靠宿主安装闭包供给;
     闭包里没有它(或版本线不同)就是导入失败,而**终端只显示 `failed to import`**、根因在 `$DSH_HOME/logs/startup-*.log`。
     本地 `link:` 安装会照跑(源码目录自己的 `node_modules` 恰好有),所以本地能跑不代表声明齐了(见「插件契约(Cordis)」)。
+24. **让浏览器去判断变量能不能解析,或在浏览器包里引用 `process.env`** → 浏览器没有环境,`${env:NAME}` 会被一律判成
+    未配置,用户永远存不下这样的行;所以变量判定归 Host(名册读回时),编辑弹窗只挡结构性错误(见「配置诊断」)。
+25. **给"模式造成的未挂载"加状态标记** → `dynamic`/`lazy` 下每一行都会被标上,等于给整张列表加噪声,真正的
+    「未配置」被淹没(见「配置诊断」)。
+26. **把 preset live 行的 `disabled` 当成"用户禁用"** → gate 在 `dynamic`/`lazy` 下真的会把每个 allowed 行设成
+    disabled,于是整个 preset 平面显示成「已禁用」,开关也全灭。名册的 `enabled` 必须取声明(见「名册读取」)。
+    实际踩过一次:宿主没重启、浏览器已加载新 client,于是整列 54 行变「已禁用」。
 
 ## 配置
 
@@ -565,6 +609,9 @@ npm run typecheck   # tsc --noEmit -p tsconfig.json
 | D10 | 名册读声明 + live fiber,不等任何行的激活 | 等激活等于把 MCP 子进程启动时间(实测 7.5–23s)算进设置页 |
 | D11 | 全局行写 Include 的文件 + `refresh()`,不走 Loader 写回 | Loader 写回会把带补丁的树拍平进用户的 `cordis.yml` |
 | D12 | 批量新增一次提交(`addMcps`) | 一次 preset 写入 = 该 preset 每台 MCP 重启一轮 |
+| D13 | 资源仓库 MCP 经内存接口交给管理器 | 保留资源管理器的数据所有权,同时让加载模式统一生效 |
+| D14 | 预设读取经公开 Loader/scope 接口,按代次保存声明 | 不依赖已移除导出,不等待激活,不把旧会话改成新声明 |
+| D15 | 配置不完整是独立状态,与加载模式分开 | 「按需可用」是模式的结果,不是用户要处理的状态 |
 
 实现侧的理由与踩坑在本文各节(「延迟加载」「载体选择」「按需清单」「预加载闸门」「工具过滤」);同类插件对比与
 功能路线图归 [docs/competitive-landscape.md](docs/competitive-landscape.md)。

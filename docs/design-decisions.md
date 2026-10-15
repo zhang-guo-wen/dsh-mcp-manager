@@ -28,6 +28,7 @@ kind: "package-reference"
 | D12 | 批量新增一次提交（`addMcps`） | 一次 preset 写入 = 该 preset 每台 MCP 重启一轮 |
 | D13 | 资源仓库 MCP 经内存接口交给管理器 | 保留资源管理器的数据所有权，同时让加载模式统一生效 |
 | D14 | 预设读取经公开 Loader/scope 接口，按代次保存声明 | 不依赖已移除导出，不等待激活，不把旧会话改成新声明 |
+| D15 | 配置不完整是独立状态，与加载模式分开 | 「按需可用」是模式的结果，不是用户要处理的状态 |
 
 ### D1 允许与进上下文分离
 
@@ -198,6 +199,23 @@ kind: "package-reference"
 - **宿主准入**：初始声明快照来自经过宿主 compatibility preflight 的树，因此不撤销宿主已经拒绝的 MCP 行。全局 Include 行仍不被 gate 改写。
 - **被否决**：空挂载表静默降级（按需模式变常驻）；`inspectCompositions` 代替树（只给 detached 模块引用，无法摘行）；按模块名单猜 preset（同内容可以属于多个预设）；用最新 profile 声明控制旧代（破坏已有会话）；为 activation audit 加 timeout（等待环仍存在）。
 - **测试**：`npm test` 覆盖纯 allowance/gate；`npm run test:harness` 先重建实际分发产物，再对真实源码 Loader/registry/scope 验证导入、启动、pending injection、禁用矩阵、代次保留、manager 重载和作用域隔离。`DSH_HARNESS_ROOT` 可指定宿主 checkout。
+
+### D15 配置不完整是独立状态，不是加载模式（2026-10-13）
+
+- **结论**：名册行新增一个**配置诊断**状态（`McpConfigIssue`），与 gate 的"摘行"状态彻底分开。不完整配置只有三类：`command`/`url` 为空、`${env:NAME}` 在本进程解析不出、credential 形状的 `env`/`headers` 值留空。命中任一即：设置页显示「未配置」并**禁止把开关打开**；gate 不挂载该 preset 行（即使模式是 `eager`）；`mcp_load` 直接报出原因。
+- **理由**：用户要求"预加载状态不显示，只有未配置时显示"。原先 `dynamic`/`lazy` 下**每一行**都写着「待加载」，那是模式的必然结果、不是任何状态，等于给整张列表加噪声；而真正需要用户动手的"少填了东西"反而被淹没。两者混在一个标签里，UI 无法表达"我允许用它，它也确实能跑，只是现在没进上下文"与"我允许用它，但它根本起不来"的区别。
+- **判定口径**：
+  - `unsupported-config`：transport 无法识别，或声明连 spec 都解析不出。**保存时直接拒绝**。
+  - `unresolved-variable` / `empty-credential`：保存时接受（Host 的环境、或用户后续补的密钥都可能让它在下次启动前变好），但行保持「未配置」且不可开启。
+  - 浏览器里的编辑器**不能**判断变量是否解析（它没有环境），所以它只把结构性错误挡在保存前；变量类问题交给名册读回时由 Host 判定，保存成功时弹窗给一句提示说明该行为何还不能开启。
+- **`${env:NAME}` 复用资源管理器的语法**：`dsh-resource-manager` 已用同一拼写解析它自己的 MCP 定义，且**未配置变量的行不交接**给本插件。这里不发明第二套语法，配置里写 `"TOKEN": "${env:TOKEN}"` 在两边含义一致。本插件不解析变量、只做诊断与拦截（变量管理不在本次范围内）。
+- **被否决**：
+  - 把"配置不完整"编码进行上的 `disabled`。那会篡改用户的授权意图：变量在宿主环境里补上后，行不会自己恢复。
+  - 为了省一个状态而在 `dynamic`/`lazy` 下继续显示「待加载」。它不指向任何可执行动作。
+  - 全局行也由 gate 摘掉。全局行的树是 file-backed `Include`，`write()` 会把闸门状态写回用户配置（见 D5、D11），所以全局行只能"标记 + 不许开启"，不能"运行时摘除"。
+  - 完全放开保存不做检查，或反过来把未解析变量也挡在保存前。前者让配错的行静默存在，后者让用户在浏览器里永远存不下一行等着 Host 填变量的配置。
+- **实现**：[`src/mcp-diagnostics.ts`](../src/mcp-diagnostics.ts)（纯函数，环境由参数传入）、[`src/mcp-variable-refs.ts`](../src/mcp-variable-refs.ts)（不引用环境的扫描规则，可进浏览器包）、[`src/mcp-gate.ts`](../src/mcp-gate.ts)、[`src/mcp-remote.ts`](../src/mcp-remote.ts) 的 `assertRunnableConfig`、[`src/client/McpSection.tsx`](../src/client/McpSection.tsx) 的 `statusOf`。
+- **测试**：`tests/mcp-diagnostics.spec.ts` 覆盖三类判定与两种输入形状（Claude spec / 归一化 config）；`tests/mcp-gate.spec.ts` 断言 `eager` 下配置不完整的行仍被摘掉。
 
 ## 先例：Claude 的 MCP 延迟加载
 

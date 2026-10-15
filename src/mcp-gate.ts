@@ -28,6 +28,7 @@ import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { MCP_CLIENT_MODULE, presetLeafId } from './mcp-authoring.ts'
 import { declaredMcpRows } from './mcp-allowance.ts'
+import { diagnoseRowConfig } from './mcp-diagnostics.ts'
 import { findPresetDeclaration } from './preset-source.ts'
 import type { McpLoadingMode } from './lazy-mcp.ts'
 import type { McpTarget } from './types.ts'
@@ -153,7 +154,12 @@ export function createMcpPreloadGate(
         // whose declaration moved under us) keeps its composed state and is
         // never driven.
         if (declaredRow === undefined) continue
-        const allowed = declaredRow.enabled === true
+        // A row the user enabled is still not runnable while its connection
+        // configuration is incomplete (blank command/url, unresolved
+        // `${env:NAME}`): starting it would only fail, so it is held exactly
+        // like a row the loading mode does not preload. The settings page reads
+        // the same diagnostics and marks it "not configured".
+        const allowed = declaredRow.enabled === true && diagnoseRowConfig(declaredRow.options.config).length === 0
         revisionRows.push({ entryId: leaf, allowed, config: entry.options.config })
         const wantMounted = allowed && mode === 'eager'
         // Loader's disabled update starts disposal but does not join it. Never

@@ -7,7 +7,7 @@ const ctx = { root: { fiber: {} } } as unknown as Context
 const target = { scope: 'preset', agentPreset: 'standard' } as const
 
 function fixture(allowed = true) {
-  const options = { id: 'row', name: MCP, disabled: !allowed }
+  const options = { id: 'row', name: MCP, disabled: !allowed, config: { transport: 'stdio', command: 'node' } }
   const declaration = [{ ...options }]
   const entry = {
     options, disabled: !allowed, fiber: allowed ? { state: 2 } : undefined,
@@ -72,5 +72,28 @@ describe('runtime-only MCP gate', () => {
     await gate.reconcile()
     expect(gate.stateFor(target, 'row')).toBeUndefined()
     expect(gate.presetRows!()).toEqual([])
+  })
+
+  it('holds a row whose configuration cannot start, even though the user enabled it', async () => {
+    const { entry, mount } = fixture(true)
+    const [row] = mount.declaration as { config: unknown }[]
+    row!.config = { transport: 'stdio', serverName: 'row', command: 'node', args: [], env: { TOKEN: '${env:DSH_GATE_SPEC_ABSENT}' }, cwd: '' }
+    const gate = createMcpPreloadGate(ctx, () => 'eager', () => [mount], vi.fn())
+    await gate.reconcile()
+    // `eager` would mount it, but the unresolved variable keeps it out: the
+    // marker the settings page shows and the unmount come from one decision.
+    expect(gate.stateFor(target, 'row')).toEqual({ allowed: false, suppressed: false })
+    expect(entry.fiber?.state).toBe(4)
+    expect(gate.presetRows!()[0]?.rows[0]?.allowed).toBe(false)
+  })
+
+  it('holds a row whose command is blank', async () => {
+    const { entry, mount } = fixture(true)
+    const [row] = mount.declaration as { config: unknown }[]
+    row!.config = { transport: 'stdio', serverName: 'row', command: '', args: [], env: {}, cwd: '' }
+    const gate = createMcpPreloadGate(ctx, () => 'eager', () => [mount], vi.fn())
+    await gate.reconcile()
+    expect(gate.stateFor(target, 'row')?.allowed).toBe(false)
+    expect(entry.fiber?.state).toBe(4)
   })
 })

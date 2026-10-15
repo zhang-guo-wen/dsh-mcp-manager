@@ -14,6 +14,7 @@ import { Button, SegmentedTabs, StateDot, Switch } from '@deepseek-ai/dsh-client
 import type { StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AddMcpRequest, EditMcpRequest } from '../types.ts'
+import { describeMcpConfigIssues } from '../mcp-diagnostics.ts'
 import { toolRuleEntries } from '../mcp-tool-filter.ts'
 import { McpEditor, type McpEditorMode, type McpEditorRequest } from './McpEditor.tsx'
 import { ClaudeImportDialog } from './ClaudeImportDialog.tsx'
@@ -60,21 +61,19 @@ type McpView =
 
 /** Non-empty fiber-phase → localized status key. */
 const PHASE_LABEL = {
-  pending: 'mcp.status.pending',
   loading: 'mcp.status.loading',
   active: 'mcp.status.active',
   failed: 'mcp.status.failed',
   unloading: 'mcp.status.unloading',
-} as const satisfies Record<NonNullable<McpPhase>, McpSectionKey>
+} as const satisfies Record<Exclude<NonNullable<McpPhase>, 'pending'>, McpSectionKey>
 
 /** Non-empty fiber-phase → state-dot semantic. */
 const PHASE_DOT = {
-  pending: 'idle',
   loading: 'ongoing',
   active: 'done',
   failed: 'error',
   unloading: 'ongoing',
-} as const satisfies Record<NonNullable<McpPhase>, StateDotState>
+} as const satisfies Record<Exclude<NonNullable<McpPhase>, 'pending'>, StateDotState>
 
 /** MCP loading mode → localized option name. */
 const MODE_LABEL = {
@@ -90,18 +89,30 @@ const MODE_DESC = {
   lazy: 'mcp.mode.lazy.desc',
 } as const satisfies Record<McpLoadingOption, McpSectionKey>
 
-/** Resolve one MCP row's displayed status label and dot. */
-function statusOf(server: McpServer, suppressed: boolean, t: Translate): { label: string; dot: StateDotState } {
-  // A row the gate holds unmounted is still one the user enabled: the loading
-  // mode, not the user, keeps it out of the request.
-  if (server.enabled === false) {
-    return suppressed
-      ? { label: t('mcp.status.deferred'), dot: 'idle' }
-      : { label: t('mcp.status.disabled'), dot: 'idle' }
+/**
+ * Resolve one MCP row's displayed status label and dot, or undefined when the
+ * row has nothing to report.
+ *
+ * An allowed row that the loading mode keeps unmounted is NOT a state: under
+ * `dynamic`/`lazy` that is simply what every allowed row looks like, so
+ * reporting it would put a badge on the whole list and mean nothing. What the
+ * list still has to show is the one condition that stops a row from starting —
+ * an incomplete connection config — and the life-cycle phases a user can act on.
+ */
+function statusOf(server: McpServer, t: Translate): { label: string; dot: StateDotState } | undefined {
+  // A configuration gap outranks enablement: a row the user enabled but that
+  // cannot start is exactly the case this marker exists for.
+  const configIssue = server.configIssue ?? []
+  if (configIssue.length > 0) {
+    return { label: t('mcp.status.unconfigured'), dot: 'warning' }
   }
+  if (server.enabled === false) return { label: t('mcp.status.disabled'), dot: 'idle' }
   if (server.enabled === 'conditional') return { label: t('mcp.status.conditional'), dot: 'warning' }
-  if (server.fiberPhase === null) return { label: t('mcp.status.configured'), dot: 'idle' }
-  return { label: t(PHASE_LABEL[server.fiberPhase]), dot: PHASE_DOT[server.fiberPhase] }
+  const phase = server.fiberPhase
+  // No fiber and a pending fiber both mean "not running right now", which is an
+  // ordinary resting state rather than something to annotate.
+  if (phase === null || phase === 'pending') return undefined
+  return { label: t(PHASE_LABEL[phase]), dot: PHASE_DOT[phase] }
 }
 
 /**
@@ -147,7 +158,16 @@ function McpLoadingPicker({ value, disabled, onPick, t }: {
 function McpRow({ server, description, suppressed, pending, onEditDescription, onEdit, onToggleDisabled, actionsDisabled, t }: {
   readonly server: McpServer
   readonly description: string
-  /** The gate holds this allowed row unmounted because the mode does not preload. */
+  /**
+   * The gate holds this row unmounted because the mode does not preload.
+   *
+   * A fallback only: the roster now reports the preset row's own declared
+   * enablement, so `server.enabled === true` already means "the user allows
+   * this" whether or not the row is mounted. This stays because a page can be
+   * running an older bundle than the Host it talks to, and then the composed
+   * flag is the only way to tell "the mode holds it" from "the user turned it
+   * off".
+   */
   readonly suppressed: boolean
   readonly pending: 'enabling' | 'disabling' | null
   readonly onEditDescription: (value: string) => void
@@ -162,15 +182,25 @@ function McpRow({ server, description, suppressed, pending, onEditDescription, o
   // A pending toggle shows the intended target and a transient label, so the
   // row reacts the instant it is clicked instead of waiting on the child MCP
   // process to start (or stop).
+  const configIssue = server.configIssue ?? []
+  const unconfigured = configIssue.length > 0
   const status = pending === 'enabling'
     ? { label: t('mcp.status.starting'), dot: 'warning' as StateDotState }
     : pending === 'disabling'
       ? { label: t('mcp.status.stopping'), dot: 'warning' as StateDotState }
-      : statusOf(server, suppressed, t)
-  const checked = pending === 'enabling'
-    ? true
-    : pending === 'disabling' ? false : server.enabled !== false || suppressed
-  const disabledNow = server.enabled === false && !suppressed
+      : statusOf(server, t)
+  // The Host's own enablement answer wins over the gate's bookkeeping; the
+  // suppression set only decides when the answer is the composed flag.
+  const allowed = server.enabled !== false || suppressed
+  const checked = pending === 'enabling' ? true : pending === 'disabling' ? false : allowed
+  const disabledNow = !allowed
+  // Switching a row on is what starts it, so an incomplete config closes that
+  // direction; switching one off stays available, since a row already on must
+  // remain removable.
+  const cannotEnable = unconfigured && !checked && pending === null
+  const switchTitle = cannotEnable
+    ? `${t('mcp.status.unconfigured')}: ${describeMcpConfigIssues(configIssue)}`
+    : t('mcp.status.disabled')
   const [draft, setDraft] = useState<string | null>(null)
   const value = draft ?? description
   return (
@@ -188,10 +218,10 @@ function McpRow({ server, description, suppressed, pending, onEditDescription, o
       </div>
       <div className={css.mcpRight}>
         <span className={css.badge}>{scope}</span>
-        <span className={css.status}>
+        {status === undefined ? null : <span className={css.status}>
           <StateDot state={status.dot} />
           {status.label}
-        </span>
+        </span>}
         <span className={css.mcpActions}>
           <button
             type="button"
@@ -206,8 +236,8 @@ function McpRow({ server, description, suppressed, pending, onEditDescription, o
               checked={checked}
               onChange={onToggleDisabled}
               label={disabledNow ? t('mcp.enable') : t('mcp.disable')}
-              disabled={actionsDisabled || pending !== null}
-              title={t('mcp.status.disabled')}
+              disabled={actionsDisabled || pending !== null || cannotEnable}
+              title={switchTitle}
             />
           ) : null}
         </span>

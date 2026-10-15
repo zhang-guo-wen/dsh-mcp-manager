@@ -12,6 +12,8 @@ import type {
   McpToolRow,
 } from '../types.ts'
 import { admits, parseMcpToolFilter } from '../mcp-tool-filter.ts'
+import { mcpEntryConfig } from '../mcp-config.ts'
+import { isBlockingConfigIssue, describeMcpConfigIssues, diagnoseMcpSpec } from '../mcp-diagnostics.ts'
 import { flattenSpec, parseSpecText } from '../mcp-spec.ts'
 import type { McpSectionKey } from './locales.ts'
 import type { McpPlane, McpPresetOption, McpServer } from './settings-controller.ts'
@@ -99,6 +101,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
   const [description, setDescription] = useState(descriptionInitial)
   const [json, setJson] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
+  const [configNotice, setConfigNotice] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [tools, setTools] = useState<readonly McpToolRow[] | null>(null)
   const [hiddenTools, setHiddenTools] = useState<ReadonlySet<string>>(() => new Set<string>())
@@ -176,6 +179,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
     if (!open) return
     let current = true
     setLocalError(null)
+    setConfigNotice(null)
     setTab('config')
     setPresetId(server?.scope === 'preset' ? server.presetId ?? '' : '')
     setTitle(server?.serverName ?? '')
@@ -220,6 +224,22 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       const serverName = (title.trim() !== '' ? title.trim() : parsed.serverName ?? '').trim()
       if (serverName === '') throw new Error(t('mcp.form.required'))
       const spec = parsed.spec
+      // Two levels of check, because the dialog runs in a browser that has no
+      // environment of its own. A structural gap — a blank `command`/`url`, a
+      // spec that cannot be read at all — can never work, so the save is
+      // refused here (the builder's own error is the message). What only the
+      // Host can answer — whether `${env:NAME}` resolves — is left to the
+      // roster read, which marks the row "not configured" and keeps it from
+      // starting; blocking the save would make such a row impossible to author
+      // from a browser even when the variable is set on the Host.
+      mcpEntryConfig(spec, serverName)
+      const configIssue = diagnoseMcpSpec(spec, {})
+      const blocking = configIssue.filter(isBlockingConfigIssue)
+      if (blocking.length > 0) throw new Error(describeMcpConfigIssues(blocking))
+      // Accepted, but the row will read as "not configured" and refuse to start
+      // until the Host can resolve it: say so on the spot instead of leaving the
+      // author to wonder why the row's switch will not turn on.
+      setConfigNotice(configIssue.length === 0 ? null : t('mcp.form.pendingConfig'))
       const target = editorTarget(mode, server, plane, presetId)
       if (target === undefined) throw new Error(t('mcp.form.noPreset'))
       const entryId = mode === 'edit' ? server?.entryId ?? '' : undefined
@@ -404,6 +424,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
           ) : null}
         </div>
         {localError !== null ? <p className={css.formError} role="alert">{localError}</p> : null}
+        {configNotice !== null ? <p className={css.mcpNotice} role="status">{configNotice}</p> : null}
         {error !== null ? <p className={css.formError} role="alert">{error}</p> : null}
       </div>
     </Modal>

@@ -47,6 +47,7 @@ import {
   type ToolRegistry,
 } from './mcp-carrier.ts'
 import { mcpEntryConfig, specFromEntryConfig, type McpEntryConfig } from './mcp-config.ts'
+import { describeMcpConfigIssues, diagnoseRowConfig } from './mcp-diagnostics.ts'
 import type { McpPreloadGate } from './mcp-gate.ts'
 import { mcpRowKey } from './mcp-gate.ts'
 import { renderMcpInventory } from './mcp-inventory.ts'
@@ -594,6 +595,16 @@ export function registerMcpTools(
         )
       }
       const config = row.externalConfig ?? mcpEntryConfig(await describeRow(ctx, row), serverName)
+      // A row with an incomplete connection config cannot start, so the load
+      // fails here with the actual reason instead of letting the client report
+      // "connection failed". The settings page marks the same row as not
+      // configured, and the gate holds it unmounted.
+      const configIssue = diagnoseRowConfig(config)
+      if (configIssue.length > 0) {
+        throw new Error(
+          `MCP server "${serverName}" is not configured and cannot start: ${describeMcpConfigIssues(configIssue)}`,
+        )
+      }
       const filter = readers.filterFor(row.key)
       const carrier = carrierFor(onDemandMode, filter)
       if (carrier === undefined) throw new Error('mcp_load is not registered under the "eager" loading mode')

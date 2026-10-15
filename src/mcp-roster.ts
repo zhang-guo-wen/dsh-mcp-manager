@@ -25,6 +25,7 @@ import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { MCP_CLIENT_MODULE, presetLeafId } from './mcp-authoring.ts'
 import type { GateMount } from './mcp-gate.ts'
 import { declaredMcpRows } from './mcp-allowance.ts'
+import { diagnoseRowConfig } from './mcp-diagnostics.ts'
 import { listPresetDeclarations } from './preset-source.ts'
 import type { ListMcpsResult, McpFiberPhase, McpRosterPreset, McpRosterRow } from './types.ts'
 
@@ -74,11 +75,13 @@ function phaseOf(state: number | undefined): McpFiberPhase {
 
 /** Project one source row onto the row the settings section renders. */
 function rosterRow(source: RosterRowSource): McpRosterRow {
+  const configIssue = diagnoseRowConfig(source.options.config)
   return {
     entryId: source.entryId,
     moduleName: source.options.name,
     enabled: source.enabled,
     fiberPhase: source.live ? phaseOf(source.state) : null,
+    ...configIssue.length === 0 ? {} : { configIssue },
   }
 }
 
@@ -133,13 +136,24 @@ export function readMcpRoster(
         options: row.options, live: false, enabled: row.enabled, state: undefined,
       })
     } else {
+      // Enablement comes from the DECLARATION here too, not from the live tree.
+      // The live tree's flag is the gate's own artifact under `dynamic`/`lazy`:
+      // the gate really does set `disabled` on every allowed row it holds
+      // unmounted. Reporting that as the row's state makes the whole preset
+      // plane read as "disabled" whenever the loading mode is not `eager`.
       for (const row of mount.tree.entries()) {
         if (!isMcpRow(row.options)) continue
+        const leaf = presetLeafId(row.options.id)
+        const declaredRow = declaredMcpRows(
+          declaration.rows,
+          MCP_CLIENT_MODULE,
+          row.evaluate?.bind(row),
+        ).find(candidate => presetLeafId(candidate.options.id) === leaf)
         sources.push({
-          entryId: presetLeafId(row.options.id),
+          entryId: leaf,
           options: row.options,
           live: true,
-          enabled: !row.disabled,
+          enabled: declaredRow?.enabled ?? !row.disabled,
           state: row.fiber?.state,
         })
       }

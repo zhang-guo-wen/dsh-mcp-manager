@@ -24,6 +24,7 @@ import type {
   ListMcpToolsRequest,
   ListMcpToolsResult,
   ListMcpsResult,
+  McpConfigIssue,
   McpFiberPhase,
   McpMutationResult,
   ScanClaudeMcpRequest,
@@ -79,6 +80,15 @@ export interface McpServer {
   enabled: boolean | 'conditional'
   /** Root-fiber phase when live, otherwise null. */
   fiberPhase: McpPhase
+  /**
+   * Why this row cannot start as configured, when it cannot: a blank
+   * `command`/`url`, an unresolved `${env:NAME}`, or an empty credential field.
+   *
+   * Independent of {@link fiberPhase}: a row can be enabled, wanted, and still
+   * unable to start. The section marks such a row "not configured" and refuses
+   * to switch it on.
+   */
+  configIssue?: readonly McpConfigIssue[]
 }
 
 /** The fields this plugin persists for the MCP management surface. */
@@ -216,6 +226,7 @@ export function mapMcpServers(roster: ListMcpsResult): readonly McpServer[] {
       presetId: undefined,
       enabled: entry.enabled,
       fiberPhase: entry.fiberPhase,
+      ...entry.configIssue === undefined ? {} : { configIssue: entry.configIssue },
     })
   }
   for (const preset of roster.presets) {
@@ -227,6 +238,7 @@ export function mapMcpServers(roster: ListMcpsResult): readonly McpServer[] {
         presetId: preset.id,
         enabled: row.enabled,
         fiberPhase: row.fiberPhase,
+        ...row.configIssue === undefined ? {} : { configIssue: row.configIssue },
       })
     }
   }

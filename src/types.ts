@@ -28,6 +28,34 @@ export type McpTarget =
   | { readonly scope: 'global' }
   | { readonly scope: 'preset'; readonly agentPreset: string }
 
+/**
+ * Why one row's connection configuration cannot start as written.
+ *
+ * Declared here rather than in the diagnostics module so the browser half can
+ * carry it without importing host-side code.
+ */
+export type McpConfigIssueKind =
+  /** The transport is closed but no `command` was supplied. */
+  | 'missing-command'
+  /** The transport is open but no `url` was supplied. */
+  | 'missing-url'
+  /** A `${env:NAME}` placeholder names a variable that is unset or blank. */
+  | 'unreachable-variable'
+  /** A credential-shaped field is present but empty. */
+  | 'empty-credential'
+  /** The row config is not an object this plugin can drive. */
+  | 'unsupported-config'
+
+/** One configuration gap, in the terms the settings page and the model see. */
+export interface McpConfigIssue {
+  /** Stable kind, for callers that branch rather than print. */
+  readonly kind: McpConfigIssueKind
+  /** Human-readable reason, already formatted for display. */
+  readonly reason: string
+  /** Variable or field names involved, when the kind carries them. */
+  readonly names?: readonly string[]
+}
+
 /** Request to append one MCP client row. */
 export interface AddMcpRequest {
   /** Composition that receives the row. */
@@ -191,6 +219,14 @@ export interface McpRosterRow {
   readonly enabled: boolean | 'conditional'
   /** Root-fiber phase, null when the row currently owns no fiber. */
   readonly fiberPhase: McpFiberPhase
+  /**
+   * Why this row's connection configuration cannot start, when it cannot.
+   *
+   * Omitted for a runnable row, so the common case adds nothing to the wire.
+   * This is what the settings page marks as "not configured": a configuration
+   * gap, unlike the preload gate's live/unmounted state, is not a loading mode.
+   */
+  readonly configIssue?: readonly McpConfigIssue[]
 }
 
 /** One agent preset that can own MCP rows. */

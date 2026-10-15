@@ -124,6 +124,44 @@ describe('readMcpRoster', () => {
     }])
   })
 
+  it('reports a mounted row by its declaration, not by the gate\'s own disabled flag', () => {
+    // Under `dynamic`/`lazy` the gate really does set `disabled` on every
+    // allowed row it holds unmounted, so the live flag cannot answer "does the
+    // user allow this?". Reading it here made the whole preset plane render as
+    // "disabled"; the declaration is the answer.
+    const ctx = contextWith([], [{
+      id: 'preset-standard',
+      name: AGENT_PRESET,
+      config: { id: 'standard', plugins: [{ id: 'held', name: MCP_CLIENT }] },
+    }])
+    const held = {
+      options: { id: 'held', name: MCP_CLIENT, config: { transport: 'stdio', serverName: 'held', command: 'node' } },
+      disabled: true,
+      fiber: { state: 4 },
+    }
+
+    expect(readMcpRoster(ctx, () => [mountOf(held)]).presets).toEqual([{
+      id: 'standard',
+      rows: [{ entryId: 'held', moduleName: MCP_CLIENT, enabled: true, fiberPhase: null }],
+    }])
+  })
+
+  it('still reports a row the declaration disables', () => {
+    const ctx = contextWith([], [{
+      id: 'preset-standard',
+      name: AGENT_PRESET,
+      config: { id: 'standard', plugins: [{ id: 'off', name: MCP_CLIENT, disabled: true }] },
+    }])
+    const off = {
+      options: { id: 'off', name: MCP_CLIENT, config: { transport: 'stdio', serverName: 'off', command: 'node' } },
+      disabled: true,
+    }
+
+    expect(readMcpRoster(ctx, () => [mountOf(off)]).presets[0]?.rows).toEqual([
+      { entryId: 'off', moduleName: MCP_CLIENT, enabled: false, fiberPhase: null },
+    ])
+  })
+
   it('reports the global plane writable wherever one file-backed Include is mounted', () => {
     // A patched Include is writable: the value is written to that file and the
     // Include is reloaded, so its patch layers stay where they are.
