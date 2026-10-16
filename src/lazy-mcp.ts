@@ -917,7 +917,7 @@ export function registerMcpTools(
           },
         },
       },
-      render: (_args, value) => [{
+      render: (args, value) => [{
         type: 'text',
         text: [
           `Started MCP server "${value.server}"; ${value.loaded} tool(s) are callable in this session`
@@ -929,7 +929,10 @@ export function registerMcpTools(
             + `${tool.description === '' ? '' : `: ${tool.description}`}`
             + `${tool.schema === undefined ? '' : `\n  args: ${tool.schema}`}`),
           value.total === 0
-            ? 'No tool on this server matched. Try different words, or call mcp_load without `query` to see everything.'
+            ? ((args as { query?: unknown; tool?: unknown }).query !== undefined
+                || (args as { tool?: unknown }).tool !== undefined)
+              ? 'No tool on this server matched. Try different words, or call mcp_load without `query` to see everything.'
+              : 'This server publishes no tool this row admits, so nothing was loaded.'
             : '',
           value.nextCursor === undefined
             ? ''
@@ -938,7 +941,8 @@ export function registerMcpTools(
             ? `This call widened the session's view of "${value.server}": ${value.loaded} tool(s) are callable now.`
             : '',
           value.truncated
-            ? 'The server publishes more tools than this session collects; ask again with a `query` to find the rest.'
+            ? 'The server publishes more tools than this session collects; the tools beyond that cap are not '
+              + 'collected anywhere and a `query` cannot reach them — raise the collection cap to see more.'
             : '',
         ].filter(line => line !== '').join('\n'),
       }],

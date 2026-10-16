@@ -831,6 +831,33 @@ switch = <button role="switch" aria-checked="true"
 `20-roster-{1440,760,601,390,320}.png`、`30-roster-dark-1440.png`、`31-context-dark-1440.png`。
 README 用的三张图（`docs/images/mcp-settings.png`、`mcp-context.png`、`mcp-editor-import.png`）已用这一轮的产物重拍。
 
+## 七、审查修复轮复跑（2026-10-16，产物 `E3E1C82C…` / `9777E8E9…`）—— **两套测试全绿，隔离实例未复跑**
+
+代码审查（1.3.0 之后的 7 个提交）定级的问题在本轮修完要紧项，每组修复后都重跑了两套测试：
+
+1. **catalog 漏传**：`index.ts` 把共享目录交给 `registerMcpTools`（参数改必传），新增回归
+   「one catalogue serves every registration generation」（mcp-load.spec）。
+2. **超时泄漏子进程**：`connectLazyWithin` 在超时后关闭迟到的 client（search 索引 8s 预算、编辑器列表 30s）；
+   新增「closes the client a lost race still produces」与「hands the client over untouched」。
+3. **池 claim 竞态**：claim 记号按次计数、`release` 只结算真实 claim、`claim` 拒绝已关闭连接、claim 提前到
+   acquire 之后；新增池单测两条与「two parallel loads of one server settle on one view」。
+4. **发布点反序**：file-backed 行改走「先遮蔽后处置」（late-hold 同序），新增两条 gate 单测（顺序断言 +
+   未识别 entry 不动）。
+5. **保存三态**：描述行/工具规则/优化行的保存中-成功-失败三态、失败保留草稿与原因、IME 守卫、
+   `setOptimize` 串行化合并写（防丢更新）。
+6. **文案口径**：截断提示不再承诺 `query` 能找回截掉的工具（它做不到）；零工具服务器不再误报
+   「换个词再搜」；`opt.maxTools.desc` 同步改为如实描述。
+7. **UI 规范小项**：禁用态 `opacity:.5;cursor:default` 补齐 select/textarea/checkbox；`.mcpFilterSelect`
+   并入 600px 16px 规则。
+
+**读数**：`npm run typecheck` 通过；`npm test` **21 文件 / 236 项**全绿（修复前 21/219）；`npm run test:harness`
+**6 文件 / 25 项**全绿（真实 Loader）。产物 SHA-256 前 8 位：`lib/index.mjs` `E3E1C82C`、`lib/client.js` `9777E8E9`。
+
+**未覆盖（如实）**：隔离实例协议**没有**对新产物复跑——第五节的实测读数仍属于 `121B8C0A…` / `E1B1051A…`
+那份产物，README 已按此改写；`settings-controller` 写队列无单测（`@deepseek-ai/dsh-client-store` 的 zustand
+依赖在 Node 下解析不到，controller 不能进 Node 测试）；逐行保存三态只做了代码与类型验证，未走浏览器实测；
+并发 `mcp_load` 的收敛用单测固定，多会话真并发的进程计数未在隔离实例复测。
+
 ## 维护
 
 改加载、池或闸门行为后：先跑 `npm test` 与 `npm run test:harness`，再按上面的隔离实例协议复跑，并把**新结果与

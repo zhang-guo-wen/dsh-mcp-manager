@@ -316,6 +316,16 @@
   color: var(--dsw-alias-label-dimmed);
 }
 
+/* The disabled state is stated visually as well as by the attribute. */
+.mcpFilterSelect:disabled,
+.formSelect:disabled,
+.formJson:disabled,
+.importRow input:disabled,
+.toolRow input:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* The model reads the first characters of this text and nothing else says so. */
 .descOver {
   font: var(--dsw-font-xxs-12);
@@ -810,6 +820,7 @@
 @media (max-width: 600px) {
   .mcpDesc,
   .rosterSearch,
+  .mcpFilterSelect,
   .formSelect,
   .formJson {
     font-size: 16px;
