@@ -200,7 +200,8 @@ standing 作用域里 `ctx.tools.register`),结果 **preset 每 ~5 秒被重挂�
 模式是**活的用户设置**:`readMcpSettings(config)` 读 Config 的 volatile 字段,`index.ts` 在
 `loader/volatile-update` 上先 `dispose()` 掉旧注册(连带停掉它启动的服务器)再按新模式注册 —— 交换对
 **所有会话的下一次请求**生效。`parseMcpLoadingMode` 把无法识别的存量值收敛回 `dynamic`(设置文档是用户可编辑的,不能因为一个
-拼错的值让提交失败)。UI 侧是 `McpSection.tsx` 的 `McpLoadingPicker`(三个 radio),读写 `loading` 字段。
+拼错的值让提交失败)。UI 侧是 `McpSection.tsx` 的 `McpLoadingPicker`(一个 `SegmentedControl` 三选一,
+选中项的说明显示在下方),读写 `loading` 字段。
 
 ### 按需清单(src/mcp-inventory.ts)
 
@@ -378,6 +379,44 @@ mcp-manager:
   (`mcp.form.toolsGlobal`)—— 全局行由组合挂载,规则藏不掉它已经进上下文的工具(见「工具过滤」第 3 条)。
 - **改 client 后必须重建 `lib/client.js`**;Host 用内容 revision 让浏览器加载新 bundle,`HANDOFF_ID` 不得改变。
   改了 CSS module 要核对类名两边都在:JSX 引用了 CSS 里没有的类只得到 `undefined`,静默无样式。
+
+### 界面规范与状态反馈(src/client/McpSection.module.css、src/client/config-issues.ts)
+
+设置区是宿主设置弹窗里的**一列**,不是一级页面——面板宽度(800px)、左侧导航(188px)与内容区 24px 内边距都由
+`ui-settings-general` 的 shell 拥有,本包的 CSS 只管这一列自己的阅读宽度与行内控件。标准见仓库根 AGENTS.md
+「插件 UI 规范」,实现按下面几条固化:
+
+1. **列几何。** `.section` 用 `container: mcp-manager / inline-size` + `max-width: 760px`,与宿主
+   `ui-settings-plugin-inventory` 的设置区同款;`@container (max-width: 480px)` 才把行改成上下堆叠。
+   **不要套一级页面那条 `calc(960px + 2 * clamp(24px, 4vw, 48px))`** ——设置弹窗的内容列正常只有约 560px,
+   套上去会与 shell 已有的 24px 内边距叠加。窗口级规则只有两条:`@media (max-width: 600px)` 把文本输入
+   (描述框、JSON 框、下拉)提到 16px/24px 免得 iOS 聚焦缩放;`@media (pointer: coarse)` 把行抬到 44px 触摸目标。
+   窄屏靠**堆叠**而不是隐藏元数据,所以没有需要移出网格与焦点顺序的隐藏控件。
+2. **控件与材质。** 行是设置卡片:`--dsw-radius-xl` + `--dsw-alias-settings-card-fill`/`-stroke`,不加阴影;
+   按钮、标签页、开关、分段控件一律用 `@deepseek-ai/dsh-client-ui-primitives`。加载方式用 `SegmentedControl`,
+   平面与编辑器分区用 `SegmentedTabs`;每个分段 `aria-controls` 指向的面板都要真实存在(未选中的挂 `hidden`)。
+   按钮只有 `sm`=28px 与 `md`=36px 两档:**标准里的 32px 档在这套 primitives 里没有对应变体,弹窗按钮保持
+   `sm`**,不要为此手写 32px 高度。字号成对:能用角色 token 就写 `font: var(--dsw-font-*)`,代码文本写
+   `font: 12px/18px var(--ds-font-family-code)`;**禁止只写 `font-size`**。焦点环统一
+   `outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary))`
+   (`--dsw-focus-ring-color` 在指针模态下解析为 `transparent`,fallback 是必需的)。**当前安装的 ui-primitives
+   没有导出 `Select`**,下拉仍是原生 `<select>`,样式按 36px/R12 手写。
+3. **异步操作都有进行中/成功/失败三态,不是只把按钮变灰。** 加载方式:进行中在控件下方显示 `mcp.mode.saving`,
+   成功进共享 `notice`,失败显示 `mcp.mode.saveFailed` + 重试(用同一个 mode 再提交一次)。行开关:进行中显示
+   「启动中/停止中」,成功进 notice,失败**留在该行内**显示原因 + 重试。失败后**保留名册**:`finally` 里只刷新,
+   失败记录只在该行成功时删除,所以刷新不会抹掉提示;`disable` 永远允许(起不来的行必须能关掉)。
+4. **首屏骨架、刷新不清空。** 首屏是三张卡片形状的骨架(`--dsw-alias-bg-skeleton`,脉冲在
+   `prefers-reduced-motion` 下关闭),`role="status"` 的无障碍文本放在骨架容器之外。刷新沿用上一版名册,并把
+   busy/失败/成功提示放在**列表下方**——插在列表上方会让正在读的行整体位移、滚动位置跟着跳(宿主 `.options`
+   是滚动容器,列表不重挂时滚动位置自然保留)。空态给出「为什么空 + 下一步」两行,不只是一行灰字。
+5. **诊断文案进字典。** `diagnoseMcpConfig` 的 `reason` 是 Host 侧英文,会经名册读回与保存校验变成用户可见文本。
+   浏览器侧统一走 `src/client/config-issues.ts` 的 `formatMcpConfigIssues(issues, t)`:按 `kind` 取本包字典
+   (中英同步),把 `names` 填进 `{names}`/`{name}`;`reason` 只在 kind 未知时兜底。**新增 `McpConfigIssueKind`
+   时同时补字典键**,否则那一类问题回退成英文。
+6. **约束由测试守住。** `tests/client-css.spec.ts` 断言:TSX 里 `css.X` 引用的类必须在
+   `McpSection.module.css` 里定义、CSS 里的类必须被引用(防静默无样式)、无字面量颜色与颜色 fallback、
+   字号成对、圆角在刻度内、焦点环带 fallback、中性描边 0.5px;`tests/config-issues.spec.ts` 覆盖诊断文案。
+   CSS 字符串断言**不能**替代浏览器里的盒子测量。
 
 ## MCP JSON 兼容
 

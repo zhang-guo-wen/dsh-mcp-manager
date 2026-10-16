@@ -19,7 +19,7 @@
  */
 
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Modal, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   AddMcpsRequest,
   AddMcpsResult,
@@ -125,11 +125,11 @@ const EntryRow = memo(function EntryRow({ entryKey, entry, checked, disabled, on
       <span className={css.importMain}>
         <span className={css.importName}>
           {entry.serverName}
-          {entry.duplicate ? <span className={css.importTag}>{t('mcp.import.duplicate')}</span> : null}
+          {entry.duplicate ? <Tag tone="outline">{t('mcp.import.duplicate')}</Tag> : null}
           {entry.problem !== undefined
-            ? <span className={css.importTagWarn}>{t(`mcp.import.problem.${entry.problem}`)}</span>
+            ? <Tag tone="warning">{t(`mcp.import.problem.${entry.problem}`)}</Tag>
             : null}
-          {disabled && entry.problem === undefined ? <span className={css.importTag}>{t('mcp.import.existing')}</span> : null}
+          {disabled && entry.problem === undefined ? <Tag tone="outline">{t('mcp.import.existing')}</Tag> : null}
         </span>
         <span className={css.importMeta}>{transport}</span>
         {entry.envKeys.length > 0 ? (
@@ -317,12 +317,12 @@ export function ClaudeImportDialog({
               <span className={css.toolsCount} role="status">
                 {t('mcp.import.selected').replace('{n}', String(chosen.length)).replace('{m}', String(importable))}
               </span>
-              <button type="button" className={css.mcpAction} disabled={busy || importing} onClick={() => { setAll(true) }}>
+              <Button variant="ghost" size="sm" disabled={busy || importing} onClick={() => { setAll(true) }}>
                 {t('mcp.import.selectAll')}
-              </button>
-              <button type="button" className={css.mcpAction} disabled={busy || importing} onClick={() => { setAll(false) }}>
+              </Button>
+              <Button variant="ghost" size="sm" disabled={busy || importing} onClick={() => { setAll(false) }}>
                 {t('mcp.import.selectNone')}
-              </button>
+              </Button>
             </span>
           ) : null}
         </div>
@@ -331,9 +331,9 @@ export function ClaudeImportDialog({
         {view.status === 'error' ? (
           <div className={css.mcpFailure}>
             <p role="alert">{t('mcp.error')}</p>
-            <button type="button" className={css.mcpRetry} onClick={() => { setAttempt(value => value + 1) }}>
+            <Button variant="outline" size="sm" onClick={() => { setAttempt(value => value + 1) }}>
               {t('mcp.import.retry')}
-            </button>
+            </Button>
           </div>
         ) : null}
         {view.status === 'ready' && total === 0 ? (

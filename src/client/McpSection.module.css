@@ -1,12 +1,25 @@
+/* MCP management settings section.
+ *
+ * The section is one column inside the host settings panel: the shell owns the
+ * panel width and its 24px padding, so this file owns only the column's own
+ * reading width and the rows inside it. Values follow the plugin UI standard:
+ * semantic aliases only, paired type, the 28/32/36 control scale, role radii,
+ * and one visible focus treatment.
+ */
+
 .section {
+  container: mcp-manager / inline-size;
   display: flex;
   flex-direction: column;
   gap: 16px;
   width: 100%;
-  max-width: 720px;
+  /* The settings column, not a first-level page column: the host panel is
+     800px wide and this column is ~560px inside it. The cap only matters on a
+     wider shell. */
+  max-width: 760px;
+  box-sizing: border-box;
+  color: var(--dsw-alias-label-primary);
 }
-
-/* ---- Tab bar ---- */
 
 .panel {
   display: flex;
@@ -14,24 +27,35 @@
   gap: 16px;
 }
 
-/* ---- Prompt management ---- */
+/* ---- Shared text roles ---- */
 
 .fieldLabel {
-  font-size: 13px;
+  font: var(--dsw-font-xs-13);
   font-weight: 600;
 }
 
 .fieldHint {
-  font-size: 12px;
+  font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* ---- MCP management ---- */
+/* A screen-reader-only line for a loading region whose visible part is
+   decorative. */
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- Plane tabs ---- */
+
 .mcpSub {
   margin: 0;
-  font-size: 12.5px;
-  line-height: 20px;
-  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-s-14);
+  color: var(--dsw-alias-label-secondary);
 }
 
 /* One tab's own controls, above the shared roster. The pane sets its own
@@ -49,6 +73,7 @@
 
 .mcpToolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -56,89 +81,54 @@
 
 /* The roster's title and the agent-plane filter read as one control group:
    both describe the list underneath, and the toolbar must keep them together
-   when the section is narrower than its reading column. */
+   when the column is narrow. */
 .mcpToolbarLead {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   min-width: 0;
 }
 
 /* A compact select, unlike the editor's full-width form field: it shares the
-   row with the title and the plane's action buttons. */
+   row with the title and the plane's action buttons. 36px/R12 is the
+   selector tier. */
 .mcpFilterSelect {
   box-sizing: border-box;
   max-width: 240px;
-  padding: 4px 8px;
-  border-radius: 8px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--dsw-radius-md);
+  border: 0.5px solid var(--dsw-alias-border-l4);
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
-  font-size: 12.5px;
-}
-
-.mcpFilterSelect:focus {
-  border-color: var(--dsw-alias-state-business-primary);
-  outline: none;
+  font: var(--dsw-font-xs-13);
 }
 
 /* ---- MCP loading mode ---- */
+
 .modeBlock {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-}
-
-.modeGroup {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-}
-
-.modeOption {
-  display: flex;
-  flex-direction: column;
   align-items: flex-start;
-  gap: 4px;
-  padding: 10px 12px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
-  background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-primary);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
 }
 
-.modeOption:hover:not(:disabled) {
-  background: var(--dsw-alias-bg-layer-2);
-}
-
-.modeOption:focus-visible {
-  outline: 2px solid var(--dsw-alias-state-business-primary);
-  outline-offset: 2px;
-}
-
-.modeOption:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.modeOptionActive {
-  border-color: var(--dsw-alias-state-business-primary);
-  box-shadow: inset 0 0 0 1px var(--dsw-alias-state-business-primary);
-}
-
-.modeName {
-  font-size: 13px;
-  font-weight: 600;
-}
-
+/* The selected mode's own explanation, kept out of the segment labels so the
+   three-way control stays one 28px row. */
 .modeDesc {
-  font-size: 11.5px;
-  line-height: 17px;
+  margin: 0;
+  font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-secondary);
 }
+
+.modeStatus {
+  margin: 0;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ---- Roster ---- */
 
 .mcpList {
   display: flex;
@@ -146,112 +136,112 @@
   gap: 10px;
 }
 
+/* Rows are settings cards: R20 with the shared card fill and stroke, and no
+   elevation shadow. */
 .mcpRow {
+  box-sizing: border-box;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
   padding: 12px 14px;
-  border-radius: 12px;
-  background: var(--dsw-alias-bg-layer-1);
-  box-shadow: var(--dsw-elevation-stroke);
+  border: 0.5px solid var(--dsw-alias-settings-card-stroke);
+  border-radius: var(--dsw-radius-xl);
+  background: var(--dsw-alias-settings-card-fill);
 }
 
 .mcpMain {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
 }
 
 .mcpName {
-  font-size: 14px;
+  font: var(--dsw-font-s-14);
   font-weight: 600;
   font-family: var(--ds-font-family-code);
+  overflow-wrap: anywhere;
 }
 
+/* The row description is edited in place: a borderless field that shows the
+   shared focus ring only while it is focused. */
 .mcpDesc {
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
-  overflow-wrap: anywhere;
-  border: 0;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 20px;
+  margin: 0;
   padding: 0;
+  border: 0;
   background: transparent;
-  font-family: inherit;
-  outline: none;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+  overflow-wrap: anywhere;
 }
 
 .mcpDesc::placeholder {
-  color: var(--dsw-alias-label-tertiary);
-  opacity: 0.7;
-}
-
-.mcpDesc:focus {
-  color: var(--dsw-alias-label-primary);
-  border-bottom: 1px solid var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-label-dimmed);
 }
 
 .mcpRight {
   display: inline-flex;
-  align-items: center;
-  gap: 10px;
   flex: none;
-}
-
-.badge {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  corner-shape: round;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  color: var(--dsw-alias-label-secondary);
-  white-space: nowrap;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 100%;
 }
 
 .status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-secondary);
 }
 
 .mcpActions {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
-.mcpAction {
-  appearance: none;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--dsw-alias-label-primary);
-  font-size: 12px;
-  padding: 4px 10px;
-  cursor: pointer;
-  white-space: nowrap;
+/* One row's own failure, kept in the row so the roster stays on screen and the
+   retry sits beside the action that failed. */
+.rowFailure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
-.mcpAction:hover {
-  background: var(--dsw-alias-bg-layer-2);
+.rowFailure p {
+  margin: 0;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-state-error-primary);
+  overflow-wrap: anywhere;
 }
 
-.mcpAction:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* ---- Section-level status ---- */
 
 .mcpStatus {
   margin: 0;
-  font-size: 13px;
+  font: var(--dsw-font-xs-13);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.unavailable {
+  margin: 0;
+  font: var(--dsw-font-xs-13);
   color: var(--dsw-alias-label-tertiary);
 }
 
 .mcpFailure {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   color: var(--dsw-alias-state-error-primary);
@@ -259,35 +249,85 @@
 
 .mcpFailure p {
   margin: 0;
-  font-size: 13px;
-}
-
-.mcpRetry {
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-  padding: 4px 10px;
-  background: transparent;
-  color: var(--dsw-alias-label-primary);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.mcpRetry:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
+  font: var(--dsw-font-xs-13);
 }
 
 .empty {
   margin: 0;
-  font-size: 13px;
+  font: var(--dsw-font-xs-13);
   color: var(--dsw-alias-label-tertiary);
 }
 
-.unavailable {
+.emptyHint {
   margin: 0;
-  font-size: 13px;
+  font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-tertiary);
 }
+
+.mcpNotice {
+  margin: 0;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.mcpActionError {
+  margin: 0;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-state-error-primary);
+  overflow-wrap: anywhere;
+}
+
+/* ---- First paint ---- */
+
+/* Placeholder roster shaped like the cards it replaces, so the section does
+   not reflow when the read answers. */
+.skeletonList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.skeletonRow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 15px 14px;
+  border: 0.5px solid var(--dsw-alias-settings-card-stroke);
+  border-radius: var(--dsw-radius-xl);
+  background: var(--dsw-alias-settings-card-fill);
+}
+
+.skeletonBar {
+  width: 38%;
+  height: 14px;
+  border-radius: var(--dsw-radius-xs);
+  background: var(--dsw-alias-bg-skeleton);
+}
+
+.skeletonBar + .skeletonBar {
+  width: 78%;
+  height: 12px;
+}
+
+@keyframes mcp-skeleton-pulse {
+  0% { opacity: 1; }
+  40% { opacity: 0.55; }
+  80%, 100% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .skeletonBar {
+    animation: mcp-skeleton-pulse 2s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeletonBar {
+    animation: none;
+  }
+}
+
+/* ---- Editor dialog ---- */
 
 .mcpForm {
   display: flex;
@@ -305,7 +345,7 @@
 /* Modal content budget: the dialogs scroll internally instead of growing the
    page, and the action row keeps its own separator. */
 .mcpEditorContent {
-  max-height: min(70vh, 640px);
+  max-height: min(70dvh, 640px);
   overflow: auto;
 }
 
@@ -330,6 +370,7 @@
 
 .formActions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
@@ -342,7 +383,7 @@
 }
 
 .formLabel {
-  font-size: 12px;
+  font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-secondary);
 }
 
@@ -352,73 +393,74 @@
 .formSelect {
   box-sizing: border-box;
   width: 100%;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--dsw-radius-md);
+  border: 0.5px solid var(--dsw-alias-border-l4);
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
-  font-size: 13px;
-}
-
-.formSelect:focus {
-  border-color: var(--dsw-alias-state-business-primary);
-  outline: none;
+  font: var(--dsw-font-xs-13);
 }
 
 .formJson {
   box-sizing: border-box;
   width: 100%;
   min-height: 220px;
-  font-family: var(--ds-font-family-code);
-  font-size: 12px;
-  line-height: 18px;
   padding: 10px 14px;
-  border-radius: 8px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-lg);
+  border: 0.5px solid var(--dsw-alias-border-l4);
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
+  font: 12px/18px var(--ds-font-family-code);
   resize: vertical;
   white-space: pre;
   overflow: auto;
 }
 
-.formJson:focus {
-  border-color: var(--dsw-alias-state-business-primary);
-  outline: none;
-}
-
 .formError {
   margin: 0;
-  font-size: 12px;
-  color: var(--dsw-alias-state-danger, #e5484d);
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-state-error-primary);
+  overflow-wrap: anywhere;
 }
 
-.mcpNotice {
-  margin: 0;
-  font-size: 12px;
-  color: var(--dsw-alias-state-success, #2f9e44);
+/* One visible focus treatment for every control this file styles; the ring
+   colour resolves to transparent under pointer modality, so the fallback is
+   required. */
+.mcpFilterSelect:focus-visible,
+.formSelect:focus-visible,
+.formJson:focus-visible,
+.mcpDesc:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
 }
 
-.mcpActionError {
-  margin: 0;
-  font-size: 12px;
-  color: var(--dsw-alias-state-danger, #e5484d);
-}
+/* ---- Tool listing ---- */
 
 .toolsHead {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
 .toolsCount {
-  font-size: 12px;
+  font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-secondary);
   font-variant-numeric: tabular-nums;
 }
 
+/* The roster's own count, the same metadata tier as the tab counts. */
+.count {
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .toolsActions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   margin-left: auto;
@@ -429,7 +471,7 @@
   overflow: auto;
   padding: 4px;
   border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-lg);
   background: var(--dsw-alias-bg-layer-1);
 }
 
@@ -438,24 +480,23 @@
   align-items: center;
   gap: 8px;
   padding: 4px 6px;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   cursor: pointer;
 }
 
 .toolRow:hover {
-  background: var(--dsw-alias-bg-layer-2);
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .toolName {
-  font-family: var(--ds-font-family-code);
-  font-size: 12px;
+  font: 12px/18px var(--ds-font-family-code);
   color: var(--dsw-alias-label-primary);
   white-space: nowrap;
 }
 
 .toolDesc {
   overflow: hidden;
-  font-size: 12px;
+  font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -465,6 +506,7 @@
 
 .importToolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
@@ -484,10 +526,10 @@
    counter's text level with the button labels instead of stretching its box. */
 .importChecks {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-left: auto;
-  white-space: nowrap;
 }
 
 .importList {
@@ -498,7 +540,7 @@
   overflow: auto;
   padding: 4px;
   border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-lg);
   background: var(--dsw-alias-bg-layer-1);
 }
 
@@ -518,15 +560,14 @@
 
 .importSourceLabel {
   flex: none;
-  font-size: 12px;
+  font: var(--dsw-font-xxs-12);
   font-weight: 600;
   color: var(--dsw-alias-label-secondary);
 }
 
 .importSourcePath {
   overflow: hidden;
-  font-family: var(--ds-font-family-code);
-  font-size: 11px;
+  font: 12px/18px var(--ds-font-family-code);
   color: var(--dsw-alias-label-tertiary);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -535,8 +576,9 @@
 .importProblem {
   margin: 0;
   padding: 0 4px;
-  font-size: 12px;
-  color: var(--dsw-alias-state-danger, #e5484d);
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-state-error-primary);
+  overflow-wrap: anywhere;
 }
 
 .importRow {
@@ -544,12 +586,12 @@
   align-items: flex-start;
   gap: 8px;
   padding: 6px;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   cursor: pointer;
 }
 
 .importRow:hover {
-  background: var(--dsw-alias-bg-layer-2);
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .importMain {
@@ -561,35 +603,70 @@
 
 .importName {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  font: var(--dsw-font-xxs-12);
   font-family: var(--ds-font-family-code);
-  font-size: 12.5px;
   color: var(--dsw-alias-label-primary);
 }
 
-.importTag {
-  font-family: var(--dsw-alias-font-family, inherit);
-  font-size: 10.5px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  corner-shape: round;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.importTagWarn {
-  font-family: var(--dsw-alias-font-family, inherit);
-  font-size: 10.5px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  corner-shape: round;
-  border: 0.5px solid var(--dsw-alias-state-warning-primary, #f5a524);
-  color: var(--dsw-alias-state-warning-primary, #f5a524);
-}
-
 .importMeta {
-  overflow-wrap: anywhere;
-  font-size: 11.5px;
+  font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* ---- Container and pointer adaptations ---- */
+
+/* Compact arrangement: keyed off this column, not the window. A wide window
+   leaves this column near 560px inside the settings panel. */
+@container mcp-manager (max-width: 760px) {
+  .mcpToolbarLead {
+    flex: 1 1 auto;
+  }
+
+  .importChecks {
+    margin-left: 0;
+  }
+}
+
+@container mcp-manager (max-width: 480px) {
+  .mcpRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mcpRight {
+    justify-content: space-between;
+  }
+
+  .mcpFilterSelect {
+    max-width: none;
+    flex: 1 1 100%;
+  }
+
+  .importScope {
+    flex: 1 1 100%;
+  }
+}
+
+/* Whole rows are the touch target, so a checkbox row stays reachable without
+   hitting the box itself. */
+@media (pointer: coarse) {
+  .mcpRow,
+  .toolRow,
+  .importRow {
+    min-height: 44px;
+  }
+}
+
+/* iOS zooms the viewport when a focused text field renders below 16px. */
+@media (max-width: 600px) {
+  .mcpDesc,
+  .formSelect,
+  .formJson {
+    font-size: 16px;
+    line-height: 24px;
+  }
 }

@@ -13,8 +13,9 @@ import type {
 } from '../types.ts'
 import { admits, parseMcpToolFilter } from '../mcp-tool-filter.ts'
 import { mcpEntryConfig } from '../mcp-config.ts'
-import { isBlockingConfigIssue, describeMcpConfigIssues, diagnoseMcpSpec } from '../mcp-diagnostics.ts'
+import { isBlockingConfigIssue, diagnoseMcpSpec } from '../mcp-diagnostics.ts'
 import { flattenSpec, parseSpecText } from '../mcp-spec.ts'
+import { formatMcpConfigIssues } from './config-issues.ts'
 import type { McpSectionKey } from './locales.ts'
 import type { McpPlane, McpPresetOption, McpServer } from './settings-controller.ts'
 import css from './McpSection.module.css'
@@ -235,7 +236,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       mcpEntryConfig(spec, serverName)
       const configIssue = diagnoseMcpSpec(spec, {})
       const blocking = configIssue.filter(isBlockingConfigIssue)
-      if (blocking.length > 0) throw new Error(describeMcpConfigIssues(blocking))
+      if (blocking.length > 0) throw new Error(formatMcpConfigIssues(blocking, t))
       // Accepted, but the row will read as "not configured" and refuse to start
       // until the Host can resolve it: say so on the spot instead of leaving the
       // author to wonder why the row's switch will not turn on.
@@ -264,6 +265,10 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
         onUpdateTools(key, tools.filter(tool => hiddenTools.has(tool.name)).map(tool => `!${tool.name}`))
       }
     } catch (cause) {
+      // Everything this catch reports is about the connection spec, so the pane
+      // that holds the JSON box comes back into view: the message sits next to
+      // the field it names instead of behind the tools tab.
+      setTab('config')
       setLocalError(cause instanceof Error ? cause.message : t('mcp.form.jsonInvalid'))
     }
   }
@@ -382,22 +387,22 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
           <div className={css.toolsHead}>
             {tools !== null ? <span className={css.toolsCount}>{`${enabledCount}/${tools.length}`}</span> : null}
             <span className={css.toolsActions}>
-              <button
-                type="button"
-                className={css.mcpAction}
+              <Button
+                variant="outline"
+                size="sm"
                 disabled={formDisabled || toolsBusy || toolsReadOnly}
                 onClick={() => { loadToolsFromForm(tools === null) }}
               >
                 {toolsBusy ? t('mcp.form.toolsLoading') : t('mcp.form.toolsReload')}
-              </button>
+              </Button>
               {tools !== null && tools.length > 0 ? (
                 <>
-                  <button type="button" className={css.mcpAction} disabled={formDisabled || toolsReadOnly} onClick={() => { setHiddenTools(new Set<string>()) }}>
+                  <Button variant="ghost" size="sm" disabled={formDisabled || toolsReadOnly} onClick={() => { setHiddenTools(new Set<string>()) }}>
                     {t('mcp.form.toolsAll')}
-                  </button>
-                  <button type="button" className={css.mcpAction} disabled={formDisabled || toolsReadOnly} onClick={() => { setHiddenTools(new Set(tools.map(tool => tool.name))) }}>
+                  </Button>
+                  <Button variant="ghost" size="sm" disabled={formDisabled || toolsReadOnly} onClick={() => { setHiddenTools(new Set(tools.map(tool => tool.name))) }}>
                     {t('mcp.form.toolsNone')}
-                  </button>
+                  </Button>
                 </>
               ) : null}
             </span>
@@ -425,7 +430,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
         </div>
         {localError !== null ? <p className={css.formError} role="alert">{localError}</p> : null}
         {configNotice !== null ? <p className={css.mcpNotice} role="status">{configNotice}</p> : null}
-        {error !== null ? <p className={css.formError} role="alert">{error}</p> : null}
+        {error !== null ? <p className={css.formError} role="alert">{`${t('mcp.form.saveFailed')} ${error}`}</p> : null}
       </div>
     </Modal>
   )

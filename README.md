@@ -25,7 +25,7 @@ In the plugin list, display names and descriptions follow the Harness language s
 
 [![MCP configuration, tool filtering, and Claude configuration import](<docs/images/mcp-editor-import.png>)](<docs/images/mcp-editor-import.png>)
 
-These screenshots show an earlier UI. Configuration and Tools now use separate tabs, and Claude configuration import supports the selected Global or Agent-preset destination.
+These screenshots show an earlier UI. Configuration and Tools now use separate tabs, Claude configuration import supports the selected Global or Agent-preset destination, the loading mode is a three-way segmented control whose explanation sits underneath, and a switch that fails reports in its own row with a retry.
 
 ## Install
 

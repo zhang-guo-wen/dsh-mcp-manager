@@ -10,12 +10,12 @@
  */
 
 import { useEffect, useId, useState, type ReactNode } from 'react'
-import { Button, SegmentedTabs, StateDot, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, SegmentedControl, SegmentedTabs, StateDot, Switch, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AddMcpRequest, EditMcpRequest } from '../types.ts'
-import { describeMcpConfigIssues } from '../mcp-diagnostics.ts'
 import { toolRuleEntries } from '../mcp-tool-filter.ts'
+import { formatMcpConfigIssues } from './config-issues.ts'
 import { McpEditor, type McpEditorMode, type McpEditorRequest } from './McpEditor.tsx'
 import { ClaudeImportDialog } from './ClaudeImportDialog.tsx'
 import {
@@ -25,7 +25,6 @@ import {
   type McpPhase,
   type McpPlane,
   type McpPresetOption,
-  type McpRosterView,
   type McpSectionFace,
   type McpServer,
 } from './settings-controller.ts'
@@ -59,6 +58,16 @@ type McpView =
     readonly refreshing: boolean
   }
 
+/** One row's in-flight or failed enablement change. */
+type RowAction =
+  | { readonly phase: 'enabling' | 'disabling' }
+  | { readonly phase: 'failed'; readonly message: string; readonly target: boolean }
+
+/** The loading-mode write, as the picker reports it. */
+type ModeSave =
+  | { readonly phase: 'idle' | 'saving' }
+  | { readonly phase: 'failed'; readonly mode: McpLoadingOption }
+
 /** Non-empty fiber-phase → localized status key. */
 const PHASE_LABEL = {
   loading: 'mcp.status.loading',
@@ -89,6 +98,22 @@ const MODE_DESC = {
   lazy: 'mcp.mode.lazy.desc',
 } as const satisfies Record<McpLoadingOption, McpSectionKey>
 
+/** One thrown value as the line a reader can act on. */
+function failureText(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
+}
+
+/**
+ * The stored loading mode, narrowed to a value the picker offers. The Host
+ * narrows unknown stored values itself; this keeps the control's own value
+ * inside its option set.
+ * @param value - the mode the settings snapshot carries.
+ * @returns an offered mode, defaulting the way the Host does.
+ */
+function loadingMode(value: string): McpLoadingOption {
+  return value === 'eager' || value === 'lazy' ? value : 'dynamic'
+}
+
 /**
  * Resolve one MCP row's displayed status label and dot, or undefined when the
  * row has nothing to report.
@@ -116,46 +141,69 @@ function statusOf(server: McpServer, t: Translate): { label: string; dot: StateD
 }
 
 /**
- * The MCP loading mode picker: one radio per mode, each carrying its own
- * one-line explanation so the trade-off (prompt cost and cache-prefix churn
- * against tool-binding quality) is readable without leaving the page.
+ * The MCP loading mode picker: the shared segmented control for the three-way
+ * choice, with the selected mode's one-line explanation underneath, so the
+ * trade-off (prompt cost and cache-prefix churn against tool-binding quality) is
+ * readable without leaving the page. The write reports its own saving and failed
+ * states next to the control.
  */
-function McpLoadingPicker({ value, disabled, onPick, t }: {
+function McpLoadingPicker({ value, disabled, status, onPick, onRetry, t }: {
   readonly value: string
   readonly disabled: boolean
+  readonly status: ModeSave
   readonly onPick: (mode: McpLoadingOption) => void
+  readonly onRetry: (mode: McpLoadingOption) => void
   readonly t: Translate
 }): ReactNode {
+  const pickerId = useId()
+  const current = loadingMode(value)
+  const options = MCP_LOADING_OPTIONS.map(mode => ({
+    value: mode,
+    label: t(MODE_LABEL[mode]),
+    ...(disabled ? { disabled: true, title: t('unavailable') } : {}),
+  }))
   return (
     <div className={css.modeBlock}>
       <span className={css.fieldLabel}>{t('mcp.mode.title')}</span>
-      <div className={css.modeGroup} role="radiogroup" aria-label={t('mcp.mode.title')}>
-        {MCP_LOADING_OPTIONS.map((mode) => {
-          const selected = value === mode
-          return (
-            <button
-              key={mode}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              data-mcp-mode={mode}
-              className={selected ? `${css.modeOption} ${css.modeOptionActive}` : css.modeOption}
-              disabled={disabled}
-              title={disabled ? t('unavailable') : undefined}
-              onClick={() => { onPick(mode) }}
-            >
-              <span className={css.modeName}>{t(MODE_LABEL[mode])}</span>
-              <span className={css.modeDesc}>{t(MODE_DESC[mode])}</span>
-            </button>
-          )
-        })}
-      </div>
+      <SegmentedControl<McpLoadingOption>
+        id={pickerId}
+        value={current}
+        options={options}
+        onChange={onPick}
+        label={t('mcp.mode.title')}
+        disabled={disabled}
+      />
+      {/* One panel per mode, all mounted and hidden when unselected: the
+          control names each with `aria-controls`, so every referenced panel has
+          to exist in the document. */}
+      {MCP_LOADING_OPTIONS.map(mode => (
+        <div
+          key={mode}
+          id={`${pickerId}-${mode}-panel`}
+          role="tabpanel"
+          aria-labelledby={`${pickerId}-${mode}`}
+          hidden={mode !== current}
+        >
+          <p className={css.modeDesc}>{t(MODE_DESC[mode])}</p>
+        </div>
+      ))}
+      {status.phase === 'saving' ? (
+        <p className={css.modeStatus} role="status">{t('mcp.mode.saving')}</p>
+      ) : null}
+      {status.phase === 'failed' ? (
+        <div className={css.mcpFailure}>
+          <p role="alert">{t('mcp.mode.saveFailed')}</p>
+          <Button variant="outline" size="sm" disabled={disabled} onClick={() => { onRetry(status.mode) }}>
+            {t('mcp.retry')}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }
 
 /** One rendered MCP server row: name, plugin-owned description, scope, status, and row actions. */
-function McpRow({ server, description, suppressed, pending, onEditDescription, onEdit, onToggleDisabled, actionsDisabled, t }: {
+function McpRow({ server, description, suppressed, action, onEditDescription, onEdit, onToggleDisabled, onRetry, actionsDisabled, t }: {
   readonly server: McpServer
   readonly description: string
   /**
@@ -169,21 +217,23 @@ function McpRow({ server, description, suppressed, pending, onEditDescription, o
    * off".
    */
   readonly suppressed: boolean
-  readonly pending: 'enabling' | 'disabling' | null
+  /** This row's in-flight enablement change, or the failure it ended in. */
+  readonly action: RowAction | null
   readonly onEditDescription: (value: string) => void
   readonly onEdit: () => void
   readonly onToggleDisabled: (enabled: boolean) => void
+  /** Retry the enablement change this row last failed at. */
+  readonly onRetry: (enabled: boolean) => void
   readonly actionsDisabled: boolean
   readonly t: Translate
 }): ReactNode {
-  const scope = server.scope === 'global'
-    ? t('mcp.scopeGlobal')
-    : `${t('mcp.scopePreset')} · ${server.presetId ?? ''}`
   // A pending toggle shows the intended target and a transient label, so the
   // row reacts the instant it is clicked instead of waiting on the child MCP
   // process to start (or stop).
   const configIssue = server.configIssue ?? []
   const unconfigured = configIssue.length > 0
+  const pending = action !== null && action.phase !== 'failed' ? action.phase : null
+  const failure = action !== null && action.phase === 'failed' ? action : null
   const status = pending === 'enabling'
     ? { label: t('mcp.status.starting'), dot: 'warning' as StateDotState }
     : pending === 'disabling'
@@ -199,7 +249,7 @@ function McpRow({ server, description, suppressed, pending, onEditDescription, o
   // remain removable.
   const cannotEnable = unconfigured && !checked && pending === null
   const switchTitle = cannotEnable
-    ? `${t('mcp.status.unconfigured')}: ${describeMcpConfigIssues(configIssue)}`
+    ? `${t('mcp.status.unconfigured')}: ${formatMcpConfigIssues(configIssue, t)}`
     : t('mcp.status.disabled')
   const [draft, setDraft] = useState<string | null>(null)
   const value = draft ?? description
@@ -215,22 +265,45 @@ function McpRow({ server, description, suppressed, pending, onEditDescription, o
           onChange={(event) => { setDraft(event.currentTarget.value) }}
           onBlur={() => { onEditDescription(value); setDraft(null) }}
         />
+        {/* The failed action stays in its row with a retry, so the roster and
+            the last good state remain on screen while the user decides. */}
+        {failure === null ? null : (
+          <div className={css.rowFailure}>
+            <p role="alert">{`${t('mcp.row.toggleFailed')} ${failure.message}`}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={actionsDisabled}
+              onClick={() => { onRetry(failure.target) }}
+            >
+              {t('mcp.retry')}
+            </Button>
+          </div>
+        )}
       </div>
       <div className={css.mcpRight}>
-        <span className={css.badge}>{scope}</span>
+        {server.scope === 'global'
+          ? <Tag tone="neutral">{t('mcp.scopeGlobal')}</Tag>
+          : (
+            <Tag tone="outline">
+              {t('mcp.row.scopeLabel')
+                .replace('{scope}', t('mcp.scopePreset'))
+                .replace('{name}', server.presetId ?? '')}
+            </Tag>
+          )}
         {status === undefined ? null : <span className={css.status}>
           <StateDot state={status.dot} />
           {status.label}
         </span>}
         <span className={css.mcpActions}>
-          <button
-            type="button"
-            className={css.mcpAction}
+          <Button
+            variant="outline"
+            size="sm"
             disabled={actionsDisabled}
             onClick={onEdit}
           >
             {t('mcp.edit')}
-          </button>
+          </Button>
           {server.entryId !== null ? (
             <Switch
               checked={checked}
@@ -243,6 +316,26 @@ function McpRow({ server, description, suppressed, pending, onEditDescription, o
         </span>
       </div>
     </div>
+  )
+}
+
+/**
+ * First-paint placeholder shaped like the roster cards it replaces, so the
+ * section does not reflow when the read answers.
+ */
+function McpRosterSkeleton({ label }: { readonly label: string }): ReactNode {
+  return (
+    <>
+      <p className={css.visuallyHidden} role="status">{label}</p>
+      <div className={css.skeletonList} aria-hidden="true">
+        {[0, 1, 2].map(index => (
+          <div key={index} className={css.skeletonRow}>
+            <span className={css.skeletonBar} />
+            <span className={css.skeletonBar} />
+          </div>
+        ))}
+      </div>
+    </>
   )
 }
 
@@ -261,9 +354,9 @@ export function McpSection(props: McpSectionProps): ReactNode {
   })
   const [editorBusy, setEditorBusy] = useState(false)
   const [editorError, setEditorError] = useState<string | null>(null)
-  const [mcpActionError, setMcpActionError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [rowPending, setRowPending] = useState<Record<string, 'enabling' | 'disabling'>>({})
+  const [rowAction, setRowAction] = useState<Record<string, RowAction>>({})
+  const [modeSave, setModeSave] = useState<ModeSave>({ phase: 'idle' })
   // The agent plane is where a row can be authored and lazy-loaded, so it opens
   // first; a deployment that configured only global rows sees their count on the
   // other tab.
@@ -331,33 +424,42 @@ export function McpSection(props: McpSectionProps): ReactNode {
   /**
    * Persisting the mode changes which rows are mounted, so the roster is
    * re-read once the Host has applied it: the gate read resolves only after
-   * every composed row reached its new state.
+   * every composed row reached its new state. The picker reports the write's own
+   * saving and failed states; a failing gate read after a committed write is not
+   * a failed save, so the roster is refreshed from whatever the read can answer.
    */
   const pickMode = (mode: McpLoadingOption): void => {
-    void Promise.resolve()
-      .then(() => setMcpLoading(mode))
-      .then(suppressedMcps)
-      .catch((): readonly string[] => [])
-      .then(() => { refreshMcps() })
+    setModeSave({ phase: 'saving' })
+    setNotice(null)
+    void (async () => {
+      try {
+        await setMcpLoading(mode)
+      } catch {
+        setModeSave({ phase: 'failed', mode })
+        return
+      }
+      setModeSave({ phase: 'idle' })
+      setNotice(t('mcp.notice.modeSaved'))
+      await suppressedMcps().catch((): readonly string[] => [])
+      refreshMcps()
+    })()
   }
 
   const openAdd = (): void => {
     setEditor({ mode: 'add', server: undefined, open: true })
     setEditorError(null)
-    setMcpActionError(null)
     setNotice(null)
   }
 
   const openEdit = (server: McpServer): void => {
     setEditor({ mode: 'edit', server, open: true })
     setEditorError(null)
-    setMcpActionError(null)
     setNotice(null)
   }
 
   const openImport = (): void => {
     setImporterOpen(true)
-    setMcpActionError(null)
+    setEditorError(null)
     setNotice(null)
   }
 
@@ -374,7 +476,6 @@ export function McpSection(props: McpSectionProps): ReactNode {
   const submitEditor = async (request: McpEditorRequest): Promise<void> => {
     setEditorBusy(true)
     setEditorError(null)
-    setMcpActionError(null)
     try {
       if (editor.mode === 'add') await addMcp(request as AddMcpRequest)
       else await editMcp(request as EditMcpRequest)
@@ -382,7 +483,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
       setNotice(editor.mode === 'add' ? t('mcp.notice.added') : t('mcp.notice.saved'))
       refreshMcps()
     } catch (cause) {
-      setEditorError(cause instanceof Error ? cause.message : String(cause))
+      setEditorError(failureText(cause))
     } finally {
       setEditorBusy(false)
     }
@@ -392,28 +493,30 @@ export function McpSection(props: McpSectionProps): ReactNode {
    * Flip one row's enablement without blocking the list. The row immediately
    * shows its target state and a transient starting/stopping label; the Host
    * call (which starts or stops the child MCP process) runs in the background
-   * and the list refreshes with the real state when it settles.
+   * and the list refreshes with the real state when it settles. A failed call
+   * leaves the roster as it was and keeps the reason and a retry in that row.
    */
   const toggleDisabled = (server: McpServer, enabled: boolean): void => {
-    if (server.entryId === null) return
+    const entryId = server.entryId
+    if (entryId === null) return
     const key = mcpRowKey(server)
     const target = server.scope === 'global'
       ? { scope: 'global' as const }
       : { scope: 'preset' as const, agentPreset: server.presetId ?? '' }
-    setMcpActionError(null)
-    setRowPending(previous => ({ ...previous, [key]: enabled ? 'enabling' : 'disabling' }))
+    setNotice(null)
+    setRowAction(previous => ({ ...previous, [key]: { phase: enabled ? 'enabling' : 'disabling' } }))
     void (async () => {
       try {
-        await disableMcp({ target, entryId: server.entryId as string, disabled: !enabled })
+        await disableMcp({ target, entryId, disabled: !enabled })
         setNotice(enabled ? t('mcp.notice.enabled') : t('mcp.notice.disabled'))
-      } catch (cause) {
-        setMcpActionError(cause instanceof Error ? cause.message : String(cause))
-      } finally {
-        setRowPending(previous => {
+        setRowAction(previous => {
           const next = { ...previous }
           delete next[key]
           return next
         })
+      } catch (cause) {
+        setRowAction(previous => ({ ...previous, [key]: { phase: 'failed', message: failureText(cause), target: enabled } }))
+      } finally {
         refreshMcps()
       }
     })()
@@ -463,13 +566,25 @@ export function McpSection(props: McpSectionProps): ReactNode {
           <McpLoadingPicker
             value={state.loading}
             disabled={disabled}
+            status={modeSave}
             onPick={pickMode}
+            onRetry={pickMode}
             t={t}
           />
         </div>
         <div className={css.mcpToolbar}>
           <div className={css.mcpToolbarLead}>
             <p className={css.mcpSub}>{t('mcp.subtitle')}</p>
+            {/* The plane tabs count the whole plane; this counts the rows the
+                list below actually shows, so a narrowed view still answers "how
+                many of these are allowed". */}
+            {mcpView.status === 'ready' && planeServers.length > 0 ? (
+              <span className={css.count}>
+                {t('mcp.count.enabled')
+                  .replace('{n}', String(planeServers.filter(server => server.enabled !== false).length))
+                  .replace('{m}', String(planeServers.length))}
+              </span>
+            ) : null}
             {/* The filter narrows the list it sits next to, so it belongs on the
                 list's own row — and only on the plane it can narrow. */}
             {plane === 'agent' && presetFilter.length > 0 ? (
@@ -511,20 +626,18 @@ export function McpSection(props: McpSectionProps): ReactNode {
             </Button>
           </span>
         </div>
-        {mcpView.status === 'loading' ? <p className={css.mcpStatus}>{t('mcp.loading')}</p> : null}
-        {mcpView.status === 'ready' && mcpView.refreshing ? (
-          <p className={css.mcpStatus} role="status">{t('mcp.loading')}</p>
-        ) : null}
+        {mcpView.status === 'loading' ? <McpRosterSkeleton label={t('mcp.loading')} /> : null}
         {mcpView.status === 'error' ? (
           <div className={css.mcpFailure}>
             <p role="alert">{t('mcp.error')}</p>
-            <button type="button" className={css.mcpRetry} onClick={() => { setMcpRequest(value => value + 1) }}>
-              {t('mcp.retry')}
-            </button>
+            <Button variant="outline" size="sm" onClick={refreshMcps}>{t('mcp.retry')}</Button>
           </div>
         ) : null}
         {mcpView.status === 'ready' && planeServers.length === 0 ? (
-          <p className={css.empty}>{plane === 'global' ? t('mcp.empty.global') : t('mcp.empty.agent')}</p>
+          <>
+            <p className={css.empty}>{plane === 'global' ? t('mcp.empty.global') : t('mcp.empty.agent')}</p>
+            <p className={css.emptyHint}>{plane === 'global' ? t('mcp.empty.global.hint') : t('mcp.empty.agent.hint')}</p>
+          </>
         ) : null}
         {mcpView.status === 'ready' && planeServers.length > 0 ? (
           <div className={css.mcpList}>
@@ -536,10 +649,11 @@ export function McpSection(props: McpSectionProps): ReactNode {
                   server={server}
                   description={server.description ?? state.descriptions[key] ?? ''}
                   suppressed={mcpView.suppressed.has(key)}
-                  pending={rowPending[key] ?? null}
+                  action={rowAction[key] ?? null}
                   onEditDescription={(value) => { updateMcpDescription(key, value) }}
                   onEdit={() => { openEdit(server) }}
                   onToggleDisabled={(enabled) => { toggleDisabled(server, enabled) }}
+                  onRetry={(enabled) => { toggleDisabled(server, enabled) }}
                   actionsDisabled={editorBusy || planeUnavailable}
                   t={t}
                 />
@@ -547,7 +661,11 @@ export function McpSection(props: McpSectionProps): ReactNode {
             })}
           </div>
         ) : null}
-        {mcpActionError !== null ? <p className={css.mcpActionError} role="alert">{mcpActionError}</p> : null}
+        {/* Transient state lives below the list, so a busy line, a failure, or a
+            notice never moves the rows the user is reading. */}
+        {mcpView.status === 'ready' && mcpView.refreshing ? (
+          <p className={css.mcpStatus} role="status">{t('mcp.refreshing')}</p>
+        ) : null}
         {notice !== null ? <p className={css.mcpNotice} role="status">{notice}</p> : null}
         <McpEditor
           open={editor.open}

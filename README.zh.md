@@ -25,7 +25,7 @@ DeepSeek Harness 添加 MCP 不够方便，配置多个 MCP 后默认全部加�
 
 [![MCP 配置、工具过滤与 Claude 配置导入](<docs/images/mcp-editor-import.png>)](<docs/images/mcp-editor-import.png>)
 
-截图为早期界面示例。当前配置与工具列表分为独立标签页，Claude 配置可导入到当前选中的全局或 Agent 预设。
+截图为早期界面示例。当前配置与工具列表分为独立标签页，Claude 配置可导入到当前选中的全局或 Agent 预设；加载方式改为三选一分段控件、说明显示在下方，开关失败会在该行内提示并可重试。
 
 ## 安装
 
