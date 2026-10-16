@@ -19,7 +19,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Button, Input, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Input, Switch, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   MCP_CATALOG_TTL_RANGE,
@@ -220,7 +220,14 @@ export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
   const [catalog, setCatalog] = useState<CatalogView>({ status: 'loading' })
   const [catalogRequest, setCatalogRequest] = useState(0)
   const [catalogBusy, setCatalogBusy] = useState(false)
-  const [notice, setNotice] = useState<string | null>(null)
+  /**
+   * The settled outcome of the last catalog clear, in the host's floating banner:
+   * the catalog list below can be long, so a line under it scrolls out of view
+   * exactly when the reader wants the answer. `seq` restarts the hold when the
+   * same outcome is reported again.
+   */
+  const [notice, setNotice] = useState<{ text: string; seq: number } | null>(null)
+  const noticeSeq = useRef(0)
 
   useEffect(() => () => {
     for (const timer of savedTimers.current.values()) clearTimeout(timer)
@@ -285,7 +292,8 @@ export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
     setNotice(null)
     void clearCatalog().then(
       (result) => {
-        setNotice(t('opt.catalog.cleared').replace('{n}', String(result.cleared)))
+        noticeSeq.current += 1
+        setNotice({ text: t('opt.catalog.cleared').replace('{n}', String(result.cleared)), seq: noticeSeq.current })
         setCatalogRequest(value => value + 1)
       },
       (cause: unknown) => { setFailure(cause instanceof Error ? cause.message : String(cause)) },
@@ -405,7 +413,8 @@ export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
       </section>
 
       {failure === null ? null : <p className={css.failure} role="alert">{failure}</p>}
-      {notice === null ? null : <p className={css.notice} role="status">{notice}</p>}
+      {notice === null ? null : <Toast key={notice.seq} text={notice.text} tone="success"
+        onDone={() => { setNotice(current => current?.seq === notice.seq ? null : current) }} />}
     </div>
   )
 }
