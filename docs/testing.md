@@ -763,6 +763,9 @@ switch = <button role="switch" aria-checked="true"
 
 ## 六、两页合并为页内页签（2026-10-16，产物 `B7A9BEEA…`）
 
+> 本节读数绑定产物 `B7A9BEEA…`：当时标题下两个页签叫 `服务器` / `上下文`，加载方式块在名册页签里。
+> 2026-10-16 稍后改为 `服务器` / `设置` 并把加载方式移进第二个页签（D24，见第九节），下面这行的字面读数**按当时产物**保留。
+
 上一轮把「MCP 优化」做成独立的第二条 `settings.section`（order 15）。本轮把它并回**一个**设置页的第二个页签，
 并把名册页按「先取证再改」重排（页头、两行工具栏、行内描述、状态徽标、筛选、计数口径）。触发是用户反馈：
 "MCP 管理插件的页面布局很混乱，且出现两个页面"。环境与产物：
@@ -972,6 +975,95 @@ section 被压到约 36px 宽、行卡片被裁切（截图 `shots/v-03-width-36
 - **stdio 子进程被强杀后传输层是否必然触发 `onclose`，本轮没有实测**：单测直接调用 `client.onclose()` 模拟，没有真杀进程；隔离实例的 marker / 进程计数协议未对本产物复跑。
 - **挂死**（进程还在、既不结束也不响应）既没有 `onclose` 也没有超时，池不会做任何事 —— 本轮明确不解决的边界（与 D17 的「挂死仍无超时」一致）。
 - 视图撤回后模型侧的观感（工具消失、行仍在清单里可重新加载）未走浏览器实测。
+
+## 九、页签改名「设置」并把加载方式移入（2026-10-16，D24，client 产物 `E6F79864…`）
+
+改的是可见布局（D24）：第二个页签从「上下文」改名「设置」、加载方式块移进它、名册页签删掉 `mcp.list.hint`
+那句说明、标题计数不再带 `· 筛选：{name}` 后缀。因此**必须回到隔离实例复跑**，不能只看单测。本轮**只读页面**
+（打开、切页签、量盒子、截图），不加行、不改开关、不切加载方式。
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 宿主 | npm 发布版 `@deepseek-ai/dsh@0.2.0-rc.2`（沿第六节那台隔离实例的版本） |
+| `DSH_HOME` | `.scratch/harness-tests/mcp-ui-0.2.0-rc.2-20261016-113243`（profile `web` 只挂本插件，`link:` 指向本仓） |
+| 端口 / 进程 | 53145，`npx dsh web --port 53145 --no-open`，跑完按 PID 与端口监听两个条件都核对后停止（`port released: True`） |
+| Node / 浏览器 | v24.12.0；Playwright 1.61.1（`chromium_headless_shell-1228`），`ignoreDefaultArgs: ['--hide-scrollbars']` |
+| 本轮 client 产物 | `lib/client.js` = `E6F79864B397D9DEC919063CDEDF3147C03EE9EFB2FB7687CD0D634921A0AA06` |
+| 本轮 host 产物 | `lib/index.mjs` = `444E9B1E5F6CD35E86055B743DB2FB6C962F8F7E9C851CF5136987FF3CF5ECE5`（与第八节同一份，本轮 host 源码未改，重建后内容一致） |
+| 数据 | 隔离命名空间里第七节留下的 7 行 fixture（1 个预设 `standard`），全部只读渲染 |
+| 脚本与读数 | `.scratch/mcp-ui-verify/verify-tabs.cjs` + `verify-tabs.ps1`，结果 `report-tabs.json` |
+
+### 逐项读数
+
+| 验收项 | 结果 |
+|---|---|
+| 页签名称 | ✅ `[role="tab"]` 里页面级两枚是 `服务器` / `设置`，`aria-selected` 随点击正确切换（另有三枚是加载方式的 `SegmentedControl` 分段） |
+| 加载方式移入「设置」 | ✅ 名册页签的 `[role="tabpanel"]:not([hidden])` 里 **`h3` 只有 `服务器列表` 一个**；「设置」页签的 `h3` 依次为 `MCP 加载方式` / `工具检索` / `加载与列出` / `工具目录缓存` / `工具注解与安全`，加载方式在最前 |
+| 名册说明段已删 | ✅ 面板 `innerText` 不含 `开关决定`（改前它在列表工具栏下方常驻一行） |
+| 计数不再复述预设名 | ✅ 标题旁读数 `7 行 · 已启用 6`，面板文本不含 `筛选：`（改前是 `7 行 · 已启用 6 · 筛选：standard`） |
+| 加载方式三档仍在页内 | ✅ 切换后「设置」页签文本里依次出现 `全部加载` / `动态插入` / `延迟加载`，并带当前档位的说明（`动态插入*` 选中态正确） |
+| 盒子几何（11 档） | ✅ 320/360/390/430/600/601/760/761/1024/1280/1440：页标题、tabpanel、首行三者**左右边界差同时为 0**（1440 同为 `(532,1091)`，1024 同为 `(324,883)`）；`documentElement.scrollWidth === clientWidth` 全档成立 |
+| 浅色 + 深色 | ✅ `colorScheme: dark` 下 `body` 背景 `rgb(21,21,23)`、面板文字 `rgb(249,250,251)`；两个页签各截一张 |
+| 控制台 | ✅ 0 条 `error`/`warning`、0 条 `pageerror` |
+| 静态约束 | ✅ `npm run typecheck` 通过；`npm test` **22 文件 / 259 项**通过（含 `tests/client-css.spec.ts`：删 `.listHint` 必须同步删引用，否则「有类没人引」变红） |
+
+### 截图（`.scratch/mcp-ui-verify/`）
+
+`40-servers-tab.png`（名册页签，无加载方式块与说明段）、`41-settings-tab.png`（设置页签，加载方式在最前）、
+`44-servers-dark.png` / `45-settings-dark.png`（深色两页签）、`43-servers-<width>.png`（1440/760/601/390/320）。
+
+### 本节未覆盖（如实）
+
+1. **没点加载方式换档**：本轮只读，切档会重建工具面并改动隔离命名空间的 profile，未在本产物上复跑；接线本身未改（同一个 `McpLoadingPicker` 与 `pickMode`），但没有本轮实测读数。
+2. **没跑真实点击录入、导入、行开关**：那些路径在第六节与名册布局轮已验，本轮不重复；`/mcp-ui-verify/verify.cjs` 仍是它们的全量脚本。
+3. **软键盘、`pointer: coarse`、`prefers-reduced-motion`、真机安全区未测**：与第六节的缺口相同，本轮只覆盖 320–1440 的窗口宽度。
+4. **`verify-tabs.cjs` 的 `mode` 字段只取按钮文本**，不是「点了会怎样」的证据；本文没有把它写成行为结论。
+
+## 十、密钥页去掉三句说明（2026-10-16，client 产物 `7DCAD8FE…`）
+
+用户看着密钥页的截图提了两件事：删掉「乱七八糟的描述」，以及问这些密钥是怎么被认出来的。本轮只做前者（后者是
+解释，不做行为改动）：删除 `mcp.credential.envHint` / `mcp.credential.headerHint`（`环境变量`/`请求头` 标签下那句）
+与 `mcp.credential.hint`（面板底部那句），**保留** `mcp.credential.empty`（空态一句）、`unreadable` 与 `busy`
+两个状态句 —— 它们说的是状态，不是对控件的复述。
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 宿主 / `DSH_HOME` / 端口 | 与第九节同一台：`@deepseek-ai/dsh@0.2.0-rc.2`；`.scratch/harness-tests/mcp-ui-0.2.0-rc.2-20261016-113243`；53145（跑完 `port released: True`） |
+| 浏览器 | Playwright 1.61.1（`chromium_headless_shell-1228`），`ignoreDefaultArgs: ['--hide-scrollbars']` |
+| 本轮 client 产物 | `lib/client.js` = `7DCAD8FEC1DAA64BC0D8A998F2A6AC81E161ED3785451886171A6D4556EE0FC9` |
+| host 产物 | `lib/index.mjs` = `444E9B1E…`（未改 host） |
+| 脚本与读数 | `.scratch/mcp-ui-verify/verify-credentials.cjs` + `verify-credentials.ps1`，结果 `report-credentials.json` |
+
+### 逐项读数
+
+| 验收项 | 结果 |
+|---|---|
+| 空态（新增弹窗 → 密钥） | ✅ 面板文本只剩 `环境变量 这行配置里还没有密钥。`；截图 `50-credentials-empty.png` |
+| 有值时（JSON 框里手写两个 `env` 值，未保存） | ✅ 面板文本为 `环境变量 LIGHTRAG_BASE_URL LIGHTRAG_API_KEY`，字段逐个渲染，无任何说明句；截图 `51-credentials-declared.png` |
+| 三句已消失 | ✅ `值只保存在本机配置里` / `连接时附加的 HTTP 请求头` / `改完直接点「保存」即可` 三者均不在面板文本里 |
+| 控制台 | ✅ 0 条 `error`/`warning`、0 条 `pageerror` |
+| 静态约束 | ✅ `npm run typecheck` 通过；`npm test` **22 文件 / 259 项**通过（删字典键不影响用例） |
+
+### 本轮如实记下的两件事（**未改**，留给决策）
+
+1. **`!!js` 表达式的值会以 `{"__jsExpr":"…"}` 原样显示**：`specFromEntryConfig`（`src/mcp-config.ts`）把 Loader
+   条目里的 `env` 原样放进编辑器的 JSON 框，而密钥面板对非字符串值做 `JSON.stringify`（`src/client/credential-fields.ts`），
+   所以 `env: { LIGHTRAG_API_KEY: !!js process.env.LIGHTRAG_API_KEY || "" }` 显示成
+   `{"__jsExpr":"process.env.LIGHTRAG_API_KEY || \"\""}`（截图 `51-credentials-declared.png` 复现）。
+2. **改动这种字段会把表达式写坏**：`credentialText` 把面板看到的那串文本原样写回，一旦用户在该输入框里改动并保存，
+   `!!js` 表达式就变成一个普通字符串，服务器会拿到字面量。**只读不改动则安全**（`mergeCredentialEdits` 只写改动过的键）。
+   面板目前不区分「字符串值」与「表达式值」，也没有只读提示 —— 这是已知缺口，本页只记录、未修。
+
+### 本节未覆盖
+
+- 没有在真实行上保存（避免改动隔离命名空间的 profile），所以「保存后表达式是否真的退化」是从代码推的，**不是实测**。
+- 名册侧的「密钥 / 编辑」按钮判据未复跑：`storedCredentialKeys`（`src/mcp-config.ts`）**只数字符串值**的键，
+  所以一个 `env` 值全是 `!!js` 表达式的行在名册上显示「编辑」而不是「密钥」，而打开编辑器后密钥页仍会列出这些键 —— 这个
+  不一致本轮只做了源码阅读，未在浏览器里实测。
 
 ## 维护
 

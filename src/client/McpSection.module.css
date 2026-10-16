@@ -155,15 +155,6 @@
   margin-left: auto;
 }
 
-/* What the row switch means, stated once for the list instead of per row: the
-   switch carries one of the two inputs that decide whether a server is in a
-   request (the loading mode carries the other). */
-.listHint {
-  margin: 0;
-  font: var(--dsw-font-xxs-12);
-  color: var(--dsw-alias-label-tertiary);
-}
-
 .listFilters {
   display: flex;
   flex-wrap: wrap;

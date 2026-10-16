@@ -155,11 +155,9 @@ function McpCredentialsPane({ json, kind, baseline, disabled, onPush, t }: {
   const values = credentialValues(json, kind)
   if (values === undefined) return <p className={css.fieldHint} role="status">{t('mcp.credential.unreadable')}</p>
   const label = kind === 'env' ? t('mcp.credential.env') : t('mcp.credential.header')
-  const hint = kind === 'env' ? t('mcp.credential.envHint') : t('mcp.credential.headerHint')
   return (
     <div className={css.formField}>
       <span className={css.formLabel}>{label}</span>
-      <span className={css.fieldHint}>{hint}</span>
       {values.entries.length === 0
         ? <span className={css.fieldHint}>{t('mcp.credential.empty')}</span>
         : (
@@ -599,17 +597,14 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
           {loading
             ? <p className={css.mcpStatus}>{t('mcp.credential.busy')}</p>
             : (
-              <>
-                <McpCredentialsPane
-                  json={json}
-                  kind={credentialKind}
-                  baseline={credentialBase}
-                  disabled={formDisabled}
-                  onPush={pushCredential}
-                  t={t}
-                />
-                <span className={css.fieldHint}>{t('mcp.credential.hint')}</span>
-              </>
+              <McpCredentialsPane
+                json={json}
+                kind={credentialKind}
+                baseline={credentialBase}
+                disabled={formDisabled}
+                onPush={pushCredential}
+                t={t}
+              />
             )}
         </div>
         <div

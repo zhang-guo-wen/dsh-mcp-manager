@@ -47,8 +47,8 @@ import { rowAllowed } from './mcp-row-state.ts'
 import { MCP_READ_ONLY_REASON, type McpSectionKey } from './locales.ts'
 import css from './McpSection.module.css'
 
-/** The page's own sections: the roster, and the policy that decides how much of it enters a request. */
-type McpTab = 'servers' | 'context'
+/** The page's own sections: the roster, and the settings that govern it. */
+type McpTab = 'servers' | 'settings'
 
 /**
  * Whether one row's actions are closed, and why.
@@ -894,23 +894,31 @@ export function McpSection(props: McpSectionProps): ReactNode {
     )
   }
 
+  /**
+   * The loading mode lives on the settings tab: it is one of the two inputs that
+   * govern the roster (the row switch is the other), but it is a page-level
+   * preference, not a property of the list it sits beside.
+   */
+  const loadingSection = (
+    <section className={css.block}>
+      <div className={css.blockHead}>
+        <h3 className={css.blockTitle}>{t('mcp.mode.title')}</h3>
+        <span className={css.when}>{t('mcp.mode.when')}</span>
+      </div>
+      {!state.available ? <p className={css.unavailable}>{t('unavailable')}</p> : null}
+      <McpLoadingPicker
+        value={state.loading}
+        disabled={disabled}
+        status={modeSave}
+        onPick={pickMode}
+        onRetry={pickMode}
+        t={t}
+      />
+    </section>
+  )
+
   const rosterPanel = (
     <>
-      <section className={css.block}>
-        <div className={css.blockHead}>
-          <h3 className={css.blockTitle}>{t('mcp.mode.title')}</h3>
-          <span className={css.when}>{t('mcp.mode.when')}</span>
-        </div>
-        {!state.available ? <p className={css.unavailable}>{t('unavailable')}</p> : null}
-        <McpLoadingPicker
-          value={state.loading}
-          disabled={disabled}
-          status={modeSave}
-          onPick={pickMode}
-          onRetry={pickMode}
-          t={t}
-        />
-      </section>
       <section className={css.block}>
         <div className={css.listHead}>
           <div className={css.listHeadText}>
@@ -918,10 +926,9 @@ export function McpSection(props: McpSectionProps): ReactNode {
             {mcpView.status === 'ready' ? (
               <span className={css.count}>
                 {needle === ''
-                  ? t('mcp.count.narrowed')
+                  ? t('mcp.count.rows')
                     .replace('{n}', String(listedServers.length))
                     .replace('{m}', String(enabledCount))
-                    .replace('{name}', activePresetName)
                   : t('mcp.count.filtered')
                     .replace('{n}', String(visibleCount))
                     .replace('{m}', String(listedServers.length))}
@@ -949,7 +956,6 @@ export function McpSection(props: McpSectionProps): ReactNode {
             </Button>
           </span>
         </div>
-        <p className={css.listHint}>{t('mcp.list.hint')}</p>
         {/* The picker names the preset whose rows the list carries. There is no
             "every preset" entry: the global rows are listed under every value,
             so an option that meant "all of them" would be a second, unnamed
@@ -1026,7 +1032,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
         onChange={setTab}
         items={[
           { value: 'servers', label: t('mcp.tab.servers'), id: `${tabsId}-servers-tab`, panelId: `${tabsId}-servers-panel` },
-          { value: 'context', label: t('mcp.tab.context'), id: `${tabsId}-context-tab`, panelId: `${tabsId}-context-panel` },
+          { value: 'settings', label: t('mcp.tab.settings'), id: `${tabsId}-settings-tab`, panelId: `${tabsId}-settings-panel` },
         ]}
       />
       <div
@@ -1039,12 +1045,13 @@ export function McpSection(props: McpSectionProps): ReactNode {
         {rosterPanel}
       </div>
       <div
-        id={`${tabsId}-context-panel`}
+        id={`${tabsId}-settings-panel`}
         role="tabpanel"
-        aria-labelledby={`${tabsId}-context-tab`}
+        aria-labelledby={`${tabsId}-settings-tab`}
         className={css.tabPanel}
-        hidden={tab !== 'context'}
+        hidden={tab !== 'settings'}
       >
+        {loadingSection}
         <McpOptimizeSection {...props} />
       </div>
       <McpEditor
