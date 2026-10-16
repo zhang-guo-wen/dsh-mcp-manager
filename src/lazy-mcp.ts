@@ -392,6 +392,38 @@ export async function connectLazy(
 }
 
 /**
+ * Connect one configured server under a time budget, owning the client's
+ * lifetime on either outcome.
+ *
+ * `connectLazy` makes its caller the owner of the client it eventually
+ * produces, but a call that gives up on a slow server cannot close what it
+ * never received — and without this wrapper the connection finishes in the
+ * background anyway, its child process outliving the call forever. A connect
+ * that loses the race is closed as soon as it settles.
+ * @param config - the row's resolved transport and namespace.
+ * @param options - the discovery budget; `maxTools` defaults to the policy's cap.
+ * @param budgetMs - how long to wait for the server to answer.
+ * @returns the connected client and the tools the server published. The caller
+ *   owns the client and must close it.
+ */
+export async function connectLazyWithin(
+  config: McpEntryConfig,
+  options: { readonly maxTools?: number },
+  budgetMs: number,
+): Promise<{ client: LazyClient; tools: readonly LazyTool[]; truncated: boolean; ttlMs?: number }> {
+  const pending = connectLazy(config, options)
+  try {
+    return await withBudget(pending, budgetMs)
+  } catch (error) {
+    void pending.then(
+      ({ client }) => { void client.close().catch(() => {}) },
+      () => {},
+    )
+    throw error
+  }
+}
+
+/**
  * Every tool one row admits: its rules, the load's narrowing, and the policy.
  *
  * `visible` is what the row's rules and the annotation policy let through at
@@ -1155,8 +1187,9 @@ export function registerMcpTools(
           try {
             const config = row.externalConfig ?? mcpEntryConfig(await describeRow(ctx, row), row.serverName)
             if (describeRow === undefined || diagnoseRowConfig(config).length > 0) return
-            const { client, tools: listed, truncated, ttlMs } = await withBudget(
-              connectLazy(config, { maxTools: policy.maxTools }),
+            const { client, tools: listed, truncated, ttlMs } = await connectLazyWithin(
+              config,
+              { maxTools: policy.maxTools },
               SEARCH_INDEX_TIMEOUT_MS,
             )
             try {

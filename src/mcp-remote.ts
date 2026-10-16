@@ -20,7 +20,7 @@ import { findPresetDeclaration, writePresetRows, type PresetDeclaration } from '
 import { assertServerName, mcpEntryConfig, specFromEntryConfig, type McpEntryConfig } from './mcp-config.ts'
 import { describeMcpConfigIssues, diagnoseRowConfig } from './mcp-diagnostics.ts'
 import { scanClaudeMcp } from './claude-import.ts'
-import { connectLazy } from './lazy-mcp.ts'
+import { connectLazyWithin } from './lazy-mcp.ts'
 import { readMcpRoster } from './mcp-roster.ts'
 import type {
   AddMcpRequest,
@@ -53,27 +53,6 @@ import type { ExternalMcpDefinition, ExternalMcpRegistry } from './external-mcp.
 
 /** How long one editor tool listing may take before the dialog reports failure. */
 const TOOL_LIST_TIMEOUT_MS = 30_000
-
-/**
- * Resolve `work`, or reject once it outlives `ms`.
- * @param work - the operation to bound.
- * @param ms - budget in milliseconds.
- * @returns the operation's value when it settles inside the budget.
- * @throws when the budget expires before the operation settles.
- */
-async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => { reject(new Error(`no answer within ${ms} ms`)) }, ms)
-      }),
-    ])
-  } finally {
-    if (timer !== undefined) clearTimeout(timer)
-  }
-}
 
 /** Minimal optional surface read from the agent-preset registry. */
 interface AgentPresetResolver {
@@ -342,9 +321,11 @@ export class McpManager extends TypertRemoteService {
       const reason = String(cause)
       throw new RemoteError('mcp/invalid', reason, { reason }, { cause })
     }
-    let connection: Awaited<ReturnType<typeof connectLazy>>
+    let connection: Awaited<ReturnType<typeof connectLazyWithin>>
     try {
-      connection = await withTimeout(connectLazy(config), TOOL_LIST_TIMEOUT_MS)
+      // The listing owns this connection for its whole lifetime either way:
+      // `connectLazyWithin` closes the client a lost race still produces.
+      connection = await connectLazyWithin(config, {}, TOOL_LIST_TIMEOUT_MS)
     } catch (cause) {
       const reason = cause instanceof Error ? cause.message : String(cause)
       throw new RemoteError(

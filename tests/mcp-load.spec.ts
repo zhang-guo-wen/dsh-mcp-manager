@@ -4,7 +4,7 @@ import type { LazyTool } from '../src/mcp-carrier.ts'
 import { McpCatalog } from '../src/mcp-catalog.ts'
 import { MCP_CLIENT_MODULE } from '../src/mcp-authoring.ts'
 import { createMcpConnectionPool, type PooledConnection } from '../src/mcp-pool.ts'
-import { connectLazy } from '../src/lazy-mcp.ts'
+import { connectLazy, connectLazyWithin } from '../src/lazy-mcp.ts'
 import { NO_TOOL_FILTER, parseMcpToolFilter } from '../src/mcp-tool-filter.ts'
 import { parseMcpOptimizeFlags } from '../src/mcp-optimize.ts'
 
@@ -22,6 +22,8 @@ const sdk = vi.hoisted(() => ({
     fallbackNotificationHandler?: (notification: { method?: string }) => Promise<void>
     calls: { name: string; arguments: Record<string, unknown> }[]
   }[],
+  /** When set, `connect` takes this long, standing in for a slow server. */
+  connectDelayMs: 0,
 }))
 
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
@@ -32,7 +34,9 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
 
     constructor() { sdk.clients.push(this as never) }
 
-    async connect(): Promise<void> {}
+    async connect(): Promise<void> {
+      if (sdk.connectDelayMs > 0) await new Promise(resolve => setTimeout(resolve, sdk.connectDelayMs))
+    }
 
     async listTools(params?: { cursor?: string }) {
       return sdk.pages.get(params?.cursor ?? '') ?? { tools: [] }
@@ -184,6 +188,38 @@ function harness(options: {
 beforeEach(() => {
   sdk.pages.clear()
   sdk.clients.length = 0
+  sdk.connectDelayMs = 0
+})
+
+describe('connect lifetime under a time budget', () => {
+  const config = {
+    transport: 'stdio' as const,
+    serverName: 'alpha',
+    command: 'run-alpha',
+    args: [] as string[],
+    env: {} as Record<string, string>,
+    cwd: '',
+  }
+
+  it('closes the client a lost race still produces', async () => {
+    sdk.connectDelayMs = 120
+    await expect(connectLazyWithin(config, {}, 5)).rejects.toThrow(/no answer within 5 ms/)
+    // The connect that lost the race finishes in the background; when it does,
+    // the client must be closed instead of orphaning its child process.
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(sdk.clients).toHaveLength(1)
+    expect(sdk.clients[0]?.closed).toBe(1)
+  })
+
+  it('hands the client over untouched when the server answers in time', async () => {
+    setToolPages([tools('a')])
+    sdk.connectDelayMs = 5
+    const { client, tools: listed } = await connectLazyWithin(config, {}, 200)
+    expect(listed.map(tool => tool.name)).toEqual(['a'])
+    expect(sdk.clients[0]?.closed).toBe(0)
+    await client.close()
+    expect(sdk.clients[0]?.closed).toBe(1)
+  })
 })
 
 describe('mcp_load discovery', () => {
