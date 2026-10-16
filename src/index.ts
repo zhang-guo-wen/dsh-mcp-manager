@@ -234,6 +234,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // settings does, and the pool itself is closed only when this plugin unloads.
   /** What a live connection does when the server announces a new tool list. */
   let changed: (connection: PooledConnection) => void = () => {}
+  /** What a live connection does when its transport ends without us closing it. */
+  let lost: (connection: PooledConnection) => void = () => {}
   const pool = createMcpConnectionPool({
     // The collection cap is the policy's, read when the connection is opened:
     // a connection already serving sessions keeps the listing it walked.
@@ -242,10 +244,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // path, so a paged server is not silently cut to its first page; the cap
     // is read live, like every other policy field.
     relist: client => listAllTools(client, readers.optimize().maxTools),
-    // The registration that owns the current mode answers this; it exists before
+    // The registration that owns the current mode answers these; it exists before
     // any session can load a server, because a connection is only opened by
     // `mcp_load`.
     onToolsChanged: connection => { changed(connection) },
+    // A crashed server has to stop being offered: the pool has already dropped
+    // the connection, and the registration withdraws the tools pointing at it.
+    onConnectionLost: connection => { lost(connection) },
     warn: message => { ctx.logger.warn(message) },
   })
   ctx.effect(() => async () => { await pool.dispose() }, 'mcp-manager: on-demand connections')
@@ -263,6 +268,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const registration = registerMcpTools(ctx, next, gate, readers, pool, external, catalog)
     active.current = registration
     changed = connection => { registration.toolsChanged(connection) }
+    lost = connection => { registration.connectionLost(connection) }
     return registration
   }
   const external = new ExternalMcpRegistry(

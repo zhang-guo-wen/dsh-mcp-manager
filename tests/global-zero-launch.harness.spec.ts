@@ -368,6 +368,7 @@ async function attachRig(ctx: Context, file: string, fixture: McpClientFixture):
       }
     },
     onToolsChanged: () => {},
+    onConnectionLost: () => {},
     warn: vi.fn(),
   })
   const registration = registerMcpTools(ctx, mode.value, gate, undefined, pool, undefined, new McpCatalog())

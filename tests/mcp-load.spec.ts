@@ -20,6 +20,7 @@ const sdk = vi.hoisted(() => ({
   clients: [] as {
     closed: number
     fallbackNotificationHandler?: (notification: { method?: string }) => Promise<void>
+    onclose?: () => void
     calls: { name: string; arguments: Record<string, unknown> }[]
   }[],
   /** When set, `connect` takes this long, standing in for a slow server. */
@@ -31,6 +32,7 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
     closed = 0
     calls: { name: string; arguments: Record<string, unknown> }[] = []
     fallbackNotificationHandler?: (notification: { method?: string }) => Promise<void>
+    onclose?: () => void
 
     constructor() { sdk.clients.push(this as never) }
 
@@ -142,6 +144,8 @@ function harness(options: {
   const catalog = options.catalog ?? new McpCatalog<LazyTool>()
   /** Set once the registration exists: the pool's change reports reach it here. */
   let changed: (connection: PooledConnection) => void = () => {}
+  /** Set once the registration exists: a lost transport reaches it here too. */
+  let lost: (connection: PooledConnection) => void = () => {}
   const gate = {
     reconcile: async () => {},
     stateFor: () => undefined,
@@ -157,6 +161,7 @@ function harness(options: {
   const pool = createMcpConnectionPool({
     open: config => connectLazy(config, { maxTools: parseMcpOptimizeFlags(options.policy ?? {}).maxTools }),
     onToolsChanged: connection => { changed(connection) },
+    onConnectionLost: connection => { lost(connection) },
     warn: () => {},
   })
   const registration = registerMcpTools(
@@ -176,6 +181,7 @@ function harness(options: {
     catalog,
   )
   changed = connection => { registration.toolsChanged(connection) }
+  lost = connection => { registration.connectionLost(connection) }
   const exec = { agent: { id: 'agent-1', ctx: agentCtx } }
   const run = async (name: string, args: Record<string, unknown>): Promise<any> => {
     const definition = definitions.get(name)
@@ -612,5 +618,26 @@ describe('tools/list_changed', () => {
     await h.run('mcp_load', { server: 'alpha' })
     await sdk.clients[0]?.fallbackNotificationHandler?.({ method: 'notifications/resources/list_changed' })
     expect(h.catalog.size).toBe(1)
+  })
+})
+
+describe('a connection whose transport ends on its own', () => {
+  it('withdraws the dead tools and starts a fresh process on the next load', async () => {
+    setToolPages([tools('a')])
+    const h = harness({ mode: 'dynamic' })
+    await h.run('mcp_load', { server: 'alpha' })
+    expect(h.registered()).toContain('mcp__alpha__a')
+    // The server's process died: the SDK reports the transport ending.
+    sdk.clients[0]?.onclose?.()
+    // Tools that can no longer answer are not left in the session.
+    expect(h.registered()).not.toContain('mcp__alpha__a')
+    // The row is still loadable, so the session recovers by loading it again
+    // instead of waiting for a host restart.
+    await h.run('mcp_load', { server: 'alpha' })
+    expect(h.registered()).toContain('mcp__alpha__a')
+    // The crashed transport was released exactly once — by then the pool's
+    // serial queue has settled — and the reload opened a second client.
+    expect(sdk.clients[0]?.closed).toBe(1)
+    expect(sdk.clients).toHaveLength(2)
   })
 })

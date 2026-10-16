@@ -932,6 +932,32 @@ section 被压到约 36px 宽、行卡片被裁切（截图 `shots/v-03-width-36
 **读数（本轮）**：`npm run typecheck` 通过；`npm test` **22 文件 / 253 项**全绿；`npm run build` 通过，
 `lib/index.mjs`、`lib/client.js` 与源码同批提交。
 
+## 八、连接掉线的感知与恢复（2026-10-16，合并后产物 `444E9B1E…`）—— **单测新增 6 项，两套测试全绿；隔离实例未复跑**
+
+**改动**：池新增「丢失」状态（`PooledConnection.lost`，与「我们自己关掉的」分开）。`LazyClient.onclose`（SDK 的传输结束回调，对我们自己的 `close()` 同样触发）在 `watch` 里接到这条连接自己的 `end(lost)` 闸门；判定为丢失时连接**立刻移出池**、warn 一次、调 `ConnectionOpener.onConnectionLost`，注册侧 `McpToolRegistration.connectionLost` **撤回每个会话对它的视图**，行仍留在按需清单里，所以下次 `mcp_load` 会拉起新进程并注册新的一代工具。设计与被否决方案见 [design-decisions.md](design-decisions.md) D23。
+
+**读数**：
+
+- `npm run typecheck` 通过；
+- `npm test` **21 文件 / 243 项**全绿（改动前 21/237，本轮新增 6 项：`tests/mcp-pool.spec.ts` 5 项 + `tests/mcp-load.spec.ts` 1 项）；
+- `npm run build` 通过；
+- `npm run test:harness` **6 文件 / 25 项全绿**（`zero-launch` 4、`global-zero-launch` 5、`on-demand-pool` 4、`global-authoring` 3、`plugin-startup` 3、`preset-compat` 6）。本轮只给两个 harness spec 的 opener 补了新的必填成员，未改它们的断言。
+- **合回 `main` 后在同一棵树上复跑**（该树同时含 D22 名册布局那批改动，上面 21/243 是合并前单独跑在 `b94cfb5` 基线上的读数）：`npm run typecheck` 通过；`npm test` **22 文件 / 259 项**全绿；`npm run test:harness` **6 文件 / 25 项全绿**；`npm run build` **幂等**（重建后 `lib/index.mjs` 无 diff）。本节的产物指纹 `444E9B1E…` 取合并后的这次构建。
+
+**关于 `lib/client.js`（操作坑，本轮踩到）**：**它不在本次提交里**。构建产物里的 CSS module 类名哈希是**由文件路径派生**的（本轮在 `.scratch/worktrees/…` 下构建得到 `_3uWxFG_`，主仓路径下是 `y1VbRq_`），所以**在 worktree 里 `npm run build` 必然得到一份与主仓不同的客户端产物**。本改动不涉及 `src/client/`，故把它还原为 HEAD 版本；`lib/index.mjs` 不含绝对路径，是路径无关的，正常提交。**在 worktree 里改客户端代码时要注意这一点**：产物必须在主仓路径下重建，否则会带进整份类名 churn。
+
+**用例确实能抓到缺陷（不是空转）**：
+
+- 把 `connection.client.onclose = () => { end(true) }` 临时摘掉后重跑 `tests/mcp-pool.spec.ts`，新增 5 项里 **4 项变红**；第 5 项「自己的关闭不算丢失」是防误报守卫，旧行为下本就通过（它挡的是「把任何 `onclose` 都当丢失」那种写法）。
+- 把 `lazy-mcp.ts` 里 `connectionLost` 的接线临时摘掉后重跑注册层用例，报 `expected [ 'mcp_load', 'mcp_search', …(2) ] to not include 'mcp__alpha__a'` —— **死工具仍留在会话里**，正是本次要修的缺陷。
+- 两处临时改动均已还原并重跑全绿（typecheck + 243 项）。
+
+**未覆盖（如实）**：
+
+- **stdio 子进程被强杀后传输层是否必然触发 `onclose`，本轮没有实测**：单测直接调用 `client.onclose()` 模拟，没有真杀进程；隔离实例的 marker / 进程计数协议未对本产物复跑。
+- **挂死**（进程还在、既不结束也不响应）既没有 `onclose` 也没有超时，池不会做任何事 —— 本轮明确不解决的边界（与 D17 的「挂死仍无超时」一致）。
+- 视图撤回后模型侧的观感（工具消失、行仍在清单里可重新加载）未走浏览器实测。
+
 ## 维护
 
 改加载、池或闸门行为后：先跑 `npm test` 与 `npm run test:harness`，再按上面的隔离实例协议复跑，并把**新结果与

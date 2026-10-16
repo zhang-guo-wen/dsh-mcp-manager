@@ -155,6 +155,7 @@ async function harness(mode: McpLoadingMode = 'dynamic'): Promise<Harness> {
       }
     },
     onToolsChanged: () => {},
+    onConnectionLost: () => {},
     warn,
   })
   const registration = registerMcpTools(ctx, state.value, gate, undefined, pool, undefined, new McpCatalog())

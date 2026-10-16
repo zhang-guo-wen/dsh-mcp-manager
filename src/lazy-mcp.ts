@@ -485,6 +485,14 @@ export interface McpToolRegistration {
    * @param connection - the connection whose tools changed.
    */
   toolsChanged(connection: PooledConnection): void
+  /**
+   * Withdraw every session's view of a pooled connection whose transport ended
+   * on its own. The tools of that connection cannot answer any more, and the
+   * on-demand inventory still names the server, so the next `mcp_load` starts
+   * it again and registers a fresh generation.
+   * @param connection - the connection whose transport ended.
+   */
+  connectionLost(connection: PooledConnection): void
 }
 
 /** Live per-row readers the caller owns, so a committed change needs no re-registration. */
@@ -534,7 +542,7 @@ export function registerMcpTools(
 ): McpToolRegistration {
   const tools = ctx.get('tools') as ToolRegistry | undefined
   if (tools === undefined || mode === 'eager') {
-    return { dispose: async () => {}, refresh: async () => {}, toolsChanged: () => {} }
+    return { dispose: async () => {}, refresh: async () => {}, toolsChanged: () => {}, connectionLost: () => {} }
   }
   /** The mode whose tools exist; narrowed once so closures need no re-check. */
   const onDemandMode: 'dynamic' | 'lazy' = mode
@@ -668,6 +676,30 @@ export function registerMcpTools(
           ctx.logger.warn(`mcp-manager: could not follow the tool list change of "${serverName}": ${String(error)}`)
         })
       }
+    }
+  }
+
+  /**
+   * Withdraw every session's view of a connection whose transport ended on its
+   * own. The views go first and the claims after them: `releaseView` disposes
+   * the registrations, and the pooled connection is already unusable, so the
+   * release closes nothing that is not closed. The row stays in the on-demand
+   * inventory, which is what lets the next `mcp_load` start the server again.
+   */
+  const onConnectionLost = (connection: PooledConnection): void => {
+    if (disposed) return
+    for (const rowKey of rowKeysByConnection(connection)) catalog.invalidate(rowKey)
+    // Collected before releasing: `releaseView` edits `views` while it runs.
+    const holders: { readonly agentId: string; readonly serverName: string }[] = []
+    for (const [agentId, perAgent] of views) {
+      for (const [serverName, view] of perAgent) {
+        if (view.connection === connection) holders.push({ agentId, serverName })
+      }
+    }
+    for (const holder of holders) {
+      void releaseView(holder.agentId, holder.serverName).catch((error: unknown) => {
+        ctx.logger.warn(`mcp-manager: could not withdraw "${holder.serverName}": ${String(error)}`)
+      })
     }
   }
 
@@ -1399,6 +1431,7 @@ export function registerMcpTools(
     },
     refresh,
     toolsChanged: connection => { onToolsChanged(connection) },
+    connectionLost: connection => { onConnectionLost(connection) },
   }
 }
 

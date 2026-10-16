@@ -82,6 +82,13 @@ export interface LazyClient {
    * native carrier assigns it to follow `notifications/tools/list_changed`.
    */
   fallbackNotificationHandler?: (notification: { readonly method?: string }) => Promise<void>
+  /**
+   * The transport ended. The SDK fires this for every ending — our own
+   * `close()` just as much as a server whose process died — so the callback
+   * alone cannot tell the two apart; the pool pairs it with its own disposal
+   * flag to decide whether a connection was lost or deliberately stopped.
+   */
+  onclose?: () => void
 }
 
 /** The tool registry surface the native carrier uses. */

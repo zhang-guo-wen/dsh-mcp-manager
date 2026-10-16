@@ -16,12 +16,13 @@ const stdio = (extra: Record<string, unknown> = {}) => ({
 
 const key = (fingerprint: string): PoolKey => ({ rowKey: 'preset:standard:engram', serverName: 'engram', fingerprint })
 
-/** An opener double that counts connections, closes, and notifications. */
-function opener(): ConnectionOpener & { opened: number; closes: number; changes: number } {
+/** An opener double that counts connections, closes, losses, and notifications. */
+function opener(): ConnectionOpener & { opened: number; closes: number; changes: number; losses: number } {
   const state = {
     opened: 0,
     closes: 0,
     changes: 0,
+    losses: 0,
     async open(): Promise<{ client: LazyClient; tools: readonly { name: string }[] }> {
       state.opened += 1
       return {
@@ -34,6 +35,7 @@ function opener(): ConnectionOpener & { opened: number; closes: number; changes:
       }
     },
     onToolsChanged(): void { state.changes += 1 },
+    onConnectionLost(): void { state.losses += 1 },
     warn(): void {},
   }
   return state
@@ -141,6 +143,85 @@ describe('host-level connection pool', () => {
     expect(io.opened).toBe(2)
   })
 
+  it('drops a connection whose transport ended and opens a fresh one on the next load', async () => {
+    const io = opener()
+    const pool = createMcpConnectionPool(io)
+    const identity = key(connectionFingerprint(stdio()))
+    const connection = await pool.acquire(identity, stdio())
+    pool.claim(identity, connection, 'session-a')
+    // The server's process died: the transport reports the ending by itself.
+    connection.client.onclose?.()
+    expect(connection.lost).toBe(true)
+    expect(io.losses).toBe(1)
+    // The dead transport is not handed out again. Before this, the row kept
+    // serving it for the rest of the host's life and only a restart recovered.
+    const fresh = await pool.acquire(identity, stdio())
+    expect(fresh).not.toBe(connection)
+    expect(io.opened).toBe(2)
+  })
+
+  it('does not report the close it asked for as a lost connection', async () => {
+    const io = opener()
+    const pool = createMcpConnectionPool(io)
+    const identity = key(connectionFingerprint(stdio()))
+    const connection = await pool.acquire(identity, stdio())
+    pool.claim(identity, connection, 'session-a')
+    await pool.release(connection, 'session-a')
+    // Releasing the last claim closes the client, which fires the same SDK
+    // callback a crash would. Only the crash is a loss.
+    expect(io.closes).toBe(1)
+    expect(io.losses).toBe(0)
+    expect(connection.lost).toBe(false)
+  })
+
+  it('refuses to claim a lost connection and reports the loss once', async () => {
+    const io = opener()
+    const pool = createMcpConnectionPool(io)
+    const identity = key(connectionFingerprint(stdio()))
+    const connection = await pool.acquire(identity, stdio())
+    connection.client.onclose?.()
+    expect(() => { pool.claim(identity, connection, 'session-b') }).toThrow(/already closed/)
+    // A transport already known to be gone must not be reported a second time.
+    connection.client.onclose?.()
+    expect(io.losses).toBe(1)
+  })
+
+  it('releases a lost connection without a second close or a second loss', async () => {
+    const io = opener()
+    const pool = createMcpConnectionPool(io)
+    const identity = key(connectionFingerprint(stdio()))
+    const connection = await pool.acquire(identity, stdio())
+    pool.claim(identity, connection, 'session-a')
+    pool.claim(identity, connection, 'session-b')
+    connection.client.onclose?.()
+    await pool.release(connection, 'session-a')
+    expect(io.closes).toBe(0)
+    await pool.release(connection, 'session-b')
+    // The last release still releases the transport, once; the crash is not
+    // counted as a second loss.
+    expect(io.closes).toBe(1)
+    expect(io.losses).toBe(1)
+  })
+
+  it('warns once with the server name when a connection is lost', async () => {
+    const warn = vi.fn()
+    const pool = createMcpConnectionPool({
+      open: async () => ({
+        client: { listTools: async () => ({ tools: [] }), callTool: async () => ({}), close: async () => {} },
+        tools: [],
+        truncated: false,
+      }),
+      onToolsChanged: () => {},
+      onConnectionLost: () => {},
+      warn,
+    })
+    const identity = key(connectionFingerprint(stdio()))
+    const connection = await pool.acquire(identity, stdio())
+    connection.client.onclose?.()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]?.[0]).toContain('engram')
+  })
+
   it('opens a new connection when the row config changed, keeping the old one for its sessions', async () => {
     const io = opener()
     const pool = createMcpConnectionPool(io)
@@ -176,6 +257,7 @@ describe('host-level connection pool', () => {
         return { client: { listTools: async () => ({ tools: [] }), callTool: async () => ({}), close: async () => {} }, tools: [] }
       },
       onToolsChanged: () => {},
+      onConnectionLost: () => {},
       warn: () => {},
     })
     const identity = key(connectionFingerprint(stdio()))
@@ -212,6 +294,7 @@ describe('host-level connection pool', () => {
       }),
       relist: async () => ({ tools: [{ name: 'one' }, { name: 'two' }], truncated: false, ttlMs: 1_000 }),
       onToolsChanged: () => {},
+      onConnectionLost: () => {},
       warn: () => {},
     })
     const identity = key(connectionFingerprint(stdio()))
@@ -236,6 +319,7 @@ describe('host-level connection pool', () => {
         tools: [{ name: 'kept' }],
       }),
       onToolsChanged: () => {},
+      onConnectionLost: () => {},
       warn,
     })
     const identity = key(connectionFingerprint(stdio()))

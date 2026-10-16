@@ -16,6 +16,11 @@
  * a server with no other holder stops and the next `mcp_load` starts it again.
  * Only plugin unload closes whatever is left.
  *
+ * A connection can also end without this pool asking: a stdio child crashes, or
+ * an HTTP stream drops. The client's transport callback reports that ending, the
+ * connection leaves the pool, and the next load opens a fresh process instead of
+ * reusing a transport that is gone.
+ *
  * @module @guowenzhang/dsh-mcp-manager/mcp-pool
  */
 
@@ -39,6 +44,13 @@ export interface PooledConnection {
   readonly claims: Set<string>
   /** Whether `dispose` already ran: a closed connection must never be reused. */
   readonly closed: boolean
+  /**
+   * Whether the transport ended on its own rather than through `dispose`. A
+   * lost connection is `closed` as well — nothing may reuse either — but the
+   * two are worth telling apart: one is this plugin's own teardown, the other
+   * is a server process that died while its sessions were still holding it.
+   */
+  readonly lost: boolean
   dispose(): Promise<void>
 }
 
@@ -101,6 +113,15 @@ export interface ConnectionOpener {
    * @param error - the re-list failure, when the re-list itself failed.
    */
   onToolsChanged(connection: PooledConnection, error?: unknown): void
+  /**
+   * One connection's transport ended without this pool asking for it: the
+   * server crashed, or the stream closed underneath us. The connection has
+   * already left the pool, so the next load opens a fresh process; this only
+   * reports the loss, and every holder of the dead connection must stop
+   * offering the tools it can no longer serve.
+   * @param connection - the connection whose transport ended.
+   */
+  onConnectionLost(connection: PooledConnection): void
   /** Connection lifecycle diagnostics. Messages never contain credentials. */
   warn(message: string): void
 }
@@ -122,8 +143,9 @@ export interface McpConnectionPool {
    * @param connection - the connection that holder just loaded.
    * @param claimId - the claim token, unique per holder and load; `release`
    *   must be given the same token back.
-   * @throws when the connection is already closed — a dead connection must not
-   *   be registered back into the pool.
+   * @throws when the connection is already closed, whether this pool disposed
+   *   it or its transport was lost — neither may be registered back into the
+   *   pool.
    */
   claim(key: PoolKey, connection: PooledConnection, claimId: string): void
   /**
@@ -167,8 +189,17 @@ export function createMcpConnectionPool(opener: ConnectionOpener): McpConnection
     return run
   }
 
-  /** Follow tool-list changes for one connection, for every claimed session. */
-  const watch = (connection: PooledConnection): void => {
+  /**
+   * Follow one connection's transport and its tool-list changes.
+   *
+   * `end` is the connection's own ending gate. The transport callback reports
+   * every ending, including the `close()` this pool asked for, so the decision
+   * of whether the loss is real belongs to that gate rather than here.
+   * @param connection - the connection being watched.
+   * @param end - marks the connection unusable, reporting whether it was lost.
+   */
+  const watch = (connection: PooledConnection, end: (lost: boolean) => void): void => {
+    connection.client.onclose = () => { end(true) }
     connection.client.fallbackNotificationHandler = async (notification) => {
       if (notification.method !== 'notifications/tools/list_changed') return
       try {
@@ -205,12 +236,38 @@ export function createMcpConnectionPool(opener: ConnectionOpener): McpConnection
     acquire: (key, config) => enqueue(async () => {
       const id = keyOf(key)
       const existing = entries.get(id)?.connection
-      if (existing !== undefined) return existing
+      if (existing !== undefined) {
+        // A connection that ended on its own is never handed out again: the
+        // load that finds it opens a fresh process rather than failing every
+        // call on a transport that is already gone.
+        if (!existing.closed) return existing
+        entries.delete(id)
+      }
       const pending = entries.get(id)?.opening
       if (pending !== undefined) return await pending
       const opening = (async (): Promise<PooledConnection> => {
         const { client, tools, truncated, ttlMs } = await opener.open(config)
         let closed = false
+        let lost = false
+        let disposed = false
+        /**
+         * The one place a connection stops being usable. `dispose` runs it for
+         * our own teardown; the transport callback runs it when the server died.
+         * A lost connection leaves the pool at once, so the load that follows
+         * opens a fresh process instead of being handed a transport that is
+         * already gone, and its holders hear about it through the opener.
+         */
+        const end = (byLoss: boolean): void => {
+          if (closed) return
+          closed = true
+          lost = byLoss
+          if (!byLoss) return
+          for (const [entryId, entry] of entries) {
+            if (entry.connection === connection) entries.delete(entryId)
+          }
+          opener.warn(`mcp-manager: the connection to "${connection.serverName}" ended; the next load starts it again`)
+          opener.onConnectionLost(connection)
+        }
         const connection: PooledConnection = {
           serverName: key.serverName,
           fingerprint: key.fingerprint,
@@ -220,13 +277,18 @@ export function createMcpConnectionPool(opener: ConnectionOpener): McpConnection
           ...ttlMs === undefined ? {} : { ttlMs },
           claims: new Set<string>(),
           get closed() { return closed },
+          get lost() { return lost },
           dispose: async () => {
-            if (closed) return
-            closed = true
+            // A lost connection still closes its transport: the protocol is
+            // already down, but the SDK transport may hold the process handle or
+            // a stream. Closing once is what keeps that release from repeating.
+            if (disposed) return
+            disposed = true
+            end(false)
             await client.close()
           },
         }
-        watch(connection)
+        watch(connection, end)
         entries.set(id, { connection })
         return connection
       })()

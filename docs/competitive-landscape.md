@@ -38,7 +38,7 @@ MCP Apps 宿主 [sugarforever/dsh-mcp-apps](https://github.com/sugarforever/dsh-
 | 回合末回收与闲置 | 连接进**宿主级常驻池**，按每会话 claim 引用计数释放（无闲置超时） | leaforbook `releaseOnTurnEnd` + `warmIdleMs` 5 分钟；ben7am1n `idleDisconnectMs` 5 分钟；lilyblessing 30 秒 |
 | 目录磁盘缓存 | 只有进程内目录缓存（TTL + 服务器 `ttlMs` + `tools/list_changed` 失效） | wings1848 / ben7am1n 元数据落盘，**不连进程也能答搜索**；labmimors `catalogTtl` 24 小时 |
 | 覆盖非 preset 行 | 全局行并入同一套按需语义（`eager` 由组合挂载；`dynamic`/`lazy` 走内存拦截、`mcp_load` 按需走同一个池），**设置页也能开关**（行写在自己的 Include 文件里时），组合/补丁层声明的行只读 | leaforbook 自动接管任意 `mcp__<server>__*`；AllenLogo 每个 agent `restrict({deny:['mcp__*']})` |
-| OAuth | 只有静态 header / env | 五家都有 PKCE + DCR + 回环回调 + 刷新 |
+| OAuth | 只有静态 header / env | 五家都有 PKCE + 动态注册 + 回环回调 + 刷新（**动态注册在 2026-07-28 已弃用，改走 CIMD**）；我们缺的是整条 401 驱动的链路，见 P2-9 |
 | Resources / Prompts | 按需加载（`dynamic` / `lazy`）的服务器都拿不到 resources：`mount` 载体已删除，原生注册绕开了 mcp-client | PerryLink 只读浏览 resources；hyqhyq3 与 labmimors 都处理了 |
 | 探测与试调 | 只有启用停用与名册 | Js2Hou 探测报延迟 + 工具数；PerryLink `/mcp call` 试调走官方执行管线 |
 | 配置导入 | 导入 Claude Code 全部来源（用户 / 项目 / 设置 / `.mcp.json`），名称按规范预检，逐条独立导入，目标跟随当前平面（全局分组或选中的预设） | Imzl-zl 导入 Claude / Cursor / Cline / Roo / VS Code 配置 |
@@ -122,6 +122,22 @@ lilyblessing 记录过一次事故：**运行期写 preset 文件会触发 stand
 
 优先级按「投入产出 + 是否补上机制差距」排序，每条给出证据与实现落点。
 
+### 协议基线（读下面几条前先对齐口径，2026-10-16 核对）
+
+宿主 README 写明 SDK 会协商 **2026-07-28** 版协议（并回退到受支持的旧修订），本页的差距判断按这一版为准。
+**这一版改了若干前提，旧的"缺口清单"有两处要纠正**：
+
+- **`roots`、`sampling`、`logging` 已整体弃用**（不是"我们还没做"）。官方给的迁移方向是：用工具参数 / 资源 URI
+  取代 roots、直连模型厂商 API 取代 sampling。所以它们**不该再列为待补能力**——只需要"不崩、能降级"。
+  真正该补的是取代了服务端主动请求的 **MRTR**（`tools/call` 返回 `resultType: "input_required"` +
+  `inputResponses` 重试，且重试必须换新的 JSON-RPC id）与 **elicitation**（form 与 URL 两种模式）。
+- **DCR 已弃用，OAuth 链路收紧**（见 P2-9 的改写）。
+- 其余需要知道的：协议**无状态化**（取消 `initialize` 握手与 `Mcp-Session-Id`）；**tasks 移出核心**变成官方扩展
+  （`tasks/result` 阻塞式取结果改为 `tasks/get` 轮询 + `tasks/update`）；list/read 结果新增 `ttlMs` / `cacheScope`
+  与确定性排序（我们已按 `ttlMs` 消费，见 `src/mcp-catalog.ts`）。
+
+⚠️ 以上来自官方规范页面，**改动实现前应再核原文**；本页只用于纠正路线图口径。
+
 ### P0 —— 生态短板，半天内可完成
 
 1. **加 GitHub topics 并登记社区目录。**
@@ -161,8 +177,15 @@ lilyblessing 记录过一次事故：**运行期写 preset 文件会触发 stand
 
 ### P2 —— 连接能力补齐
 
-9. **OAuth 2.1 + PKCE（含动态注册）**，凭据走 DSH 的 credentials 服务而不是写进配置文件。
-   反面教材是 fangzaozao：明文 token 落 `cordis.patch.yml`。落点：`McpSpec` 加鉴权字段 → [`src/mcp-config.ts`](../src/mcp-config.ts) 透传。
+9. **OAuth 2.1 全链路（不只是 PKCE）**，凭据走 DSH 的 credentials 服务而不是写进配置文件。
+   规范把 MCP server 当作 OAuth 2.1 资源服务器，链路是固定的：401 的 `WWW-Authenticate` → RFC 9728 资源元数据 →
+   RFC 8414 / OIDC Discovery 的 AS 元数据 → 授权码 + PKCE + `state` + **RFC 8707 `resource`**（授权与令牌请求都要带）→
+   回环回调（只许 HTTPS 或 localhost）→ 刷新轮换；令牌只走 `Authorization` 头、不进 URL，且必须校验 `iss`。
+   **动态客户端注册（RFC 7591 DCR）在 2026-07-28 已弃用**，方向是 CIMD（HTTPS URL 直接当 `client_id`），
+   所以"含动态注册"这个写法已经过时。
+   反面教材是 fangzaozao：明文 token 落 `cordis.patch.yml`；凭据存储的正向参考是 MCP Inspector 的分级——
+   优先 OS 钥匙串，无钥匙串才降级到 0600 文件并可加密，还提供"只存 access token / 不存"的档位。
+   落点：`McpSpec` 加鉴权字段 → [`src/mcp-config.ts`](../src/mcp-config.ts) 透传。
 10. **给代理载体注册资源提供者。**
     harness 有现成的 scoped 缝：[`packages/mcp/mcp-resources/src/index.ts`](../../packages/mcp/mcp-resources/src/index.ts) 的
     `ctx.mcpResources.register(server, provider)`，provider 只需实现 `resources/list`、`resources/templates/list`、`resources/read`。
