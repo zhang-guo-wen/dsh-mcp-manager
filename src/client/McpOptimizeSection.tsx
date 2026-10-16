@@ -1,21 +1,25 @@
 /**
- * MCP optimization settings page: how much of a tool list enters the context.
+ * MCP context-budget panel: how much of a tool list enters the context.
  *
- * A separate `settings.section` from the roster on purpose. The roster answers
- * "which servers exist and when may a session load one"; this page answers the
- * orthogonal question the MCP client best-practices guide calls progressive
- * discovery — whether the model can search before loading, whether a listing is
- * paged, whether argument schemas are deferred to the moment they are needed,
- * and how long a discovery result may be reused instead of reconnecting.
+ * The second tab of the MCP settings page. The roster answers "which servers
+ * exist and when may a session load one"; this panel answers the orthogonal
+ * question the MCP client best-practices guide calls progressive discovery —
+ * whether the model can search before loading, whether a listing is paged,
+ * whether argument schemas are deferred to the moment they are needed, and how
+ * long a discovery result may be reused instead of reconnecting.
  *
  * Every control writes one field of the `mcp-manager` namespace's `optimize`
  * map through the shared controller, so the same document the Host reads is the
- * one this page edits, and each row shows its own save state.
+ * one this panel edits, and each row shows its own save state.
+ *
+ * Settings and state stay apart here: the policy rows are host-style preference
+ * rows, and what the discovery cache currently holds is a status block of its
+ * own rather than another row in the cache group it belongs to.
  * @module @guowenzhang/dsh-mcp-manager/client/McpOptimizeSection
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Input, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Button, Input, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   MCP_CATALOG_TTL_RANGE,
@@ -51,6 +55,9 @@ type CatalogView =
 
 /** One row's save state, shown beside its control. */
 type RowState = 'idle' | 'saving' | 'saved'
+
+/** How long a row keeps its "saved" note before the slot goes quiet again. */
+const SAVED_NOTE_MS = 2_500
 
 /** Settings that must be a whole number of milliseconds per minute in the UI. */
 const MS_PER_MINUTE = 60_000
@@ -180,31 +187,53 @@ function ageText(ageMs: number, t: Translate): string {
   return t('opt.catalog.age.minutes').replace('{n}', String(Math.round(seconds / 60)))
 }
 
-/** The MCP optimization settings page body. */
+/** The MCP context-budget panel body. */
 export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
   const { useMcpSettings, setOptimize, catalogState, clearCatalog, t } = props
   const state = useMcpSettings(snapshot => snapshot)
   const policy: McpOptimizeFlags = parseMcpOptimizeFlags(state.optimize)
   const disabled = !state.available || !state.writable
-  const [savingField, setSavingField] = useState<string | null>(null)
-  const [savedField, setSavedField] = useState<string | null>(null)
+  // One state per field: two writes in flight must not clear each other's note.
+  const [rowStates, setRowStates] = useState<Readonly<Record<string, RowState>>>({})
+  const savedTimers = useRef(new Map<string, number>())
   const [failure, setFailure] = useState<string | null>(null)
   const [catalog, setCatalog] = useState<CatalogView>({ status: 'loading' })
   const [catalogRequest, setCatalogRequest] = useState(0)
   const [catalogBusy, setCatalogBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
 
+  useEffect(() => () => {
+    for (const timer of savedTimers.current.values()) clearTimeout(timer)
+    savedTimers.current.clear()
+  }, [])
+
+  const markRow = useCallback((field: string, next: RowState): void => {
+    setRowStates(previous => ({ ...previous, [field]: next }))
+    const pending = savedTimers.current.get(field)
+    if (pending !== undefined) {
+      clearTimeout(pending)
+      savedTimers.current.delete(field)
+    }
+    if (next !== 'saved') return
+    // The note is feedback for one write, not a property of the row: it goes
+    // quiet on its own so a later visit does not read a stale "saved".
+    savedTimers.current.set(field, window.setTimeout(() => {
+      savedTimers.current.delete(field)
+      setRowStates(previous => previous[field] === 'saved' ? { ...previous, [field]: 'idle' } : previous)
+    }, SAVED_NOTE_MS))
+  }, [])
+
   const write = useCallback((field: string, value: unknown): void => {
-    setSavingField(field)
-    setSavedField(null)
+    markRow(field, 'saving')
     setFailure(null)
     void setOptimize(field, value).then(
-      () => { setSavedField(field) },
-      (cause: unknown) => { setFailure(cause instanceof Error ? cause.message : String(cause)) },
-    ).finally(() => {
-      setSavingField(current => current === field ? null : current)
-    })
-  }, [setOptimize])
+      () => { markRow(field, 'saved') },
+      (cause: unknown) => {
+        markRow(field, 'idle')
+        setFailure(cause instanceof Error ? cause.message : String(cause))
+      },
+    )
+  }, [markRow, setOptimize])
 
   useEffect(() => {
     let current = true
@@ -225,8 +254,7 @@ export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
     return () => { current = false }
   }, [catalogState, catalogRequest])
 
-  const rowState = (field: string): RowState =>
-    savingField === field ? 'saving' : savedField === field ? 'saved' : 'idle'
+  const rowState = (field: string): RowState => rowStates[field] ?? 'idle'
   const rowProps = { disabled, t, onWrite: write }
   const entries = catalog.status === 'ready' ? catalog.entries : []
   const toolCount = entries.reduce((total, entry) => total + entry.tools, 0)
@@ -297,52 +325,6 @@ export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
           disabled={disabled}
           t={t}
         />
-        <div className={css.catalog}>
-          <div className={css.catalogHead}>
-            <span className={css.rowLabel}>{t('opt.catalog.title')}</span>
-            <span className={css.catalogSummary}>
-              {catalog.status === 'ready'
-                ? t('opt.catalog.summary').replace('{servers}', String(catalog.total)).replace('{tools}', String(toolCount))
-                : catalog.status === 'error' ? t('mcp.error') : t('mcp.loading')}
-            </span>
-            <span className={css.catalogActions}>
-              <button
-                type="button"
-                className={css.action}
-                disabled={catalogBusy}
-                onClick={() => { setCatalogRequest(value => value + 1) }}
-              >
-                {t('opt.catalog.refresh')}
-              </button>
-              <button
-                type="button"
-                className={css.action}
-                disabled={catalogBusy || catalog.status !== 'ready' || catalog.total === 0}
-                onClick={clear}
-              >
-                {t('opt.catalog.clear')}
-              </button>
-            </span>
-          </div>
-          {catalog.status === 'ready' && entries.length === 0
-            ? <p className={css.catalogEmpty}>{t('opt.catalog.empty')}</p>
-            : null}
-          {entries.length > 0 ? (
-            <ul className={css.catalogList}>
-              {entries.map(entry => (
-                <li key={entry.key} className={css.catalogRow}>
-                  <span className={css.catalogKey}>{entry.key}</span>
-                  <span className={css.catalogMeta}>
-                    {t('opt.catalog.row')
-                      .replace('{tools}', String(entry.tools))
-                      .replace('{age}', ageText(entry.ageMs, t))}
-                    {entry.truncated ? ` · ${t('opt.catalog.truncated')}` : ''}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
       </section>
 
       <section className={css.group}>
@@ -350,6 +332,56 @@ export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
         <p className={css.groupHint}>{t('opt.group.annotations.hint')}</p>
         <SwitchRow field="annotations" label={t('opt.annotations')} desc={t('opt.annotations.desc')} value={policy.annotations} state={rowState('annotations')} {...rowProps} />
         <SwitchRow field="hideDestructive" label={t('opt.hideDestructive')} desc={t('opt.hideDestructive.desc')} value={policy.hideDestructive} state={rowState('hideDestructive')} {...rowProps} />
+      </section>
+
+      {/* State, not a setting: what the discovery cache currently answers from,
+          and the two actions that change it. It reads as its own block so the
+          cache lifetime above stays a plain preference row. */}
+      <section className={css.status}>
+        <div className={css.statusHead}>
+          <span className={css.rowLabel}>{t('opt.catalog.title')}</span>
+          <span className={css.catalogSummary}>
+            {catalog.status === 'ready'
+              ? t('opt.catalog.summary').replace('{servers}', String(catalog.total)).replace('{tools}', String(toolCount))
+              : catalog.status === 'error' ? t('mcp.error') : t('mcp.loading')}
+          </span>
+          <span className={css.statusActions}>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={catalogBusy}
+              onClick={() => { setCatalogRequest(value => value + 1) }}
+            >
+              {t('opt.catalog.refresh')}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={catalogBusy || catalog.status !== 'ready' || catalog.total === 0}
+              onClick={clear}
+            >
+              {t('opt.catalog.clear')}
+            </Button>
+          </span>
+        </div>
+        {catalog.status === 'ready' && entries.length === 0
+          ? <p className={css.catalogEmpty}>{t('opt.catalog.empty')}</p>
+          : null}
+        {entries.length > 0 ? (
+          <ul className={css.catalogList}>
+            {entries.map(entry => (
+              <li key={entry.key} className={css.catalogRow}>
+                <span className={css.catalogKey}>{entry.key}</span>
+                <span className={css.catalogMeta}>
+                  {t('opt.catalog.row')
+                    .replace('{tools}', String(entry.tools))
+                    .replace('{age}', ageText(entry.ageMs, t))}
+                  {entry.truncated ? ` · ${t('opt.catalog.truncated')}` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </section>
 
       {failure === null ? null : <p className={css.failure} role="alert">{failure}</p>}

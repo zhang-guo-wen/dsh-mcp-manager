@@ -1,28 +1,36 @@
 /**
- * MCP management settings section: the server roster with its loading mode.
+ * MCP management settings section: one settings page carrying both faces of the
+ * plugin, the server roster and the context-budget policy.
  *
  * One list carries both planes, and no control chooses between them. Global rows
  * come first and in full, whatever agent preset the list is narrowed to: a
  * session carries its global rows regardless of the preset it runs, so hiding
  * them behind a selector would misstate what the composition mounts. The preset
- * picker narrows the agent rows — and names the target of a new agent row, which
- * is why every declared preset is offered and not only the ones owning rows.
+ * picker narrows the agent rows only, and the name filter narrows what is
+ * rendered without changing any count that is reported about the composition.
  *
- * A row's editor always opens on that row's own plane, so editing cannot write
- * to the wrong side; the plane only decides where a *new* row goes, which is why
- * it follows the last deliberate choice.
+ * Which plane a *new* row goes to is the creating dialog's own choice. The
+ * section cannot infer it: deriving the target from the row the user last edited
+ * left the global plane unreachable in a composition with no global row yet, and
+ * leaving it unset left "Add" disabled on the view every user starts from.
+ *
+ * The two faces are in-page tabs rather than two `settings.section`
+ * registrations: the shell's nav is a flat, order-sorted list, so a second
+ * registration reads as a second plugin.
  * @module @guowenzhang/dsh-mcp-manager/client/McpSection
  */
 
 import { useEffect, useId, useState, type ReactNode } from 'react'
-import { Button, SegmentedControl, StateDot, Switch, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, SegmentedControl, SegmentedTabs, StateDot, Switch, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AddMcpRequest, EditMcpRequest } from '../types.ts'
+import { MAX_DESCRIPTION_CHARS } from '../mcp-inventory.ts'
 import { toolRuleEntries } from '../mcp-tool-filter.ts'
 import { formatMcpConfigIssues } from './config-issues.ts'
 import { McpEditor, type McpEditorMode, type McpEditorRequest } from './McpEditor.tsx'
 import { ClaudeImportDialog } from './ClaudeImportDialog.tsx'
+import { McpOptimizeSection } from './McpOptimizeSection.tsx'
 import {
   MCP_LOADING_OPTIONS,
   mcpRowKey,
@@ -37,6 +45,9 @@ import { MCP_ALL_PRESETS, mcpAgentFilterOptions, narrowMcpRows } from './agent-f
 import { rowAllowed } from './mcp-row-state.ts'
 import { MCP_READ_ONLY_REASON, type McpSectionKey } from './locales.ts'
 import css from './McpSection.module.css'
+
+/** The page's own sections: the roster, and the policy that decides how much of it enters a request. */
+type McpTab = 'servers' | 'context'
 
 /**
  * Whether one row's actions are closed, and why.
@@ -161,15 +172,26 @@ function loadingMode(value: string): McpLoadingOption {
  * reporting it would put a badge on the whole list and mean nothing. What the
  * list still has to show is the one condition that stops a row from starting —
  * an incomplete connection config — and the life-cycle phases a user can act on.
+ *
+ * A row that renders a switch states its own on/off position, so a row the user
+ * turned off needs no second label saying so; one the Host reports as off with
+ * no switch to show it (a read-only row, or a row whose entry has no Loader id)
+ * still does.
+ * @param server - the rendered row.
+ * @param hasSwitch - whether this row renders its own switch.
+ * @param t - the section's translator.
+ * @returns the label and dot to show, or undefined for a resting row.
  */
-function statusOf(server: McpServer, t: Translate): { label: string; dot: StateDotState } | undefined {
+function statusOf(server: McpServer, hasSwitch: boolean, t: Translate): { label: string; dot: StateDotState } | undefined {
   // A configuration gap outranks enablement: a row the user enabled but that
   // cannot start is exactly the case this marker exists for.
   const configIssue = server.configIssue ?? []
   if (configIssue.length > 0) {
     return { label: t('mcp.status.unconfigured'), dot: 'warning' }
   }
-  if (server.enabled === false) return { label: t('mcp.status.disabled'), dot: 'idle' }
+  if (server.enabled === false) {
+    return hasSwitch ? undefined : { label: t('mcp.status.disabled'), dot: 'idle' }
+  }
   if (server.enabled === 'conditional') return { label: t('mcp.status.conditional'), dot: 'warning' }
   const phase = server.fiberPhase
   // No fiber, a pending fiber, and a fiber the preload gate held back all mean
@@ -203,7 +225,6 @@ function McpLoadingPicker({ value, disabled, status, onPick, onRetry, t }: {
   }))
   return (
     <div className={css.modeBlock}>
-      <span className={css.fieldLabel}>{t('mcp.mode.title')}</span>
       <SegmentedControl<McpLoadingOption>
         id={pickerId}
         value={current}
@@ -238,6 +259,67 @@ function McpLoadingPicker({ value, disabled, status, onPick, onRetry, t }: {
         </div>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * One row's authoring description.
+ *
+ * The description is the only user-written text that reaches the model (it is
+ * the roster line in the system prompt), so it reads as content rather than as
+ * an empty field: a borderless text at rest, a real input only while it is being
+ * edited. Only an over-budget description warns, because the model sees the
+ * first {@link MAX_DESCRIPTION_CHARS} characters of it and nothing says so
+ * anywhere else.
+ * @param props.value - the committed description.
+ * @param props.disabled - whether the row's actions are closed.
+ * @param props.onCommit - persist the edited text.
+ * @param props.t - the section's translator.
+ * @returns the description control.
+ */
+function McpDescription({ value, disabled, onCommit, t }: {
+  readonly value: string
+  readonly disabled: boolean
+  readonly onCommit: (next: string) => void
+  readonly t: Translate
+}): ReactNode {
+  const [draft, setDraft] = useState<string | null>(null)
+  if (draft === null) {
+    return (
+      <button
+        type="button"
+        className={css.descText}
+        data-empty={value === ''}
+        disabled={disabled}
+        title={value === '' ? t('mcp.descriptionPlaceholder') : value}
+        onClick={() => { setDraft(value) }}
+      >
+        {value === '' ? t('mcp.description.add') : value}
+      </button>
+    )
+  }
+  return (
+    <>
+      <input
+        className={css.mcpDesc}
+        value={draft}
+        autoFocus
+        placeholder={t('mcp.descriptionPlaceholder')}
+        aria-label={t('mcp.descriptionLabel')}
+        aria-invalid={draft.length > MAX_DESCRIPTION_CHARS}
+        onChange={(event) => { setDraft(event.currentTarget.value) }}
+        onBlur={() => { onCommit(draft); setDraft(null) }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+          if (event.key === 'Escape') setDraft(null)
+        }}
+      />
+      {draft.length > MAX_DESCRIPTION_CHARS ? (
+        <span className={css.descOver} role="status">
+          {t('mcp.description.budget').replace('{n}', String(MAX_DESCRIPTION_CHARS))}
+        </span>
+      ) : null}
+    </>
   )
 }
 
@@ -278,11 +360,12 @@ function McpRow({ server, description, suppressed, action, onEditDescription, on
   const unconfigured = configIssue.length > 0
   const pending = action !== null && action.phase !== 'failed' ? action.phase : null
   const failure = action !== null && action.phase === 'failed' ? action : null
+  const hasSwitch = server.entryId !== null
   const status = pending === 'enabling'
     ? { label: t('mcp.status.starting'), dot: 'warning' as StateDotState }
     : pending === 'disabling'
       ? { label: t('mcp.status.stopping'), dot: 'warning' as StateDotState }
-      : statusOf(server, t)
+      : statusOf(server, hasSwitch, t)
   // The Host's own enablement answer wins over the gate's bookkeeping; the
   // suppression set only decides when the answer is not explicit at all.
   const allowed = rowAllowed(server.enabled, suppressed)
@@ -302,20 +385,11 @@ function McpRow({ server, description, suppressed, action, onEditDescription, on
     : cannotEnable
       ? `${t('mcp.status.unconfigured')}: ${formatMcpConfigIssues(configIssue, t)}`
       : checked ? t('mcp.disable') : t('mcp.enable')
-  const [draft, setDraft] = useState<string | null>(null)
-  const value = draft ?? description
   return (
     <div className={css.mcpRow} data-mcp-scope={server.scope} data-mcp-name={server.serverName}>
       <div className={css.mcpMain}>
         <span className={css.mcpName}>{server.serverName}</span>
-        <input
-          className={css.mcpDesc}
-          value={value}
-          placeholder={t('mcp.descriptionPlaceholder')}
-          aria-label={t('mcp.descriptionLabel')}
-          onChange={(event) => { setDraft(event.currentTarget.value) }}
-          onBlur={() => { onEditDescription(value); setDraft(null) }}
-        />
+        <McpDescription value={description} disabled={actionsDisabled} onCommit={onEditDescription} t={t} />
         {/* The failed action stays in its row with a retry, so the roster and
             the last good state remain on screen while the user decides. */}
         {failure === null ? null : (
@@ -356,7 +430,7 @@ function McpRow({ server, description, suppressed, action, onEditDescription, on
           >
             {t('mcp.edit')}
           </Button>
-          {server.entryId !== null ? (
+          {hasSwitch ? (
             <Switch
               checked={checked}
               onChange={onToggleDisabled}
@@ -391,24 +465,29 @@ function McpRosterSkeleton({ label }: { readonly label: string }): ReactNode {
   )
 }
 
-/** The MCP management section body. */
+/** The MCP management section body: the roster tab and the context-budget tab. */
 export function McpSection(props: McpSectionProps): ReactNode {
   const {
     useMcpSettings, t, setMcpLoading, addMcp, addMcps, editMcp, disableMcp, describeMcp, listMcpTools,
     suppressedMcps, mcps, presets, updateMcpDescription, updateMcpTools, scanClaudeMcp,
   } = props
   const state = useMcpSettings(snapshot => snapshot)
+  const [tab, setTab] = useState<McpTab>('servers')
+  const tabsId = useId()
   const [mcpView, setMcpView] = useState<McpView>({ status: 'loading' })
   const [mcpRequest, setMcpRequest] = useState(0)
   const [importerOpen, setImporterOpen] = useState(false)
   const [editor, setEditor] = useState<{ mode: McpEditorMode; server: McpServer | undefined; open: boolean }>({
     mode: 'add', server: undefined, open: false,
   })
+  /** The plane a dialog opened from the section starts on; the dialog owns it from there. */
+  const [openedPlane, setOpenedPlane] = useState<McpPlane>('agent')
   const [editorBusy, setEditorBusy] = useState(false)
   const [editorError, setEditorError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [rowAction, setRowAction] = useState<Record<string, RowAction>>({})
   const [modeSave, setModeSave] = useState<ModeSave>({ phase: 'idle' })
+  const [search, setSearch] = useState('')
   /**
    * A failure no single row can carry.
    *
@@ -420,15 +499,6 @@ export function McpSection(props: McpSectionProps): ReactNode {
   // Which agent preset the agent rows are narrowed to; `MCP_ALL_PRESETS` shows
   // every preset, which is what a first visit needs.
   const [agentFilter, setAgentFilter] = useState<string>(MCP_ALL_PRESETS)
-  /**
-   * Where an authoring action writes.
-   *
-   * The list shows both planes at once, so the surface no longer implies a
-   * target: a new row goes to the plane the user is working in. Narrowing the
-   * list to one preset means the agent plane; opening a global row's editor
-   * means that row's own plane.
-   */
-  const [writePlane, setWritePlane] = useState<McpPlane>('agent')
   const disabled = !state.available || !state.writable
   const servers = mcpView.status === 'ready' ? mcpView.servers : []
   const presetNames = mcpView.status === 'ready' ? mcpView.presets : []
@@ -452,19 +522,23 @@ export function McpSection(props: McpSectionProps): ReactNode {
   // The global plane is always listed, first and in full: selecting an agent
   // preset narrows the agent rows only.
   const presetServers = narrowMcpRows(servers, activePreset)
-  // One list shows both planes at once, so the count beside the picker covers
-  // exactly these rows: global first, then the narrowed agent rows.
   const listedServers = [...globalServers, ...presetServers]
+  const descriptionOf = (server: McpServer): string => server.description ?? state.descriptions[mcpRowKey(server)] ?? ''
+  // The name filter is a view over the same roster: it never changes which rows
+  // the composition declares, so the reported totals stay the composition's.
+  const needle = search.trim().toLowerCase()
+  const matches = (server: McpServer): boolean => needle === ''
+    || server.serverName.toLowerCase().includes(needle)
+    || descriptionOf(server).toLowerCase().includes(needle)
+  const visibleGlobal = globalServers.filter(matches)
+  const visiblePreset = presetServers.filter(matches)
+  const visibleCount = visibleGlobal.length + visiblePreset.length
+  const enabledCount = listedServers.filter(server => server.enabled !== false).length
   // A global write edits the Include's own file, so a patched profile writes
   // fine; only a composition that mounts no single file-backed Include cannot
   // address one, and then the global row actions are closed.
   const globalUnavailable = mcpView.status === 'ready' && !mcpView.globalWritable
-  const listUnavailable = writePlane === 'global' && globalUnavailable
   const unavailableReason = t('mcp.global.unavailable')
-  // Writing an agent row needs one preset to address. The list may show every
-  // preset at once, and then a new row has no home: the picker says so instead
-  // of the dialog failing after the form is filled in.
-  const needsPreset = writePlane === 'agent' && activePreset === MCP_ALL_PRESETS
 
   useEffect(() => {
     let current = true
@@ -529,7 +603,8 @@ export function McpSection(props: McpSectionProps): ReactNode {
     })()
   }
 
-  const openAdd = (): void => {
+  const openAdd = (plane: McpPlane = 'agent'): void => {
+    setOpenedPlane(plane)
     setEditor({ mode: 'add', server: undefined, open: true })
     setEditorError(null)
     setNotice(null)
@@ -543,7 +618,8 @@ export function McpSection(props: McpSectionProps): ReactNode {
     setMcpActionError(null)
   }
 
-  const openImport = (): void => {
+  const openImport = (plane: McpPlane = 'agent'): void => {
+    setOpenedPlane(plane)
     setImporterOpen(true)
     setEditorError(null)
     setNotice(null)
@@ -615,9 +691,59 @@ export function McpSection(props: McpSectionProps): ReactNode {
     })()
   }
 
-  return (
-    <div className={css.section}>
-      <div className={css.panel}>
+  const rowFor = (server: McpServer): ReactNode => {
+    const key = mcpRowKey(server)
+    return (
+      <McpRow
+        key={key}
+        server={server}
+        description={descriptionOf(server)}
+        suppressed={mcpView.status === 'ready' && mcpView.suppressed.has(key)}
+        action={rowAction[key] ?? null}
+        onEditDescription={(value) => { updateMcpDescription(key, value) }}
+        onEdit={() => { openEdit(server) }}
+        onToggleDisabled={(enabled) => { toggleDisabled(server, enabled) }}
+        onRetry={(enabled) => { toggleDisabled(server, enabled) }}
+        {...rowActionState(server, editorBusy, globalUnavailable, unavailableReason, t)}
+        t={t}
+      />
+    )
+  }
+
+  const groupEmpty = (plane: McpPlane, rows: number): ReactNode => {
+    if (rows > 0) return null
+    const searching = needle !== ''
+    // An empty group may only offer the write its own plane can take: an
+    // action that leads into a dialog the plane cannot address would promise
+    // what the Host will refuse.
+    const canAdd = plane === 'global' ? !globalUnavailable : presetChoices.length > 0
+    return (
+      <div className={css.emptyBlock}>
+        <p className={css.empty}>
+          {searching ? t('mcp.noMatch') : plane === 'global' ? t('mcp.empty.global') : t('mcp.empty.agent')}
+        </p>
+        <p className={css.emptyHint}>
+          {searching ? t('mcp.noMatch.hint') : plane === 'global' ? t('mcp.empty.global.hint') : t('mcp.empty.agent.hint')}
+        </p>
+        {/* The way out of an empty group sits in the group: the page's own
+            actions are above the list, and an empty plane is exactly where a
+            user looks for one. */}
+        {!searching && !disabled && canAdd ? (
+          <Button variant="outline" size="sm" onClick={() => { openAdd(plane) }}>
+            {plane === 'global' ? t('mcp.empty.addGlobal') : t('mcp.empty.addAgent')}
+          </Button>
+        ) : null}
+      </div>
+    )
+  }
+
+  const rosterPanel = (
+    <>
+      <section className={css.block}>
+        <div className={css.blockHead}>
+          <h3 className={css.blockTitle}>{t('mcp.mode.title')}</h3>
+          <span className={css.when}>{t('mcp.mode.when')}</span>
+        </div>
         {!state.available ? <p className={css.unavailable}>{t('unavailable')}</p> : null}
         <McpLoadingPicker
           value={state.loading}
@@ -627,63 +753,71 @@ export function McpSection(props: McpSectionProps): ReactNode {
           onRetry={pickMode}
           t={t}
         />
-        <div className={css.mcpToolbar}>
-          <div className={css.mcpToolbarLead}>
-            <p className={css.mcpSub}>{t('mcp.subtitle')}</p>
-            {/* The list carries both planes, so the count beside the picker
-                covers the rows it actually shows: a narrowed view still answers
-                "how many of these are allowed". */}
-            {mcpView.status === 'ready' && listedServers.length > 0 ? (
+      </section>
+      <section className={css.block}>
+        <div className={css.listHead}>
+          <div className={css.listHeadText}>
+            <h3 className={css.blockTitle}>{t('mcp.list.title')}</h3>
+            {mcpView.status === 'ready' ? (
               <span className={css.count}>
-                {t('mcp.count.enabled')
-                  .replace('{n}', String(listedServers.filter(server => server.enabled !== false).length))
-                  .replace('{m}', String(listedServers.length))}
+                {needle === ''
+                  ? t('mcp.count.rows')
+                    .replace('{n}', String(listedServers.length))
+                    .replace('{m}', String(enabledCount))
+                  : t('mcp.count.filtered')
+                    .replace('{n}', String(visibleCount))
+                    .replace('{m}', String(listedServers.length))}
               </span>
             ) : null}
-            {/* One list carries both planes, so the picker chooses which preset
-                the agent rows come from — and doubles as the target of a new
-                agent row, which is why every declared preset is offered. */}
-            {presetChoices.length > 0 ? (
-              <select
-                className={css.mcpFilterSelect}
-                value={activePreset}
-                aria-label={t('mcp.filter.label')}
-                onChange={(event) => {
-                  setAgentFilter(event.currentTarget.value)
-                  setWritePlane('agent')
-                }}
-              >
-                <option value={MCP_ALL_PRESETS}>
-                  {t('mcp.filter.all').replace('{n}', String(agentServers.length))}
-                </option>
-                {presetChoices.map(option => (
-                  <option key={option.id} value={option.id}>
-                    {t('mcp.filter.option').replace('{name}', option.name).replace('{n}', String(option.count))}
-                  </option>
-                ))}
-              </select>
-            ) : null}
           </div>
-          <span className={css.mcpActions}>
+          <span className={css.listActions}>
             <Button
               variant="outline"
               size="sm"
-              onClick={openImport}
-              disabled={disabled || editorBusy || listUnavailable || needsPreset}
-              title={listUnavailable ? unavailableReason : needsPreset ? t('mcp.actionNeedsPreset') : undefined}
+              onClick={() => { openImport() }}
+              disabled={disabled || editorBusy}
+              title={disabled ? t('unavailable') : undefined}
             >
               {t('mcp.import')}
             </Button>
             <Button
-              variant="outline"
+              variant="primary"
               size="sm"
-              onClick={openAdd}
-              disabled={editorBusy || listUnavailable || needsPreset}
-              title={listUnavailable ? unavailableReason : needsPreset ? t('mcp.actionNeedsPreset') : undefined}
+              onClick={() => { openAdd() }}
+              disabled={disabled || editorBusy}
+              title={disabled ? t('unavailable') : undefined}
             >
               {t('mcp.add')}
             </Button>
           </span>
+        </div>
+        <p className={css.listHint}>{t('mcp.list.hint')}</p>
+        {/* The list's two views are a row of their own, so a wrapped action never
+            lands beside a filter it does not belong to. */}
+        <div className={css.listFilters}>
+          <input
+            type="search"
+            className={css.rosterSearch}
+            value={search}
+            placeholder={t('mcp.search.placeholder')}
+            aria-label={t('mcp.search.label')}
+            onChange={(event) => { setSearch(event.currentTarget.value) }}
+          />
+          {presetChoices.length > 0 ? (
+            <select
+              className={css.mcpFilterSelect}
+              value={activePreset}
+              aria-label={t('mcp.filter.label')}
+              onChange={(event) => { setAgentFilter(event.currentTarget.value) }}
+            >
+              <option value={MCP_ALL_PRESETS}>{t('mcp.filter.all')}</option>
+              {presetChoices.map(option => (
+                <option key={option.id} value={option.id}>
+                  {t('mcp.filter.option').replace('{name}', option.name)}
+                </option>
+              ))}
+            </select>
+          ) : null}
         </div>
         {mcpView.status === 'loading' ? <McpRosterSkeleton label={t('mcp.loading')} /> : null}
         {mcpView.status === 'error' ? (
@@ -696,65 +830,18 @@ export function McpSection(props: McpSectionProps): ReactNode {
           <div className={css.mcpList}>
             {/* The global plane is listed first and never filtered away: a
                 session carries its rows whatever agent preset it runs. */}
-            <p className={css.mcpGroup}>
-              <span>{t('mcp.group.global').replace('{n}', String(globalServers.length))}</span>
-              {/* Both planes follow the loading mode now, so the one rule that
-                  still differs between them is stated where their rows split. */}
-              <span className={css.mcpGroupHint}>{t('mcp.plane.global.eager')}</span>
-            </p>
-            {globalServers.length === 0 ? (
-              <>
-                <p className={css.empty}>{t('mcp.empty.global')}</p>
-                <p className={css.emptyHint}>{t('mcp.empty.global.hint')}</p>
-              </>
-            ) : null}
-            {globalServers.map((server) => {
-              const key = mcpRowKey(server)
-              return (
-                <McpRow
-                  key={key}
-                  server={server}
-                  description={server.description ?? state.descriptions[key] ?? ''}
-                  suppressed={mcpView.suppressed.has(key)}
-                  action={rowAction[key] ?? null}
-                  onEditDescription={(value) => { updateMcpDescription(key, value) }}
-                  onEdit={() => { setWritePlane('global'); openEdit(server) }}
-                  onToggleDisabled={(enabled) => { toggleDisabled(server, enabled) }}
-                  onRetry={(enabled) => { toggleDisabled(server, enabled) }}
-                  {...rowActionState(server, editorBusy, globalUnavailable, unavailableReason, t)}
-                  t={t}
-                />
-              )
-            })}
+            <p className={css.mcpGroup}>{t('mcp.group.global').replace('{n}', String(visibleGlobal.length))}</p>
+            {groupEmpty('global', visibleGlobal.length)}
+            {visibleGlobal.map(server => rowFor(server))}
             <p className={css.mcpGroup}>
               {activePreset === MCP_ALL_PRESETS
-                ? t('mcp.group.agentAll').replace('{n}', String(presetServers.length))
-                : t('mcp.group.agent').replace('{name}', activePreset).replace('{n}', String(presetServers.length))}
+                ? t('mcp.group.agentAll').replace('{n}', String(visiblePreset.length))
+                : t('mcp.group.agent')
+                  .replace('{name}', presetChoices.find(option => option.id === activePreset)?.name ?? activePreset)
+                  .replace('{n}', String(visiblePreset.length))}
             </p>
-            {presetServers.length === 0 ? (
-              <>
-                <p className={css.empty}>{t('mcp.empty.agent')}</p>
-                <p className={css.emptyHint}>{t('mcp.empty.agent.hint')}</p>
-              </>
-            ) : null}
-            {presetServers.map((server) => {
-              const key = mcpRowKey(server)
-              return (
-                <McpRow
-                  key={key}
-                  server={server}
-                  description={server.description ?? state.descriptions[key] ?? ''}
-                  suppressed={mcpView.suppressed.has(key)}
-                  action={rowAction[key] ?? null}
-                  onEditDescription={(value) => { updateMcpDescription(key, value) }}
-                  onEdit={() => { setWritePlane('agent'); openEdit(server) }}
-                  onToggleDisabled={(enabled) => { toggleDisabled(server, enabled) }}
-                  onRetry={(enabled) => { toggleDisabled(server, enabled) }}
-                  {...rowActionState(server, editorBusy, globalUnavailable, unavailableReason, t)}
-                  t={t}
-                />
-              )
-            })}
+            {groupEmpty('agent', visiblePreset.length)}
+            {visiblePreset.map(server => rowFor(server))}
           </div>
         ) : null}
         {/* Transient state lives below the list, so a busy line, a failure, or a
@@ -764,50 +851,89 @@ export function McpSection(props: McpSectionProps): ReactNode {
         ) : null}
         {mcpActionError !== null ? <p className={css.mcpActionError} role="alert">{mcpActionError}</p> : null}
         {notice !== null ? <p className={css.mcpNotice} role="status">{notice}</p> : null}
-        <McpEditor
-          open={editor.open}
-          mode={editor.mode}
-          server={editor.server}
-          disabled={false}
-          busy={editorBusy}
-          error={editorError}
-          describeMcp={describeMcp}
-          listMcpTools={listMcpTools}
-          presets={presets}
-          plane={writePlane}
-          {...activePreset === MCP_ALL_PRESETS ? {} : { preset: activePreset }}
-          descriptionInitial={editor.server === undefined
-            ? ''
-            : (editor.server.description ?? state.descriptions[mcpRowKey(editor.server)] ?? '')}
-          onUpdateDescription={updateMcpDescription}
-          toolRulesInitial={editor.server === undefined ? [] : toolRuleEntries(state.tools[mcpRowKey(editor.server)])}
-          onUpdateTools={updateMcpTools}
-          t={t}
-          onClose={closeEditor}
-          onSubmit={(request) => { void submitEditor(request) }}
-        />
-        <ClaudeImportDialog
-          open={importerOpen}
-          // The batch reports its own progress and the mask blocks this section
-          // while it runs, so it must not toggle the shared busy flag per entry:
-          // each toggle re-rendered this section, and the page behind the modal is
-          // what the mask's backdrop filter has to re-compose.
-          busy={false}
-          error={editorError}
-          scanClaudeMcp={scanClaudeMcp}
-          addMcps={addMcps}
-          servers={servers}
-          presets={presets}
-          plane={writePlane}
-          {...activePreset === MCP_ALL_PRESETS ? {} : { preset: activePreset }}
-          t={t}
-          onClose={() => { setImporterOpen(false) }}
-          onImported={() => {
-            setNotice(t('mcp.notice.added'))
-            refreshMcps()
-          }}
-        />
+      </section>
+    </>
+  )
+
+  return (
+    <div className={css.section}>
+      <header className={css.pageHead}>
+        <h2 className={css.pageTitle}>{t('mcp.page.title')}</h2>
+        <p className={css.pageIntro}>{t('mcp.page.intro')}</p>
+      </header>
+      <SegmentedTabs<McpTab>
+        className={css.tabs}
+        label={t('mcp.tabs.label')}
+        value={tab}
+        onChange={setTab}
+        items={[
+          { value: 'servers', label: t('mcp.tab.servers'), id: `${tabsId}-servers-tab`, panelId: `${tabsId}-servers-panel` },
+          { value: 'context', label: t('mcp.tab.context'), id: `${tabsId}-context-tab`, panelId: `${tabsId}-context-panel` },
+        ]}
+      />
+      <div
+        id={`${tabsId}-servers-panel`}
+        role="tabpanel"
+        aria-labelledby={`${tabsId}-servers-tab`}
+        className={css.tabPanel}
+        hidden={tab !== 'servers'}
+      >
+        {rosterPanel}
       </div>
+      <div
+        id={`${tabsId}-context-panel`}
+        role="tabpanel"
+        aria-labelledby={`${tabsId}-context-tab`}
+        className={css.tabPanel}
+        hidden={tab !== 'context'}
+      >
+        <McpOptimizeSection {...props} />
+      </div>
+      <McpEditor
+        open={editor.open}
+        mode={editor.mode}
+        server={editor.server}
+        disabled={false}
+        busy={editorBusy}
+        error={editorError}
+        describeMcp={describeMcp}
+        listMcpTools={listMcpTools}
+        presets={presets}
+        plane={openedPlane}
+        globalWritable={mcpView.status === 'ready' && mcpView.globalWritable}
+        {...activePreset === MCP_ALL_PRESETS ? {} : { preset: activePreset }}
+        descriptionInitial={editor.server === undefined
+          ? ''
+          : descriptionOf(editor.server)}
+        onUpdateDescription={updateMcpDescription}
+        toolRulesInitial={editor.server === undefined ? [] : toolRuleEntries(state.tools[mcpRowKey(editor.server)])}
+        onUpdateTools={updateMcpTools}
+        t={t}
+        onClose={closeEditor}
+        onSubmit={(request) => { void submitEditor(request) }}
+      />
+      <ClaudeImportDialog
+        open={importerOpen}
+        // The batch reports its own progress and the mask blocks this section
+        // while it runs, so it must not toggle the shared busy flag per entry:
+        // each toggle re-rendered this section, and the page behind the modal is
+        // what the mask's backdrop filter has to re-compose.
+        busy={false}
+        error={editorError}
+        scanClaudeMcp={scanClaudeMcp}
+        addMcps={addMcps}
+        servers={servers}
+        presets={presets}
+        plane={openedPlane}
+        globalWritable={mcpView.status === 'ready' && mcpView.globalWritable}
+        {...activePreset === MCP_ALL_PRESETS ? {} : { preset: activePreset }}
+        t={t}
+        onClose={() => { setImporterOpen(false) }}
+        onImported={() => {
+          setNotice(t('mcp.notice.added'))
+          refreshMcps()
+        }}
+      />
     </div>
   )
 }

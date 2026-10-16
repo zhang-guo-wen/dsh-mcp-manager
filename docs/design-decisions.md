@@ -29,7 +29,7 @@ kind: "package-reference"
 | D13 | 资源仓库 MCP 经内存接口交给管理器 | 保留资源管理器的数据所有权，同时让加载模式统一生效 |
 | D14 | 预设读取经公开 Loader/scope 接口，按代次保存声明 | 不依赖已移除导出，不等待激活，不把旧会话改成新声明 |
 | D15 | 配置不完整是独立状态，与加载模式分开 | 「按需可用」是模式的结果，不是用户要处理的状态 |
-| D16 | 优化策略独立成页，粒度分三层 | 规范只给分页与缓存提示，检索/分页/只带名称都得宿主侧做 |
+| D16 | 优化策略粒度分三层，页内「上下文」页签 | 规范只给分页与缓存提示，检索/分页/只带名称都得宿主侧做 |
 | D17 | 「零拉起 + 宿主级常驻 + 引用计数」是一组取舍（2026-10-15） | 不用就不起、用过就留着、没人用才停（见下文 D17） |
 
 ### D1 允许与进上下文分离
@@ -265,9 +265,9 @@ kind: "package-reference"
 - **实现**：[`src/mcp-diagnostics.ts`](../src/mcp-diagnostics.ts)（纯函数，环境由参数传入）、[`src/mcp-variable-refs.ts`](../src/mcp-variable-refs.ts)（不引用环境的扫描规则，可进浏览器包）、[`src/mcp-gate.ts`](../src/mcp-gate.ts)、[`src/mcp-remote.ts`](../src/mcp-remote.ts) 的 `assertRunnableConfig`、[`src/client/McpSection.tsx`](../src/client/McpSection.tsx) 的 `statusOf`。
 - **测试**：`tests/mcp-diagnostics.spec.ts` 覆盖三类判定与两种输入形状（Claude spec / 归一化 config）；`tests/mcp-gate.spec.ts` 断言 `eager` 下配置不完整的行仍被摘掉。
 
-### D16 优化策略独立成页，粒度分三层（2026-10-15）
+### D16 优化策略粒度分三层，页内「上下文」页签（2026-10-15，2026-10-16 合并入口）
 
-- **结论**：上下文预算由一个独立的用户设置页（设置 → MCP 优化）控制，字段全部存在 `mcp-manager` 命名空间的 `optimize` 开映射里，由 `parseMcpOptimizeFlags` 在读点收敛。粒度分三层，互不替代：
+- **结论**：上下文预算由 MCP 设置页的第二个页签（设置 → MCP 管理 → 上下文）控制，字段全部存在 `mcp-manager` 命名空间的 `optimize` 开映射里，由 `parseMcpOptimizeFlags` 在读点收敛。粒度分三层，互不替代：
   1. **选择**：`mcp_load` 的 `query`（词法匹配，无 embedding）与 `tool`（按名取一个）收窄本次会话**能调用**的集合；**载体不变**——`dynamic` 一律 `native`，收窄只决定注册哪些定义（D8）。已经加载过的服务器再给新 `query` 只会**加宽**（`widen`），永不收窄。
   2. **列表**：`cursor` / `limit` 只分页**结果**，不改变会话能调用的工具（分页是上下文预算，不是能力开关）。默认 `pageSize` 10。
   3. **形态**：`namesOnly` 默认让 `mcp_load` 只带名称与描述；按名字要一个工具（`tool`）时默认 `full`，因为那正是要参数的时机。
@@ -281,8 +281,15 @@ kind: "package-reference"
   - **把分页做成能力开关**（只加载当前页的工具）：模型的下一句可能就要第 11 个工具，而它不知道要翻页；用 `query` 精确选择才是根治，分页只用来省上下文。
   - **让 `hideDestructive` 追溯已加载的服务器**：加载后换一套注册会让模型手上有名字、实际不可调；策略在下一次加载生效，与工具过滤同一条契约。
 - **代价**：`mcp_load` 的结果多了 `total` / `shown` / `loaded` / `truncated` / `nextCursor` 五个字段，渲染文本变长；检索只覆盖「曾经列出过」的服务器，未索引的服务器只能列出名字让模型先加载。
-- **实现**：[`src/mcp-optimize.ts`](../src/mcp-optimize.ts)（纯策略：收敛、匹配、分页、注解）、[`src/mcp-catalog.ts`](../src/mcp-catalog.ts)（有界 TTL 目录）、[`src/lazy-mcp.ts`](../src/lazy-mcp.ts)（`listAllTools` 游标遍历、`mcp_load` / `mcp_search`）、[`src/client/McpOptimizeSection.tsx`](../src/client/McpOptimizeSection.tsx)（设置页）。
+- **实现**：[`src/mcp-optimize.ts`](../src/mcp-optimize.ts)（纯策略：收敛、匹配、分页、注解）、[`src/mcp-catalog.ts`](../src/mcp-catalog.ts)（有界 TTL 目录）、[`src/lazy-mcp.ts`](../src/lazy-mcp.ts)（`listAllTools` 游标遍历、`mcp_load` / `mcp_search`）、[`src/client/McpOptimizeSection.tsx`](../src/client/McpOptimizeSection.tsx)（页签内容）。
 - **测试**：`tests/mcp-optimize.spec.ts`、`tests/mcp-catalog.spec.ts`、`tests/mcp-discovery.spec.ts`；`tests/mcp-load.spec.ts` 用被 mock 的 MCP SDK 驱动真实的 `registerMcpTools`，覆盖分页、收窄、names-only、注解策略、检索与 `tools/list_changed` 失效。
+
+#### 合并入口（2026-10-16）
+
+- **结论**：策略面与名册面合并为**一个** `settings.section`（id `mcp-manager`，order 14），页内用 `SegmentedTabs` 分「服务器 / 上下文」；第二条注册（id `mcp-manager-optimize`）删除。
+- **理由**（用户反馈 + 源码核对）：宿主设置壳的 `settings.section` 契约只有 `id` / `order` / `label` 三个选项，没有分组或子级导航，所以一个插件注册两次必然多出一行侧栏入口；而那条注册用的 `order: 15` 与内置插件区（`plugins`）和服务管理（`service-manager`）撞号，稳定排序把「MCP 优化」排到了「内置插件」后面，两个 MCP 入口不相邻；`navIcon()` 只认五个固定 id，两个入口又都拿到同一枚兜底齿轮图标。实现者在注释里写的"正交的另一个问题"是**实现轴**，用户轴是「作用域 × 配置/状态 × 生效时机」，按用户轴这两面属于同一个任务。
+- **代价**：深层链接不再能直接打开策略面（宿主设置壳本来也没有按 section 的 URL）；「上下文」页签在名册读取完成前也会挂载（读的是一次内存快照，开销可忽略）。
+- **被否决**：保留两条注册、只错开 `order` 并改名（侧栏仍是两行、仍需用户自己判断去哪一页）；为页内分区再声明一个子 slot（为插件内部的两页引入 slot 机制，除非将来还要加第三个 MCP 页）。
 
 ### D17 「零拉起 + 宿主级常驻 + 引用计数」是一组取舍（2026-10-15）
 

@@ -4,6 +4,7 @@ paths:
   - "src/mcp-optimize.ts"
   - "src/mcp-catalog.ts"
   - "src/client/McpOptimizeSection.tsx"
+  - "src/client/McpOptimizeSection.module.css"
 ---
 
 > 覆盖：系统提示里的按需清单(快照语义、预算与截断、模型可见原文)、`optimize` 的三层粒度(选择/列表/形态)、游标分页语义、目录缓存失效与 `mcp_search` 的连接纪律。何时读：改按需清单、`mcp_load`/`mcp_search` 的参数与返回，或改优化策略与目录缓存时。
@@ -79,7 +80,8 @@ what they do without loading a server, and call \`mcp_load\` …`。
   否则会话会挂着一个空 mount,之后连"加载整台"都只能看到空列表(要 `mcp_unload` 才能恢复)。
 - **注解是策略输入,不是承诺。** `hideDestructive` 只认显式 `destructiveHint: true`(规范里缺省值是 true,
   按缺省处理会把没有注解的服务器整台藏掉);`annotations` 只把服务器**真的声明过**的提示带进列表。
-- **设置页是独立的 `settings.section`(id `mcp-manager-optimize`,order 15),复用同一个 controller。** 它按字段
-  merge 写 `optimize` 开映射,每个开关有自己的保存中/已保存状态;目录面板走 `catalogState` / `clearCatalog`
-  两个 Remote(注意:新增 Remote 要三处齐,见「Typert Remote」)。策略解析复用 `src/mcp-optimize.ts`,
-  **不要在浏览器侧再写一份默认值**,否则两侧会漂移。
+- **策略是同一个设置页的「上下文」页签**(2026-10-16 起,不再是独立的 `settings.section`),复用同一个 controller
+  与 inject face。它按字段 merge 写 `optimize` 开映射,每个字段有自己的保存中/已保存状态(按字段存,不用单个
+  `savingField`,否则两个字段同时写会互相清掉提示;「已保存」2.5 秒后自动消失)。目录状态是**状态**不是设置,
+  单独一块,不与 TTL 行同组;两个动作走 `catalogState` / `clearCatalog` 两个 Remote(注意:新增 Remote 要三处齐,
+  见「Typert Remote」)。策略解析复用 `src/mcp-optimize.ts`,**不要在浏览器侧再写一份默认值**,否则两侧会漂移。

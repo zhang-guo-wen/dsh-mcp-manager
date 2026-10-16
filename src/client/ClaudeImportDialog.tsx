@@ -60,8 +60,14 @@ interface ClaudeImportDialogProps {
   readonly servers: readonly McpServer[]
   /** Presets an import can target, in roster order. */
   readonly presets: () => Promise<readonly McpPresetOption[]>
-  /** The plane the settings list currently writes to, which the batch targets. */
+  /**
+   * The plane a fresh open starts on; the dialog's own field owns it from there.
+   * The page has no control that names a plane, so the batch must not inherit a
+   * target the user cannot see or change.
+   */
   readonly plane: McpPlane
+  /** Whether the global plane has a file-backed Include to write. */
+  readonly globalWritable: boolean
   /**
    * The agent preset the list is narrowed to, when it is narrowed to one. The
    * batch targets it, so the dialog's own preset picker opens on it.
@@ -149,7 +155,7 @@ const EntryRow = memo(function EntryRow({ entryKey, entry, checked, disabled, on
 
 /** The Claude configuration import dialog. */
 export function ClaudeImportDialog({
-  open, busy, error, scanClaudeMcp, addMcps, servers, presets, plane, preset, t, onClose, onImported,
+  open, busy, error, scanClaudeMcp, addMcps, servers, presets, plane, globalWritable, preset, t, onClose, onImported,
 }: ClaudeImportDialogProps): ReactNode {
   const [view, setView] = useState<ImportView>({ status: 'loading' })
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(() => new Set<string>())
@@ -158,6 +164,8 @@ export function ClaudeImportDialog({
   const [importing, setImporting] = useState(false)
   const [presetOptions, setPresetOptions] = useState<readonly McpPresetOption[]>([])
   const [presetId, setPresetId] = useState('')
+  /** Chosen plane for this batch, as the dialog's own field. */
+  const [planeChoice, setPlaneChoice] = useState<McpPlane>(plane)
   /** Whether the previous render had the dialog open, so a re-scan is told apart from a fresh open. */
   const wasOpen = useRef(false)
 
@@ -177,6 +185,7 @@ export function ClaudeImportDialog({
       // An empty preset id stands for "the first preset once they are known";
       // a preset the list is narrowed to is the one the batch will target.
       setPresetId(preset ?? '')
+      setPlaneChoice(plane)
     }
     void presets().then(
       (list) => {
@@ -193,8 +202,8 @@ export function ClaudeImportDialog({
     return () => { current = false }
   }, [open, attempt, scanClaudeMcp, presets])
 
-  /** The composition the batch writes into: the tab's plane, or its preset. */
-  const scope: ImportScope = plane === 'global' ? { kind: 'global' } : { kind: 'preset', presetId }
+  /** The composition the batch writes into: the field's plane, or its preset. */
+  const scope: ImportScope = planeChoice === 'global' ? { kind: 'global' } : { kind: 'preset', presetId }
   const existing = configuredNames(servers, scope)
   /** A key is source-scoped, because the same name may appear in two files. */
   const keyOf = (source: ClaudeMcpSource, entry: ClaudeMcpEntry): string => `${source.id}\u0000${entry.serverName}`
@@ -259,9 +268,9 @@ export function ClaudeImportDialog({
 
   const total = allEntries.length
   const importable = allEntries.filter(({ entry }) => selectable(entry)).length
-  // An agent-plane import needs a preset to address; with none declared there is
-  // nowhere for it to land.
-  const noTarget = plane === 'agent' && presetId === ''
+  // A batch needs an addressable target: an agent plane needs a preset, and the
+  // global plane needs a file-backed Include to write.
+  const noTarget = planeChoice === 'agent' ? presetId === '' : !globalWritable
   const footer = (
     <div className={css.formActions}>
       <Button variant="outline" size="sm" onClick={onClose} disabled={busy || importing}>{t('mcp.import.close')}</Button>
@@ -289,10 +298,29 @@ export function ClaudeImportDialog({
     >
       <div className={css.mcpForm}>
         {/* One control row: where the batch writes on the left, what is selected
-            on the right, on one baseline. The plane follows the settings tab, so
-            only the agent plane asks which preset. */}
+            on the right, on one baseline. Both the plane and the preset are this
+            form's own fields, so the batch cannot land somewhere the user cannot
+            see. */}
         <div className={css.importToolbar}>
-          {plane === 'agent' ? (
+          <label className={css.importScope}>
+            <span className={css.formLabel}>{t('mcp.import.scope')}</span>
+            <select
+              className={css.formSelect}
+              value={planeChoice}
+              disabled={busy || importing}
+              aria-label={t('mcp.import.scope')}
+              onChange={(event) => {
+                setPlaneChoice(event.currentTarget.value as McpPlane)
+                // The plane changes which names already exist there, so the
+                // dialog returns to "everything importable is selected".
+                setExcluded(new Set<string>())
+              }}
+            >
+              <option value="global" disabled={!globalWritable}>{t('mcp.scopeGlobal')}</option>
+              <option value="agent" disabled={presetOptions.length === 0}>{t('mcp.form.presetScope')}</option>
+            </select>
+          </label>
+          {planeChoice === 'agent' ? (
             <label className={css.importScope}>
               <span className={css.formLabel}>{t('mcp.form.presetScope')}</span>
               <select
@@ -312,12 +340,12 @@ export function ClaudeImportDialog({
                 ))}
               </select>
             </label>
-          ) : (
-            <span className={css.importScope}>
-              <span className={css.formLabel}>{t('mcp.form.scope')}</span>
-              <span className={css.fieldHint}>{t('mcp.scopeGlobal')}</span>
+          ) : null}
+          {noTarget ? (
+            <span className={css.formLabel}>
+              {planeChoice === 'global' ? t('mcp.global.unavailable') : t('mcp.form.noPreset')}
             </span>
-          )}
+          ) : null}
           {view.status === 'ready' && total > 0 ? (
             <span className={css.importChecks}>
               <span className={css.toolsCount} role="status">

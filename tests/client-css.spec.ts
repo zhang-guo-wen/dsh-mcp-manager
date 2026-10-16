@@ -12,18 +12,48 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-/** The one CSS module every client component in this package shares. */
-const cssPath = new URL('../src/client/McpSection.module.css', import.meta.url)
-const cssSource = readFileSync(cssPath, 'utf8')
-/** Source with comments blanked, so commented-out declarations never match. */
-const css = cssSource.replace(/\/\*[\s\S]*?\*\//g, '')
+/** One stylesheet and the components that style themselves from it. */
+interface StyleSheet {
+  readonly name: string
+  readonly cssPath: string
+  readonly components: readonly string[]
+  /**
+   * Whether the sheet styles a raw form control of its own.
+   *
+   * Only such a sheet has to carry the focus ring itself: everything else
+   * renders `@deepseek-ai/dsh-client-ui-primitives`, which owns its own.
+   */
+  readonly stylesRawControls: boolean
+}
 
-/** The components that style themselves from that module. */
-const componentPaths = [
-  '../src/client/McpSection.tsx',
-  '../src/client/McpEditor.tsx',
-  '../src/client/ClaudeImportDialog.tsx',
+const SHEETS: readonly StyleSheet[] = [
+  {
+    name: 'McpSection.module.css',
+    cssPath: '../src/client/McpSection.module.css',
+    components: [
+      '../src/client/McpSection.tsx',
+      '../src/client/McpEditor.tsx',
+      '../src/client/ClaudeImportDialog.tsx',
+    ],
+    stylesRawControls: true,
+  },
+  {
+    name: 'McpOptimizeSection.module.css',
+    cssPath: '../src/client/McpOptimizeSection.module.css',
+    components: ['../src/client/McpOptimizeSection.tsx'],
+    stylesRawControls: false,
+  },
 ]
+
+/** Read one file next to this spec. */
+function read(path: string): string {
+  return readFileSync(new URL(path, import.meta.url), 'utf8')
+}
+
+/** Source with comments blanked, so commented-out declarations never match. */
+function withoutComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '')
+}
 
 /** Every class defined by the module, comments removed. */
 function definedClasses(source: string): ReadonlySet<string> {
@@ -47,25 +77,26 @@ function ruleBodies(source: string): readonly string[] {
   return [...source.matchAll(/\{([^{}]*)\}/g)].map(match => match[1] ?? '')
 }
 
-describe('McpSection.module.css class names', () => {
+describe.each(SHEETS)('$name class names', (sheet) => {
+  const css = withoutComments(read(sheet.cssPath))
   const defined = definedClasses(css)
 
   it('defines every class the components look up', () => {
-    for (const path of componentPaths) {
-      const source = readFileSync(new URL(path, import.meta.url), 'utf8')
-      const missing = referencedClasses(source).filter(name => !defined.has(name))
+    for (const path of sheet.components) {
+      const missing = referencedClasses(read(path)).filter(name => !defined.has(name))
       expect(missing, `${path} references classes the module does not define`).toEqual([])
     }
   })
 
   it('has no class the components never look up', () => {
-    const referenced = new Set(componentPaths.flatMap(path =>
-      referencedClasses(readFileSync(new URL(path, import.meta.url), 'utf8'))))
+    const referenced = new Set(sheet.components.flatMap(path => referencedClasses(read(path))))
     expect([...defined].filter(name => !referenced.has(name)).sort()).toEqual([])
   })
 })
 
-describe('McpSection.module.css standard', () => {
+describe.each(SHEETS)('$name standard', (sheet) => {
+  const css = withoutComments(read(sheet.cssPath))
+
   it('uses semantic alias tokens, never literal colours', () => {
     expect(css.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []).toEqual([])
     expect(css.match(/\brgba?\(|\bhsla?\(/g) ?? []).toEqual([])
@@ -77,7 +108,7 @@ describe('McpSection.module.css standard', () => {
 
   it('always resolves the focus-ring colour with a fallback', () => {
     const rings = css.match(/var\(--dsw-focus-ring-color[^)]*\)/g) ?? []
-    expect(rings.length).toBeGreaterThan(0)
+    if (sheet.stylesRawControls) expect(rings.length).toBeGreaterThan(0)
     for (const ring of rings) expect(ring).toContain('--dsw-alias-state-business-primary')
   })
 

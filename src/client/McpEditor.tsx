@@ -44,10 +44,16 @@ interface McpEditorProps {
   readonly listMcpTools: (request: ListMcpToolsRequest) => Promise<ListMcpToolsResult>
   readonly presets: () => Promise<readonly McpPresetOption[]>
   /**
-   * The plane the section currently shows. A new row is written there, so the
-   * dialog offers no scope choice: the picker already made it.
+   * The plane a new row starts in.
+   *
+   * The dialog owns the choice from here on: the section cannot infer which
+   * plane the user means (an empty global plane left its write path unreachable
+   * when the target was derived from the row last edited), and choosing an agent
+   * row needs a preset that only this form asks for.
    */
   readonly plane: McpPlane
+  /** Whether the global plane has a file-backed Include to write. */
+  readonly globalWritable: boolean
   /**
    * The agent preset the section is narrowed to, when it is narrowed to one.
    * A new row is written into it, so the dialog's own preset picker opens on it.
@@ -67,6 +73,17 @@ interface McpEditorProps {
 /** Settings key for one row (`global:<name>` or `preset:<id>:<name>`), shared with the Host's `mcpRowKey`. */
 function rowKey(scope: 'global' | 'preset', agentPreset: string, serverName: string): string {
   return scope === 'preset' ? `preset:${agentPreset}:${serverName}` : `global:${serverName}`
+}
+
+/**
+ * The plane one row lives in, in this dialog's own vocabulary. A row's scope is
+ * `global` or `preset`; a plane a new row can be written to is `global` or
+ * `agent` (an agent row addressed through one preset).
+ * @param server - the row being edited, when there is one.
+ * @returns the plane that row belongs to.
+ */
+function planeOf(server: McpServer | undefined): McpPlane {
+  return server?.scope === 'global' ? 'global' : 'agent'
 }
 
 /**
@@ -97,12 +114,16 @@ function specJson(describe: DescribeMcpResult | undefined): string {
 }
 
 /** Modal editor split into a pane for the row's fields and a pane for its tools. */
-export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, plane, preset, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
+export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, plane, globalWritable, preset, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
   const [tab, setTab] = useState<McpEditorTab>('config')
   const tabId = useId()
   /** Chosen agent preset for a new row; a placeholder while the list loads. */
   const [presetId, setPresetId] = useState(server?.scope === 'preset' ? server.presetId ?? '' : preset ?? '')
   const [presetOptions, setPresetOptions] = useState<readonly McpPresetOption[]>([])
+  /** Whether the preset read answered, so an empty list can be told from a pending one. */
+  const [presetLoaded, setPresetLoaded] = useState(false)
+  /** Chosen plane for a new row, as this dialog's own field. */
+  const [planeChoice, setPlaneChoice] = useState<McpPlane>(plane)
   const [title, setTitle] = useState(server?.serverName ?? '')
   const [description, setDescription] = useState(descriptionInitial)
   const [json, setJson] = useState('')
@@ -114,6 +135,12 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
   const [toolsBusy, setToolsBusy] = useState(false)
   const [toolsError, setToolsError] = useState<string | null>(null)
   const editKey = `${server?.scope ?? ''}:${server?.presetId ?? ''}:${server?.entryId ?? ''}`
+  /**
+   * The plane this save addresses: an edited row keeps its own, a new one uses
+   * the field below. Editing never follows the field, so a row cannot be written
+   * to the wrong side by opening its editor after a scope change.
+   */
+  const targetPlane: McpPlane = mode === 'edit' ? planeOf(server) : planeChoice
 
   /**
    * Connect once and list what the server publishes.
@@ -194,6 +221,10 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
     // can refresh while this dialog is open, and re-running this effect would
     // reset the form under the user.
     setPresetId(server?.scope === 'preset' ? server.presetId ?? '' : preset ?? '')
+    // An edited row keeps its own plane; a new one opens on the plane the caller
+    // started the dialog from, and the field below lets the user change it.
+    setPlaneChoice(mode === 'edit' ? planeOf(server) : plane)
+    setPresetLoaded(false)
     setTitle(server?.serverName ?? '')
     setDescription(descriptionInitial)
     setTools(null)
@@ -205,11 +236,12 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       (list) => {
         if (!current) return
         setPresetOptions(list)
+        setPresetLoaded(true)
         // A new agent row needs a preset to address; the first one is the only
         // sensible default, and the field lets the user change it.
         setPresetId((previous) => previous !== '' ? previous : (mode === 'add' ? list[0]?.id ?? '' : ''))
       },
-      () => { if (current) setPresetOptions([]) },
+      () => { if (current) { setPresetOptions([]); setPresetLoaded(true) } },
     )
     if (mode === 'edit' && server?.entryId) {
       setLoading(true)
@@ -252,8 +284,8 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       // until the Host can resolve it: say so on the spot instead of leaving the
       // author to wonder why the row's switch will not turn on.
       setConfigNotice(configIssue.length === 0 ? null : t('mcp.form.pendingConfig'))
-      const target = editorTarget(mode, server, plane, presetId)
-      if (target === undefined) throw new Error(t('mcp.form.noPreset'))
+      const target = editorTarget(mode, server, targetPlane, presetId)
+      if (target === undefined) throw new Error(noTargetReason)
       const entryId = mode === 'edit' ? server?.entryId ?? '' : undefined
       if (mode === 'edit' && entryId === '') throw new Error(t('mcp.form.required'))
       const request: McpEditorRequest = {
@@ -302,15 +334,21 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
   // Rules are enforced by this plugin's own carriers, which only run for rows it
   // loads. A global row is mounted by the composition, so its tools are in every
   // request already and a rule could not hide them.
-  const toolsReadOnly = mode === 'edit' ? server?.scope === 'global' : plane === 'global'
-  // A new agent row needs a preset to address; with none mounted the save is
-  // refused here rather than at the Host, which would report it per request.
-  const noPreset = mode === 'add' && plane === 'agent' && presetId === ''
+  const toolsReadOnly = mode === 'edit' ? server?.scope === 'global' : targetPlane === 'global'
+  // A new row needs an addressable target, and which one is missing decides what
+  // the form says: no preset in this composition, a preset that was not chosen
+  // yet, or the global plane having no file to write.
+  const agentTargetMissing = mode === 'add' && targetPlane === 'agent' && presetId === ''
+  const globalTargetMissing = mode === 'add' && targetPlane === 'global' && !globalWritable
+  const noTarget = agentTargetMissing || globalTargetMissing
+  const noTargetReason = presetLoaded && presetOptions.length === 0 && !globalWritable
+    ? t('mcp.form.noTarget')
+    : globalTargetMissing ? t('mcp.global.unavailable') : t('mcp.form.noPreset')
   const showsCurrentPreset = presetId !== '' && !presetOptions.some(option => option.id === presetId)
-  /** The plane this row is written to, as the dialog states it. */
+  /** The plane this row is written to, as the dialog states it for an edited row. */
   const scopeLabel = mode === 'edit'
     ? (server?.scope === 'global' ? t('mcp.scopeGlobal') : `${t('mcp.scopePreset')} · ${server?.presetId ?? ''}`)
-    : (plane === 'global' ? t('mcp.scopeGlobal') : undefined)
+    : undefined
   return (
     <Modal
       open={open}
@@ -323,7 +361,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       footer={(
         <div className={css.formActions}>
           <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>{t('mcp.form.cancel')}</Button>
-          <Button variant="primary" size="sm" onClick={submit} disabled={formDisabled || noPreset}>
+          <Button variant="primary" size="sm" onClick={submit} disabled={formDisabled || noTarget}>
             {busy ? t('mcp.form.saving') : t('mcp.form.save')}
           </Button>
         </div>
@@ -348,27 +386,48 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
           className={css.editorPanel}
           hidden={tab !== 'config'}
         >
-          {scopeLabel !== undefined ? (
+          {mode === 'add' ? (
+            <>
+              {/* A new row's target is a field of this form, not a property of the
+                  page behind it: the page has no control that names a plane, so
+                  deriving one from it left the global plane unreachable. */}
+              <label className={css.formField}>
+                <span className={css.formLabel}>{t('mcp.form.scope')}</span>
+                <select
+                  className={css.formSelect}
+                  value={targetPlane}
+                  disabled={formDisabled}
+                  aria-label={t('mcp.form.scope')}
+                  onChange={(event) => { setPlaneChoice(event.currentTarget.value as McpPlane); setLocalError(null) }}
+                >
+                  <option value="global" disabled={!globalWritable}>{t('mcp.scopeGlobal')}</option>
+                  <option value="agent" disabled={presetOptions.length === 0}>{t('mcp.form.presetScope')}</option>
+                </select>
+                {globalWritable ? null : <span className={css.fieldHint}>{t('mcp.global.unavailable')}</span>}
+              </label>
+              {targetPlane === 'agent' ? (
+                <label className={css.formField}>
+                  <span className={css.formLabel}>{t('mcp.form.presetScope')}</span>
+                  <select
+                    className={css.formSelect}
+                    value={presetId}
+                    disabled={formDisabled}
+                    aria-label={t('mcp.form.presetScope')}
+                    onChange={(event) => { setPresetId(event.currentTarget.value); setLocalError(null) }}
+                  >
+                    {presetOptions.map(option => (
+                      <option key={option.id} value={option.id}>{option.name}</option>
+                    ))}
+                    {showsCurrentPreset ? <option value={presetId}>{presetId}</option> : null}
+                  </select>
+                </label>
+              ) : null}
+              {presetLoaded && noTarget ? <span className={css.fieldHint}>{noTargetReason}</span> : null}
+            </>
+          ) : (
             <label className={css.formField}>
               <span className={css.formLabel}>{t('mcp.form.scope')}</span>
               <span className={css.fieldHint}>{scopeLabel}</span>
-            </label>
-          ) : (
-            <label className={css.formField}>
-              <span className={css.formLabel}>{t('mcp.form.presetScope')}</span>
-              <select
-                className={css.formSelect}
-                value={presetId}
-                disabled={formDisabled}
-                aria-label={t('mcp.form.presetScope')}
-                onChange={(event) => { setPresetId(event.currentTarget.value); setLocalError(null) }}
-              >
-                {presetOptions.map(option => (
-                  <option key={option.id} value={option.id}>{option.name}</option>
-                ))}
-                {showsCurrentPreset ? <option value={presetId}>{presetId}</option> : null}
-              </select>
-              {noPreset ? <span className={css.fieldHint}>{t('mcp.form.noPreset')}</span> : null}
             </label>
           )}
           <label className={css.formField}>

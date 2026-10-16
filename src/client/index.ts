@@ -1,8 +1,9 @@
 /**
  * MCP management settings section, browser half. Registers the
  * `settings.mcpManager` dictionaries and the one `settings.section` entry that
- * presents the MCP server roster, its loading mode, and the per-row tool
- * filters.
+ * presents both faces of the plugin: the MCP server roster with its loading
+ * mode and per-row tool filters, and the context-budget policy that decides how
+ * much of a tool list enters a request.
  *
  * The section reads and writes the `mcp-manager` namespace the Host
  * `@guowenzhang/dsh-mcp-manager` plugin owns, so the surface and the loading
@@ -24,7 +25,6 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import { McpSection } from './McpSection.tsx'
-import { McpOptimizeSection } from './McpOptimizeSection.tsx'
 import { en, NS, zh, type McpSectionKey } from './locales.ts'
 import {
   MCP_SETTINGS_NS,
@@ -154,6 +154,11 @@ export async function apply(ctx: Context): Promise<void> {
   )
   ctx.effect(() => () => { controller.dispose() }, 'ui-mcp-manager: settings form')
 
+  // One nav entry for the whole plugin, and the two questions live as in-page
+  // tabs inside it: which servers exist (roster) and how much of a tool list
+  // enters context (budget). The shell's nav is a flat list with no grouping, so
+  // a second `settings.section` would read as a second plugin — which is what it
+  // used to do, order 15 tying with the built-in Plugins section.
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'mcp-manager',
@@ -162,15 +167,4 @@ export async function apply(ctx: Context): Promise<void> {
     locale: NS,
     inject: () => controller.inject(),
   }, McpSection))
-  // The optimization policy gets its own page rather than a tab on the roster:
-  // it is a different question (how much of a tool list enters context) from
-  // which servers exist, and it applies to every plane at once.
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'mcp-manager-optimize',
-    order: 15,
-    label: () => t('opt.nav'),
-    locale: NS,
-    inject: () => controller.inject(),
-  }, McpOptimizeSection))
 }

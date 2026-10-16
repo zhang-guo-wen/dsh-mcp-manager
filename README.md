@@ -17,15 +17,19 @@ In the plugin list, display names and descriptions follow the Harness language s
 
 ## Screenshots
 
-**MCP management**
+**MCP management: Servers**
 
-![MCP management](<docs/images/mcp-settings.png>)
+![MCP management, Servers tab](<docs/images/mcp-settings.png>)
 
-**Configuration and tool filtering (left), Claude MCP import (right)**
+**MCP management: Context**
+
+![MCP management, Context tab](<docs/images/mcp-context.png>)
+
+**One MCP row's editor (left), Claude MCP import (right)**
 
 [![MCP configuration, tool filtering, and Claude configuration import](<docs/images/mcp-editor-import.png>)](<docs/images/mcp-editor-import.png>)
 
-These screenshots show an earlier UI. Configuration and Tools now use separate tabs in the editor, and Claude configuration import writes to the plane you are on — the Global group, or the preset chosen in the dropdown. The loading mode is a three-way segmented control whose explanation sits underneath, and a switch that fails reports in its own row with a retry.
+One page with two tabs: **Servers** holds the roster and the loading mode, **Context** decides how much of a tool list one call hands to the model. In the editor, configuration and tools are separate tabs; where an add or an import writes is chosen in the dialog's own **Config scope** / **Import into** select (the global plane, or one agent preset). A switch that fails reports in its own row with a retry.
 
 ## Install
 
@@ -35,13 +39,13 @@ Requires DeepSeek Harness, `pnpm`, and Node.js ≥22.18 or ≥24.2.
 npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager@^1.1.0
 ```
 
-Restart the host and refresh the page, then open **Settings → MCP management** to add or import servers and describe their purpose. The roster is one list with a Global group first and the Agent rows below it. Dynamic insert is the default; to filter tools, keep only the tools you need under **Edit → Tools**, and use **Settings → MCP optimization** to control how much of a tool list reaches the model.
+Restart the host and refresh the page, then open **Settings → MCP management** to add or import servers and describe their purpose. The page has two tabs: **Servers** (the roster, with a Global group first and the Agent rows below it; Dynamic insert is the default, and tool filtering lives under **Edit → Tools**) and **Context** (how much of a tool list reaches the model). When you add or import, the **Config scope** / **Import into** select decides whether the row goes to the global plane or to one agent preset.
 
 See [AGENTS.md](https://github.com/zhang-guo-wen/dsh-mcp-manager/blob/master/AGENTS.md) for other installation methods and development instructions.
 
 ## Reduce context further: search, paging, names only
 
-Settings → **MCP optimization** controls how much of a tool list reaches the model. The MCP specification has no query parameter on `tools/list` and no names-only listing, and the [client best-practices guide](https://modelcontextprotocol.io/docs/2026-07-28/develop/clients/client-best-practices) places progressive discovery in the host — which is what this page is:
+**Settings → MCP management → Context** controls how much of a tool list reaches the model. The MCP specification has no query parameter on `tools/list` and no names-only listing, and the [client best-practices guide](https://modelcontextprotocol.io/docs/2026-07-28/develop/clients/client-best-practices) places progressive discovery in the host — which is what this tab is:
 
 | Setting | Effect |
 |---|---|

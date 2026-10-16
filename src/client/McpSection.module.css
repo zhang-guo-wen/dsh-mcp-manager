@@ -1,10 +1,13 @@
 /* MCP management settings section.
  *
- * The section is one column inside the host settings panel: the shell owns the
- * panel width and its 24px padding, so this file owns only the column's own
- * reading width and the rows inside it. Values follow the plugin UI standard:
- * semantic aliases only, paired type, the 28/32/36 control scale, role radii,
- * and one visible focus treatment.
+ * One settings page inside the host settings panel: the shell owns the panel
+ * width and its 24px padding, so this file owns only the column's own reading
+ * width and what is inside it. The page carries two in-page tabs, so every
+ * vertical rhythm below belongs to a block, not to the page.
+ *
+ * Values follow the plugin UI standard: semantic aliases only, paired type from
+ * the shared ladder, the 28/32/36 control scale, role radii, and one visible
+ * focus treatment.
  */
 
 .section {
@@ -14,116 +17,85 @@
   gap: 16px;
   width: 100%;
   /* The settings column, not a first-level page column: the host panel is
-     800px wide and this column is ~560px inside it. The cap only matters on a
+     800px wide and this column is ~564px inside it. The cap only matters on a
      wider shell. */
   max-width: 760px;
   box-sizing: border-box;
   color: var(--dsw-alias-label-primary);
 }
 
-.panel {
+/* ---- Page header and tabs ---- */
+
+.pageHead {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* The host's own settings pages title themselves at 16/24/500; the nav row
+   already names the section, so this only has to anchor the page. */
+.pageTitle {
+  margin: 0;
+  font: var(--dsw-font-base-strong-16);
+}
+
+.pageIntro {
+  margin: 0;
+  font: var(--dsw-font-s-14);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Two tabs do not need the whole column: an equal-width bar spanning 564px
+   reads as a toolbar rather than as a page switch. */
+.tabs {
+  box-sizing: border-box;
+  flex: none;
+  align-self: flex-start;
+  width: 100%;
+  max-width: 320px;
+}
+
+.tabPanel {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
-/* ---- Shared text roles ---- */
+/* The panes set their own display, which would otherwise beat the user-agent
+   `[hidden]` rule and leave the unselected pane on screen. */
+.tabPanel[hidden] {
+  display: none;
+}
 
-.fieldLabel {
-  font: var(--dsw-font-xs-13);
+/* ---- One block inside a tab ---- */
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* A block's name, and the one fact that governs it: when a change takes
+   effect. The two sit on one baseline so the timing reads as part of the
+   heading rather than as another paragraph. The heading is one tier above the
+   rows it names, which is why it is 14/22/600 rather than the 13/20 the
+   metadata around it uses. */
+.blockHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.blockTitle {
+  margin: 0;
+  font: var(--dsw-font-s-14);
   font-weight: 600;
 }
 
-.fieldHint {
+.when {
   font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-tertiary);
-}
-
-/* One plane's heading inside the single roster list. The global plane and the
-   agent plane share the list, so each needs a name of its own. */
-.mcpGroup {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 6px 0 0;
-  font-size: 12px;
-  line-height: 18px;
-  font-weight: 500;
-  color: var(--dsw-alias-label-tertiary);
-}
-.mcpGroup > span:first-child {
-  flex: 0 0 auto;
-}
-
-/* The one rule that still differs between the planes, kept beside the heading
-   where their rows split rather than in a control of its own. It yields space
-   first and wraps: the heading names the group, this only explains it. */
-.mcpGroupHint {
-  min-width: 0;
-  font-weight: 400;
-  text-align: right;
-}
-
-/* A panel this narrow cannot hold an explanation beside the heading: wrapping
-   it grew the heading to seven lines. The heading alone stays. */
-@media (max-width: 760px) {
-  .mcpGroupHint {
-    display: none;
-  }
-}
-
-/* A screen-reader-only line for a loading region whose visible part is
-   decorative. */
-.visuallyHidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-/* ---- Plane tabs ---- */
-
-.mcpSub {
-  margin: 0;
-  font: var(--dsw-font-s-14);
-  color: var(--dsw-alias-label-secondary);
-}
-
-.mcpToolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-/* The roster's title and the agent-plane filter read as one control group:
-   both describe the list underneath, and the toolbar must keep them together
-   when the column is narrow. */
-.mcpToolbarLead {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-/* A compact select, unlike the editor's full-width form field: it shares the
-   row with the title and the plane's action buttons. 36px/R12 is the
-   selector tier. */
-.mcpFilterSelect {
-  box-sizing: border-box;
-  max-width: 240px;
-  height: 36px;
-  padding: 0 10px;
-  border-radius: var(--dsw-radius-md);
-  border: 0.5px solid var(--dsw-alias-border-l4);
-  background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-primary);
-  font: var(--dsw-font-xs-13);
 }
 
 /* ---- MCP loading mode ---- */
@@ -149,12 +121,122 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* ---- Roster header ---- */
+
+/* Two deliberate rows: the list's name and its authoring actions, then its two
+   views. A wrapped action used to land beside a filter it did not belong to. */
+.listHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.listHeadText {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* The roster's own count, the same metadata tier as the group headings. */
+.count {
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.listActions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* What the row switch means, stated once for the list instead of per row: the
+   switch carries one of the two inputs that decide whether a server is in a
+   request (the loading mode carries the other). */
+.listHint {
+  margin: 0;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.listFilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* A compact filter, 36px like the selector beside it (the search tier). */
+.rosterSearch {
+  box-sizing: border-box;
+  flex: 1 1 220px;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--dsw-radius-md);
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xs-13);
+}
+
+.rosterSearch::placeholder {
+  color: var(--dsw-alias-label-caption);
+}
+
+.mcpFilterSelect {
+  box-sizing: border-box;
+  max-width: 240px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--dsw-radius-md);
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xs-13);
+}
+
 /* ---- Roster ---- */
 
 .mcpList {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* One plane's heading inside the single roster list. The global plane and the
+   agent plane share the list, so each needs a name of its own, and each states
+   what it renders: the count is the only one the group reports. */
+.mcpGroup {
+  margin: 6px 0 0;
+  font: var(--dsw-font-xxs-strong-12);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* An empty group carries the way out of itself, so the page's own actions do
+   not have to be hunted for above the list. */
+.emptyBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 2px 0 4px;
+}
+
+.empty {
+  margin: 0;
+  font: var(--dsw-font-xs-13);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.emptyHint {
+  margin: 0;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
 }
 
 /* Rows are settings cards: R20 with the shared card fill and stroke, and no
@@ -186,23 +268,58 @@
   overflow-wrap: anywhere;
 }
 
-/* The row description is edited in place: a borderless field that shows the
-   shared focus ring only while it is focused. */
-.mcpDesc {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 20px;
+/* The description at rest is content, not an empty field: it is the one
+   user-written text that reaches the model, so an unset one offers the action
+   instead of showing a placeholder on every row of the roster. */
+.descText {
+  appearance: none;
   margin: 0;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   font: var(--dsw-font-xxs-12);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.descText:hover {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.descText[data-empty='true'] {
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.descText:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Only while it is being edited, so the field is bounded by its own text. */
+.mcpDesc {
+  box-sizing: border-box;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  padding: 0 8px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxs-12);
   overflow-wrap: anywhere;
 }
 
 .mcpDesc::placeholder {
   color: var(--dsw-alias-label-dimmed);
+}
+
+/* The model reads the first characters of this text and nothing else says so. */
+.descOver {
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-state-warn-label);
 }
 
 .mcpRight {
@@ -273,18 +390,6 @@
   font: var(--dsw-font-xs-13);
 }
 
-.empty {
-  margin: 0;
-  font: var(--dsw-font-xs-13);
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.emptyHint {
-  margin: 0;
-  font: var(--dsw-font-xxs-12);
-  color: var(--dsw-alias-label-tertiary);
-}
-
 .mcpNotice {
   margin: 0;
   font: var(--dsw-font-xxs-12);
@@ -328,6 +433,17 @@
 .skeletonBar + .skeletonBar {
   width: 78%;
   height: 12px;
+}
+
+/* A screen-reader-only line for a loading region whose visible part is
+   decorative. */
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 @keyframes mcp-skeleton-pulse {
@@ -408,6 +524,11 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+.fieldHint {
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+}
+
 /* The app has no global border-box reset, and a content-box control inside the
    modal body would overflow the body's 24px right pad: the scroll region then
    clips that pad and the control reads as flush against the right edge. */
@@ -448,10 +569,12 @@
 /* One visible focus treatment for every control this file styles; the ring
    colour resolves to transparent under pointer modality, so the fallback is
    required. */
+.rosterSearch:focus-visible,
 .mcpFilterSelect:focus-visible,
 .formSelect:focus-visible,
 .formJson:focus-visible,
-.mcpDesc:focus-visible {
+.mcpDesc:focus-visible,
+.descText:focus-visible {
   outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: 2px;
 }
@@ -469,14 +592,6 @@
   font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-secondary);
   font-variant-numeric: tabular-nums;
-}
-
-/* The roster's own count, the same metadata tier as the tab counts. */
-.count {
-  font: var(--dsw-font-xxs-12);
-  color: var(--dsw-alias-label-tertiary);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 .toolsActions {
@@ -533,11 +648,11 @@
   gap: 12px;
 }
 
-/* The plane select holds a reading column rather than the whole card, so the
-   bar carries both controls on one baseline instead of stacking three bands. */
+/* Both selects hold a reading column rather than the whole card, so the bar
+   carries them on one baseline instead of stacking a band each. */
 .importScope {
   display: flex;
-  flex: 0 1 320px;
+  flex: 0 1 240px;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
@@ -581,8 +696,7 @@
 
 .importSourceLabel {
   flex: none;
-  font: var(--dsw-font-xxs-12);
-  font-weight: 600;
+  font: var(--dsw-font-xxs-strong-12);
   color: var(--dsw-alias-label-secondary);
 }
 
@@ -627,8 +741,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  font: var(--dsw-font-xxs-12);
-  font-family: var(--ds-font-family-code);
+  font: 12px/18px var(--ds-font-family-code);
   color: var(--dsw-alias-label-primary);
 }
 
@@ -641,18 +754,17 @@
 /* ---- Container and pointer adaptations ---- */
 
 /* Compact arrangement: keyed off this column, not the window. A wide window
-   leaves this column near 560px inside the settings panel. */
-@container mcp-manager (max-width: 760px) {
-  .mcpToolbarLead {
-    flex: 1 1 auto;
+   leaves this column near 564px inside the settings panel, so a window-keyed
+   rule would never fire where it is needed. */
+@container mcp-manager (max-width: 480px) {
+  .tabs {
+    max-width: none;
   }
 
-  .importChecks {
+  .listActions {
     margin-left: 0;
   }
-}
 
-@container mcp-manager (max-width: 480px) {
   .mcpRow {
     flex-direction: column;
     align-items: stretch;
@@ -662,7 +774,8 @@
     justify-content: space-between;
   }
 
-  .mcpFilterSelect {
+  .mcpFilterSelect,
+  .rosterSearch {
     max-width: none;
     flex: 1 1 100%;
   }
@@ -685,6 +798,7 @@
 /* iOS zooms the viewport when a focused text field renders below 16px. */
 @media (max-width: 600px) {
   .mcpDesc,
+  .rosterSearch,
   .formSelect,
   .formJson {
     font-size: 16px;

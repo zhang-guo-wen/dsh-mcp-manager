@@ -18,15 +18,43 @@ paths:
 
 ## 设置页分区(src/client/McpSection.tsx)
 
-名册是**一个列表**,两个平面用列表内的分组标题分开,全局恒在最前 **(2026-10-16 起不再有平面 tab)**。五条约束:
+一个 `settings.section`(id `mcp-manager`,order 14)承载插件的两面,**页内用 `SegmentedTabs` 分「服务器」/「上下文」**
+(2026-10-16 起两页合并;此前是第二条 `settings.section`,order 15 与内置插件区撞号、在侧栏里排不到一起,
+被读成"同一个插件两个页面")。名册是**一个列表**,两个平面用列表内的分组标题分开,全局恒在最前
+**(更早一轮已不再有平面 tab)**。约束:
 
 1. **全局分组恒在最前、永不被过滤掉** —— 会话带着它的全局行,不管跑哪个预设;预设下拉只收窄 agent 行。
-2. **全局分组标题旁要说明"全局行同样跟随加载方式"**(`mcp.plane.global.eager`;`<=760px` 隐藏):`eager` 下由组合直接挂载,`dynamic`/`lazy` 下启动不拉起、可用 `mcp_load` 按需加载并与其他会话共用同一条连接;工具过滤对全局行**仍然不生效**(见「工具过滤」第 3 条)。**不要再写"全局行始终加载 / 不受加载模式影响"** —— 那是本轮之前的行为。
-3. **加载方式选择器对两个平面都生效**(它下面就是那个统一列表):它决定的是 preset 行的进上下文时机,放在全局 tab 会暗示它对全局行有效。
-4. **写入目标跟着用户最后的选择**(`McpEditor` 的 `plane` 入参,`editorTarget()`):编辑某行 → 该行自己的平面;预设下拉选了一个预设 → agent 平面,弹窗只保留"Agent 预设"下拉以便多预设时挑一个,没有可写预设时禁用保存并说明。**编辑**时范围来自被编辑行自身,所以只读显示那一行,不给下拉。统一列表的工具栏(没有平面 tab 了)在**写入平面不可用或还没定出目标时**禁用"新增/导入"与行操作(全局:没有唯一的 file-backed Include;agent:列表停在"全部 Agent 预设",`needsPreset`),原因放按钮 `title`,不要放进弹窗再失败。
-5. **行级只读要真的置灰**:名册行带 `writable` / `readOnly`(全局行的 `composed-row`、平面的 `no-writable-include` / `several-writable-includes` / `unreadable-include`),开关与「编辑」按钮据此禁用并把原因写进 `title` / 提示位;不要只靠服务端拒绝,也不要把禁用的按钮留在可点击状态。
-6. **客户端判"这一行开没开"有唯一入口**:`rowAllowed(enabled, suppressed)`(`src/client/mcp-row-state.ts`,不依赖 React 的纯模块,便于单测)。规则是 **Host 明确的 `enabled: false` 优先于兜底标志 `suppressed`** —— 后者只为"老 bundle 下被 hold 的行也报 false"这种情况留的后路,绝不允许把用户停用的行重新显示成已启用(易崩第 43 条)。
-7. **Agent 行按预设过滤**:预设一多,54 行那种列表就没法看,所以工具栏有一个下拉。**选项是全部已声明预设**(持有行的按行数降序在前,0 行的也在,因为新增行要写进其中一个 —— 选项与受控值必须来自同一份集合,否则 0 行的预设选不中),不用另一个 RPC 拉预设列表;预设名在同一次 `listMcps` 里带着,不必再读一次。`全部 Agent 预设`用空串当哨兵值(预设 id 非空),下拉的 `value` 与列表共用同一个校验后的值 —— 名册刷新后选中项消失时回退到"全部",不会留下一个空列表,也不会出现"下拉显示 A、列表渲染 B"。分组标题上的计数是该分组的行数。规则在 `src/client/agent-filter.ts`(纯函数),回归测试见 `tests/agent-filter.spec.ts`。
+2. **「开关 = 允不允许用」这句话要出现在页面上**(`mcp.list.hint`):`dynamic`/`lazy` 下开关打开**不等于**启动,
+   何时进上下文由上面的加载方式决定(决策 D1)。全局分组的空态只留一句(`mcp.empty.global.hint`:对所有会话
+   可用、工具过滤不生效),**不要再写"全局行始终加载 / 不受加载模式影响"** —— 那是更早之前的行为。
+3. **加载方式留在名册这一面**,块标题旁写明生效时机(`mcp.mode.when`:立即生效、会重建工具面并可能释放连接)。
+4. **写入平面由创建它的弹窗自己选**(`McpEditor` / `ClaudeImportDialog` 的 `plane` 入参只是**初值**,两个弹窗各自
+   有 `配置范围` / `导入到` 下拉):编辑某行 → 该行自己的平面,弹窗只读显示;新增/导入 → 下拉里选 全局 / Agent 预设,
+   预设那档再选一个预设。**不要再把写入平面做成页面级状态**:单列表改版删掉平面 tab 之后,`writePlane` 只能靠
+   "编辑一条已有全局行"赋值,于是全局分组为空时**写入全局在界面上不可达**;而默认停在"全部 Agent 预设"又让
+   `needsPreset` 把新增/导入两个按钮在首屏就禁用、原因只写在 `title` 里。平面不可用时那一档在下拉里禁用并写明
+   原因(`mcp.global.unavailable`),两个平面都不可用才禁用保存(`mcp.form.noTarget`)。空态里的「新增到全局 /
+   新增到 Agent 预设」按钮只在**该平面真能收下这一行**时出现。
+5. **行级只读要真的置灰**:名册行带 `writable` / `readOnly`(全局行的 `composed-row`、平面的 `no-writable-include` /
+   `several-writable-includes` / `unreadable-include`),开关与「编辑」按钮据此禁用并把原因写进 `title` / 提示位;
+   不要只靠服务端拒绝,也不要把禁用的按钮留在可点击状态。
+6. **客户端判"这一行开没开"有唯一入口**:`rowAllowed(enabled, suppressed)`(`src/client/mcp-row-state.ts`,不依赖
+   React 的纯模块,便于单测)。规则是 **Host 明确的 `enabled: false` 优先于兜底标志 `suppressed`** —— 后者只为
+   "老 bundle 下被 hold 的行也报 false"这种情况留的后路,绝不允许把用户停用的行重新显示成已启用(易崩第 43 条)。
+7. **状态徽标只在有话说时出现**(`statusOf`):配置不完整、`conditional`、以及可操作的 fiber 相位才带徽标;
+   **渲染了开关的行不再重复标「已禁用」** —— 开关自己就是那个状态,54 行挂 54 个一样的徽标只是噪声(D15 对
+   `pending`/`held` 已经这么判过,这里是同一条规则的延伸)。没有开关的行(无 Loader id、只读行)仍要标。
+8. **描述是内容不是空字段**(`McpDescription`):静止时渲染成无边框文本(空值显示「添加描述」),点击才变成真正的
+   input;它进系统提示、按 `MAX_DESCRIPTION_CHARS`(从 `src/mcp-inventory.ts` 导入,不复制常量)截断,所以
+   **超预算时才就地提示**,不在 54 行上各显示一次占位符。
+9. **名册有按名字/描述的筛选框**,与预设下拉同一行:它是视图,不改任何计数口径。标题旁的计数在不筛选时报
+   `{n} 行 · 已启用 {m}`,筛选时报 `匹配 {n} / 共 {m} 行`;分组标题只报**本组渲染出来的行数**。
+10. **Agent 行按预设过滤**:预设一多,54 行那种列表就没法看。**选项是全部已声明预设**(持有行的按行数降序在前,
+   0 行的也在,因为新增行要写进其中一个 —— 选项与受控值必须来自同一份集合,否则 0 行的预设选不中),不用另一个
+   RPC 拉预设列表;预设名在同一次 `listMcps` 里带着,不必再读一次。`全部 Agent 预设`用空串当哨兵值(预设 id 非空),
+   下拉的 `value` 与列表共用同一个校验后的值 —— 名册刷新后选中项消失时回退到"全部",不会留下一个空列表,也不会
+   出现"下拉显示 A、列表渲染 B"。规则在 `src/client/agent-filter.ts`(纯函数),回归测试见 `tests/agent-filter.spec.ts`。
+   下拉里**不再带计数**(计数曾经同时出现在下拉选项和分组标题里,同一串文字在一屏里出现两次)。
 
 ### 界面规范与状态反馈(src/client/McpSection.module.css、src/client/config-issues.ts)
 
@@ -35,14 +63,26 @@ paths:
 「插件 UI 规范」,实现按下面几条固化:
 
 1. **列几何。** `.section` 用 `container: mcp-manager / inline-size` + `max-width: 760px`,与宿主
-   `ui-settings-plugin-inventory` 的设置区同款;`@container (max-width: 480px)` 才把行改成上下堆叠。
-   **不要套一级页面那条 `calc(960px + 2 * clamp(24px, 4vw, 48px))`** ——设置弹窗的内容列正常只有约 560px,
-   套上去会与 shell 已有的 24px 内边距叠加。窗口级规则只有两条:`@media (max-width: 600px)` 把文本输入
-   (描述框、JSON 框、下拉)提到 16px/24px 免得 iOS 聚焦缩放;`@media (pointer: coarse)` 把行抬到 44px 触摸目标。
-   窄屏靠**堆叠**而不是隐藏元数据,所以没有需要移出网格与焦点顺序的隐藏控件。
-2. **控件与材质。** 行是设置卡片:`--dsw-radius-xl` + `--dsw-alias-settings-card-fill`/`-stroke`,不加阴影;
-   按钮、标签页、开关、分段控件一律用 `@deepseek-ai/dsh-client-ui-primitives`。加载方式用 `SegmentedControl`,
-   平面与编辑器分区用 `SegmentedTabs`;每个分段 `aria-controls` 指向的面板都要真实存在(未选中的挂 `hidden`)。
+   `ui-settings-plugin-inventory` 的设置区同款;`@container (max-width: 480px)` 才把行改成上下堆叠、
+   下拉与筛选框各占整行。**断点必须按容器写**:窗口级 `@media` 在这个列上永远不成立(面板固定 800px、
+   内容列约 564px),旧代码用 `@media (max-width: 760px)` 隐藏分组提示,结果是提示在最需要收起的宽度下
+   一直显示。**不要套一级页面那条 `calc(960px + 2 * clamp(24px, 4vw, 48px))`** ——设置弹窗的内容列正常只有
+   约 560px,套上去会与 shell 已有的 24px 内边距叠加。窗口级规则只有两条:`@media (max-width: 600px)` 把文本输入
+   (描述框、筛选框、JSON 框、下拉)提到 16px/24px 免得 iOS 聚焦缩放;`@media (pointer: coarse)` 把行抬到
+   44px 触摸目标,并把描述文本按钮抬到 32px(它静止时只有一行字高)。窄屏靠**堆叠**而不是隐藏元数据,所以没有
+   需要移出网格与焦点顺序的隐藏控件。
+2. **层级:页头 16/24/500 + 一行 14/22 说明,块标题 14/22/600,行名 14/22/600(代码字体),元数据/说明
+   12/18 三级色。** 「服务器」/「上下文」两个页签是页面级的 `SegmentedTabs`,宽度封顶 320px(带
+   `box-sizing: border-box`,否则封顶值会被 8px 内边距顶破);同一面里的块标题与页签不要同款,`SegmentedControl`
+   只在块内用(加载方式)。
+3. **控件与材质。** **两类表面按角色分开**:名册的实体行是设置卡片(`--dsw-radius-xl` +
+   `--dsw-alias-settings-card-fill`/`-stroke`,不加阴影);「上下文」那一面的偏好行按宿主设置行recipe ——
+   `padding: 14px 0` + `border-bottom: 0.5px solid var(--dsw-alias-border-l2)`,组内最后一行去掉分隔线,
+   控制件靠右、文字列 `padding-right: 24px` 换行。状态的块(目录缓存)才用 `--dsw-alias-bg-layer-1` +
+   `--dsw-elevation-stroke` + R16,与设置行区分开。按钮、标签页、开关、分段控件一律用
+   `@deepseek-ai/dsh-client-ui-primitives`。加载方式用 `SegmentedControl`,页面页签与编辑器分区用
+   `SegmentedTabs`;每个分段 `aria-controls` 指向的面板都要真实存在(未选中的挂 `hidden`,并且自绘
+   `display` 的容器必须补 `.panel[hidden] { display: none }`,否则 `[hidden]` 会被自己的 `display: flex` 盖掉)。
    按钮只有 `sm`=28px 与 `md`=36px 两档:**标准里的 32px 档在这套 primitives 里没有对应变体,弹窗按钮保持
    `sm`**,不要为此手写 32px 高度。字号成对:能用角色 token 就写 `font: var(--dsw-font-*)`,代码文本写
    `font: 12px/18px var(--ds-font-family-code)`;**禁止只写 `font-size`**。焦点环统一
@@ -107,9 +147,9 @@ paths:
    弹窗里显示原因。
 5. **`env`/`headers` 的值必须跟着 `spec` 走**(否则导进去的服务器连不上),但 UI 只显示键名
    (`envKeys`)。所以**不要往诊断里打 spec** —— 它带着明文凭据。
-6. **导入目标跟着设置页当前 tab 走**,弹窗里不再有独立的"导入到"选择:全局 tab → 全局平面(只读显示一行
-   `全局`);Agent tab → 只列**预设**的下拉(多预设时挑一个,默认第一个)。没有可写预设时禁用导入并说明。
-   平面本身不可用(没有唯一的 file-backed Include)时,工具栏的"导入"直接禁用(原因放 `title`)。
+6. **导入目标是弹窗自己的字段**,不再继承页面的隐藏状态:「导入到」下拉选 全局 / Agent 预设,预设那档再列
+   **预设**下拉(多预设时挑一个,默认第一个);平面不可用时那一档禁用并写明原因,没有可写预设时「导入所选」禁用
+   并说明。页面级的「导入 Claude 配置」按钮只在整份文档不可写时禁用(原因放 `title`)。
 7. **勾选状态只在"打开弹窗"时重置。** 同一次打开里的重扫(批次结束后的 `setAttempt`、重试按钮)必须保留用户
    自己的勾选 —— 曾经每次重扫都 `setExcluded(new Set())`,表现就是"只勾了一个,结果全部又被勾上"。工具栏要有
    `已选 {n}/{m}` 计数:默认本来就是全选,`全选` 按钮本身没有可见变化,没有计数就会被当成"点了没反应"。

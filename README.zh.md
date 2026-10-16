@@ -17,15 +17,19 @@ DeepSeek Harness 添加 MCP 不够方便，配置多个 MCP 后默认全部加�
 
 ## 截图
 
-**MCP 管理页**
+**MCP 管理页：服务器**
 
-![MCP 管理页](<docs/images/mcp-settings.png>)
+![MCP 管理页的服务器页签](<docs/images/mcp-settings.png>)
 
-**配置与工具过滤（左）、导入 Claude MCP 配置（右）**
+**MCP 管理页：上下文**
+
+![MCP 管理页的上下文页签](<docs/images/mcp-context.png>)
+
+**编辑一条 MCP 行（左）、导入 Claude MCP 配置（右）**
 
 [![MCP 配置、工具过滤与 Claude 配置导入](<docs/images/mcp-editor-import.png>)](<docs/images/mcp-editor-import.png>)
 
-截图为早期界面示例。编辑器里配置与工具列表分为独立标签页；Claude 配置导入写到当前所在的平面——全局分组，或下拉里选中的那个预设。加载方式改为三选一分段控件、说明显示在下方，开关失败会在该行内提示并可重试。
+一页两个页签：「服务器」是名册与加载方式，「上下文」是一次把多少工具内容交给模型。编辑器里配置与工具列表分为独立标签页；新增与导入的写入范围由弹窗里的「配置范围」/「导入到」下拉决定（全局，或某个 Agent 预设）。开关失败会在该行内提示并可重试。
 
 ## 安装
 
@@ -35,13 +39,13 @@ DeepSeek Harness 添加 MCP 不够方便，配置多个 MCP 后默认全部加�
 npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager@^1.1.0
 ```
 
-安装后重启宿主并刷新页面，打开 **设置 → MCP 管理**，新增或导入 MCP，填写用途描述。名册是一个列表：全局分组恒在最前，下面才是 Agent 行。默认使用「动态插入」；需要过滤工具时在 **编辑 → 工具列表** 中只保留所需工具，需要控制一次有多少工具内容进上下文时用 **设置 → MCP 优化**。
+安装后重启宿主并刷新页面，打开 **设置 → MCP 管理**，新增或导入 MCP，填写用途描述。这一页分两个页签：**服务器**（名册，全局分组恒在最前，下面才是 Agent 行；默认使用「动态插入」；需要过滤工具时在 **编辑 → 工具列表** 中只保留所需工具）与 **上下文**（一次有多少工具内容进上下文）。新增或导入时，「配置范围」/「导入到」下拉决定写进全局平面还是某个 Agent 预设。
 
 其他安装方式与开发说明见 [AGENTS.md](https://github.com/zhang-guo-wen/dsh-mcp-manager/blob/master/AGENTS.md)。
 
 ## 进一步省上下文：检索、分页、只带名称
 
-设置 → **MCP 优化** 控制一次调用有多少工具内容进入上下文。MCP 规范本身没有给 `tools/list` 查询参数，也没有「只列名称」的形态；官方[客户端最佳实践](https://modelcontextprotocol.io/docs/2026-07-28/develop/clients/client-best-practices)把渐进式发现放在宿主侧，这一页做的就是这件事：
+**设置 → MCP 管理 → 上下文** 控制一次调用有多少工具内容进入上下文。MCP 规范本身没有给 `tools/list` 查询参数，也没有「只列名称」的形态；官方[客户端最佳实践](https://modelcontextprotocol.io/docs/2026-07-28/develop/clients/client-best-practices)把渐进式发现放在宿主侧，这一页做的就是这件事：
 
 | 设置 | 作用 |
 |---|---|
@@ -54,7 +58,7 @@ npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager@^1.1.
 | **列出工具注解**（`annotations`） | 把服务器声明的 `readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint` 带进列表。 |
 | **隐藏破坏性工具**（`hideDestructive`） | 把 `destructiveHint` 明确为 true 的工具从会话可见集合中完全去掉。 |
 
-同一页还会显示工具目录缓存（服务器数、工具数、缓存时间），并提供清空按钮。所有开关都是活设置：保存后对下一次加载、检索或重建索引生效，不需要重启。
+「上下文」页签还会显示工具目录缓存（服务器数、工具数、缓存时间），并提供清空按钮。所有开关都是活设置：保存后对下一次加载、检索或重建索引生效，不需要重启。
 
 ## 注意事项
 

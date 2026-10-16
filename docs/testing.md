@@ -36,6 +36,10 @@ npm run test:harness
 > `lib/client.js` = `1D0FC432…`；同批结果为 `npm test` **21 文件 / 219 项**、`npm run test:harness` **6/25**、
 > `npm run test:metadata` 通过、`npm run typecheck` 与 `npm run build` 通过、
 > `_team/audit-ui-standard.mjs dsh-mcp-manager` **0 项**。下面的协议与复现命令不变。
+>
+> **再合并说明（2026-10-16 晚些）**：同一天又把两条 `settings.section` 注册合并成**一页两页签**，名册页重排；
+> 当前产物是 `lib/client.js` = `B7A9BEEA…`，`npm test` **21 文件 / 228 项**。这一轮的环境、读数、缺口与截图
+> 见**第六节**；上面文字里提到的 `mcp.plane.global.eager`、`needsPreset`、独立「MCP 优化」页都是**该轮之前**的形态。
 
 ### 测试夹具
 
@@ -583,7 +587,7 @@ agent 行（preset 平面）**完全正常**，写入与回读都对。
 | 噪声标记 | ✅ 「已禁用」0 次、「未配置」0 次（未被用户停用的行） |
 | 预设下拉 | ✅ 列出全部已声明预设（含 4 个 0 行的） |
 | 新增弹窗预选 | ✅ **已修**：工具栏选 `cordis` → 「新增 MCP」→ 弹窗「Agent 预设」= **`cordis`**（上一轮是 `standard`） |
-| 独立「MCP 优化」设置页 | ✅ 导航项 `MCP 优化` 正常渲染：5 个开关（启用工具检索 / 检索时索引未缓存的服务器 / 默认只列工具名与描述 / 列出时带工具注解 / 隐藏声明为破坏性的工具）＋ 3 个数字（每次列出条数 10、单台服务器最多拉取 200、缓存有效期 5 分钟）＋ `刷新` / `清空缓存` |
+| 独立「MCP 优化」设置页 | ✅ 导航项 `MCP 优化` 正常渲染：5 个开关（启用工具检索 / 检索时索引未缓存的服务器 / 默认只列工具名与描述 / 列出时带工具注解 / 隐藏声明为破坏性的工具）＋ 3 个数字（每次列出条数 10、单台服务器最多拉取 200、缓存有效期 5 分钟）＋ `刷新` / `清空缓存`（**该入口已于 2026-10-16 合并为「MCP 管理 → 上下文」页签，见第六节**） |
 | 行开关（启用/禁用） | ❌（**根因见第三节更正后的「缺陷 2」**）全局行点击后 host 报 `MCP preset row "…" was not found`：开关与 RPC 都正常，失败在全局行的写入路径（只认 Include 的文件行）；**agent 行的开关完全正常**（alert「已禁用 MCP 服务器」，profile patch 里真的写上了 `disabled: true`） |
 
 ### 本节未覆盖
@@ -731,6 +735,8 @@ switch = <button role="switch" aria-checked="true"
 - **单列表布局 + 优化页**：设置页 `[role=tab]` 0 个、全局分组在最前、4 行无重复、`dx=0`、无「已禁用」/「未配置」噪声；
   独立「MCP 优化」页渲染正常（5 个开关 + 3 个数字 + `刷新`/`清空缓存`）。截图：
   `evidence/ui/final-B-mcp-1440-light.png`、`evidence/ui/final-B-optimize-1440-light.png`。
+  **这两条读数绑的是当时的产物**：后来的合并（2026-10-16，第六节）把优化面收进页内页签、并让渲染了开关的行
+  不再重复标「已禁用」，所以 `[role=tab]` 现在是 5 个（页面 2 个 + 加载方式 3 个），"无「已禁用」噪声"仍然成立。
 
 #### 5. 一个未能复现的一次性异常（如实记录）
 
@@ -754,6 +760,76 @@ switch = <button role="switch" aria-checked="true"
 4. **活动实例内运行中切换加载模式**、**`lazy` 模式的池复用**、**`mcp_search` 工具本身**。
 5. **写盘的其他路径**：新增/导入/删除行、以及编辑弹窗的「保存」都没有点过；本轮只验证了行开关（停用/启用）。
 6. **用户 Include 的注释保留**：见第 1 项的副作用，未做任何规避。
+
+## 六、两页合并为页内页签（2026-10-16，产物 `B7A9BEEA…`）
+
+上一轮把「MCP 优化」做成独立的第二条 `settings.section`（order 15）。本轮把它并回**一个**设置页的第二个页签，
+并把名册页按「先取证再改」重排（页头、两行工具栏、行内描述、状态徽标、筛选、计数口径）。触发是用户反馈：
+"MCP 管理插件的页面布局很混乱，且出现两个页面"。环境与产物：
+
+| 项 | 值 |
+|---|---|
+| 宿主 | npm 发布版 `@deepseek-ai/dsh@0.2.0-rc.2`（= npm `latest`/`next`），隔离 `DSH_HOME` `.scratch/harness-tests/mcp-ui-0.2.0-rc.2-20261016-113243`，端口 53145，`--no-open`，实例 pid 47496（node 41788） |
+| 插件产物 | `lib/client.js` = `B7A9BEEA208244B1…`（176271 B）、`lib/index.mjs` = `121B8C0A261FF54F…`（202504 B，本轮未改 host 侧） |
+| 组合 | 插件以 `link:` 装进该 profile（`dsh plugin --profile web add <工作树>`），改完源码 `npm run build` 即对页面生效，不需要重装 |
+| fixture | 7 行 Agent 预设行（`fixture-alpha/beta/final/final2` + `playwright-mcp` + `yunxiao` + `skillsmp`），**全部由本轮的新增弹窗创建**，用来验证"平面选择进弹窗"这条路径本身；全局平面 0 行、无用户 Include（`globalWritable = false`），正好覆盖"全局那一档不可选" |
+| 驱动 | Playwright 1.61.1（`chromium_headless_shell-1228`），`ignoreDefaultArgs: ['--hide-scrollbars']`；脚本与 `report.json` 在 `.scratch/mcp-ui-verify/` |
+
+### 逐项读数
+
+| 验收项 | 结果 |
+|---|---|
+| 侧栏只有一个 MCP 入口 | ✅ `nav button` 文本里以 `MCP` 开头的**只有 `MCP 管理`**（此前是 `MCP 管理` + `MCP 优化`） |
+| 页头与页签 | ✅ `H2 MCP` + 一行 14/22 说明 + `SegmentedTabs`（`服务器` / `上下文`，`aria-selected` 正确切换）；两个 tabpanel 一个渲染、另一个 `hidden` |
+| 「新增 MCP」首屏可用 | ✅ 默认视图（全部 Agent 预设）下按钮**不再禁用**；旧实现下 `needsPreset` 让它和「导入」在首屏就是灰的（原因只在 `title` 里，且文案还写着已经不在"右侧"的下拉） |
+| 写入平面在弹窗里可选 | ✅ 新增弹窗有「配置范围」下拉：`全局[d]`（该组合没有可写的 fileInclude）+ `Agent 预设*`，原因就地写明；保存按钮**可用** |
+| 端到端写入 | ✅ 7 行全部经该弹窗写入 `profiles/web/cordis.patch.yml` 的 `standard` 预设声明（`serverName` / `transport` / `command` / `args` / `env` / `cwd` 落盘正确），名册随即刷新出该行 |
+| 描述是内容不是空字段 | ✅ 空描述渲染成「添加描述」；点开变 28px 输入框；输入 90 字时出现「模型只看到前 80 个字符」（常量取自 `src/mcp-inventory.ts`，未复制）；回车保存后行内显示新描述，落盘见 `descriptions: preset:standard:<name>` |
+| 状态徽标不再逐行刷 | ✅ 把一行关掉后，行文本里**没有**「已禁用」（开关自己就是状态）；`rowAfterDisable` 与 `rowAfterEnable` 只差开关位置 |
+| 计数口径 | ✅ 不筛选时 `7 行 · 已启用 6`；输入 `fixture` 后 `匹配 4 / 共 7 行`（分组标题同步只报本组渲染行数）；输入不存在的名字时两组都显示「没有匹配的服务器」且**不出现**新增按钮 |
+| 「上下文」页签 | ✅ 4 组 6 个标题、5 个开关、3 个数字、目录状态独立成块；页签切换后名册内容不在 `innerText` 里（`hidden` 生效，未被自己的 `display: flex` 盖掉） |
+| 按字段保存态 | ✅ 独立探针（`probe-savenote.cjs`）：`idle → 保存中`（点击当帧）`→ 已保存`（t+300ms / t+1000ms）`→ idle`（t+2600ms，2.5 秒后自动消失）；无 `role="alert"`，开关值与写入一致 |
+| 盒子几何（11 档） | ✅ 320/360/390/430/600/601/760/761/1024/1280/1440：页标题、tabpanel、首行的**左右边界差同时为 0**（见下表）；`documentElement.scrollWidth === clientWidth`，面板 scrollWidth 也未溢出 |
+| 浅色 + 深色 | ✅ `colorScheme: dark` 下 `body` 背景 `rgb(21,21,23)`、面板文字 `rgb(249,250,251)`；两套截图见下 |
+| 控制台 | ✅ 0 条 `error`/`warning`、0 条 `pageerror` |
+| 静态约束 | ✅ `npm run typecheck` 通过；`npm test` **21 文件 / 228 项通过**（含扩到两份样式表的 `tests/client-css.spec.ts`，18 项） |
+
+两次运行（`7073A435…` 与最终 `B7A9BEEA…`）的逐项读数一致；上表与下表是**最终产物**那一轮的读数。
+
+边界读数（内容列，`L/R` 为该元素 border-box 左右缘）：
+
+| 窗口宽 | 设置面板 | 内容列宽 | 页标题 / tabpanel / 首行 | dL | dR |
+|---|---|---|---|---|---|
+| 320 | 272 | 31 | `(236,267)` 三者相同 | 0 | 0 |
+| 390 | 342 | 101 | `(236,337)` | 0 | 0 |
+| 601 | 553 | 312 | `(236,548)` | 0 | 0 |
+| 760 | 712 | 471 | `(236,707)` | 0 | 0 |
+| 1024 | 800 | 559 | `(324,883)` | 0 | 0 |
+| 1440 | 800 | 559 | `(532,1091)` | 0 | 0 |
+
+（1024 起内容列 559px 而不是 564px：名册长到出现滚动条后 shell 的 `.options` 让出了 rail。320–761 五档下内容列只有
+31–471px，是**宿主设置面板本身**在窄窗口仍保留 188px 左侧导航所致，与本插件无关，本轮未改宿主。）
+
+### 已知缺口（如实保留）
+
+1. **删除行仍不可用**：整个插件只有 新增/编辑/停用/导入，`deleteMcp` 在 `src/`、字典与 Remote 接口里都没有。
+   54 行全停用后清不掉，只能一行行关。要做得先加 Host 侧 Remote（全局走 Include 文件重写，preset 走 `configEditor.edit`）。
+2. **没有批量启用/停用**：`disableMcp` 是单行接口，批量要新增 `disableMcps`（D12 已经证明逐行循环 = 每个 preset
+   全量重启一轮，所以不能在前端循环）。
+3. **名册里的描述保存没有反馈**：`updateMcpDescription` 仍是 fire-and-forget（`settings-controller.ts`），
+   失败只写控制台。优化页那一面已有按字段的保存态，名册这一面还没有。
+4. **窄窗口（≤761px）下设置面板内容列只有 31–471px**：宿主的问题（面板不切单列、导航不收起），本插件只保证
+   不横向溢出、按容器断点堆叠；真机软键盘与 `pointer: coarse` 未测。
+5. **只测了 6 行**：54 行那种规模下的滚动性能与更长列表未测；`report.json` 里的 `saveNote*` 字段是脚本按行文本
+   截 60 字取样，**不能**当保存态证据（有效读数是独立的 `probe-savenote.cjs`）。
+
+### 截图（`.scratch/mcp-ui-verify/`）
+
+`10-mcp-empty-light-1440.png`（空名册 + 两个页签）、`11-add-dialog.png`（配置范围：全局禁用 + 原因）、
+`12-after-add.png`（写入后的行）、`13-description-over-budget.png`（80 字预算提示）、`14-filter-empty.png`、
+`14b-row-disabled.png`（关掉的行无「已禁用」）、`15-context-tab.png`、`16-save-note.png`、
+`20-roster-{1440,760,601,390,320}.png`、`30-roster-dark-1440.png`、`31-context-dark-1440.png`。
+README 用的三张图（`docs/images/mcp-settings.png`、`mcp-context.png`、`mcp-editor-import.png`）已用这一轮的产物重拍。
 
 ## 维护
 
