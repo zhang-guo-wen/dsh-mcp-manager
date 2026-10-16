@@ -45,14 +45,12 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* Two tabs do not need the whole column: an equal-width bar spanning 564px
-   reads as a toolbar rather than as a page switch. */
+/* The two tabs are the page's own switch, so the bar spans the whole column and
+   each tab takes half of it. */
 .tabs {
   box-sizing: border-box;
   flex: none;
-  align-self: flex-start;
   width: 100%;
-  max-width: 320px;
 }
 
 .tabPanel {
@@ -75,11 +73,8 @@
   gap: 12px;
 }
 
-/* A block's name, and the one fact that governs it: when a change takes
-   effect. The two sit on one baseline so the timing reads as part of the
-   heading rather than as another paragraph. The heading is one tier above the
-   rows it names, which is why it is 14/22/600 rather than the 13/20 the
-   metadata around it uses. */
+/* A block's name. The heading is one tier above the rows it names, which is why
+   it is 14/22/600 rather than the 13/20 the metadata around it uses. */
 .blockHead {
   display: flex;
   flex-wrap: wrap;
@@ -93,18 +88,15 @@
   font-weight: 600;
 }
 
-.when {
-  font: var(--dsw-font-xxs-12);
-  color: var(--dsw-alias-label-tertiary);
-}
-
 /* ---- MCP loading mode ---- */
 
+/* The three-way choice is this block's own content, so it spans the block: the
+   segments read as the page's switch for the roster, not as a toolbar button. */
 .modeBlock {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  align-items: flex-start;
+  align-items: stretch;
 }
 
 /* The selected mode's own explanation, kept out of the segment labels so the
@@ -266,11 +258,21 @@
 }
 
 /* The preset a row belongs to is metadata, like the status beside it: the list
-   is already narrowed to it, so it is stated once per row rather than tagged. */
+   is already narrowed to it, so it is stated once per row rather than tagged.
+   Both plane markers use the tab recipe — the raised surface, the hairline and
+   R12 that the page's own tabs carry — because the marker names the same kind of
+   fact a tab does: which grouping the row below belongs to. */
 .rowScope {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-secondary);
   font: var(--dsw-font-xxs-12);
-  color: var(--dsw-alias-label-tertiary);
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -346,7 +348,6 @@
 .mcpFilterSelect:disabled,
 .formSelect:disabled,
 .formJson:disabled,
-.importRow input:disabled,
 .toolRow input:disabled {
   opacity: 0.5;
   cursor: default;
@@ -375,6 +376,11 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
+  /* A row is as tall as its name plus its description, and the switches sit on
+     the text's own top line; centering the trailing group puts the status, the
+     plane marker and the switch on the card's middle line instead, which is what
+     makes one row's switch line up with the next one's. */
+  align-self: center;
   gap: 8px;
   max-width: 100%;
 }
@@ -385,13 +391,6 @@
   gap: 6px;
   font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-secondary);
-}
-
-.mcpActions {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
 }
 
 /* One row's own failure, kept in the row so the roster stays on screen and the
@@ -441,13 +440,6 @@
   margin: 0;
   font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-state-success-primary);
-}
-
-.mcpActionError {
-  margin: 0;
-  font: var(--dsw-font-xxs-12);
-  color: var(--dsw-alias-state-error-primary);
-  overflow-wrap: anywhere;
 }
 
 /* ---- First paint ---- */
@@ -571,6 +563,23 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* The required mark: the field it sits beside refuses an empty value, so the
+   mark is decoration for the eye only — the control carries `aria-required`. */
+.requiredMark {
+  margin-left: 2px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* One field's own verdict, on its label line: a document that cannot be read is
+   fixable right there, so the reason stays with the field instead of scrolling
+   to the bottom of the dialog with the form's shared error line. */
+.fieldError {
+  margin-left: 8px;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-state-error-primary);
+  overflow-wrap: anywhere;
+}
+
 .fieldHint {
   font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-tertiary);
@@ -628,11 +637,14 @@
 
 /* ---- Tool listing ---- */
 
+/* One row whatever is in it: the count and the bulk toggles arrive with a
+   listing, and the explanation under this row must not move when they do. */
 .toolsHead {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  min-height: 28px;
 }
 
 .toolsCount {
@@ -685,117 +697,54 @@
   white-space: nowrap;
 }
 
-/* ---- Claude configuration import ---- */
-
-.importToolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-/* Both selects hold a reading column rather than the whole card, so the bar
-   carries them on one baseline instead of stacking a band each. */
-.importScope {
-  display: flex;
-  flex: 0 1 240px;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-
-/* The counter and the bulk toggles read as one control: centering keeps the
-   counter's text level with the button labels instead of stretching its box. */
-.importChecks {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.importList {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-height: 340px;
-  overflow: auto;
-  padding: 4px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: var(--dsw-radius-lg);
-  background: var(--dsw-alias-bg-layer-1);
-}
-
-.importSource {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.importSourceHead {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-  padding: 2px 4px;
-}
-
-.importSourceLabel {
+/* What one definition costs, pushed to the row's right edge so the numbers line
+   up in a column of their own. Tabular figures keep the column steady. */
+.toolTokens {
   flex: none;
-  font: var(--dsw-font-xxs-strong-12);
-  color: var(--dsw-alias-label-secondary);
-}
-
-.importSourcePath {
-  overflow: hidden;
+  margin-left: auto;
+  padding-left: 8px;
   font: 12px/18px var(--ds-font-family-code);
   color: var(--dsw-alias-label-tertiary);
-  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.importProblem {
-  margin: 0;
-  padding: 0 4px;
-  font: var(--dsw-font-xxs-12);
-  color: var(--dsw-alias-state-error-primary);
-  overflow-wrap: anywhere;
-}
-
-.importRow {
+/* The listing's wait, centered in the panel: it replaces nothing, so the hint
+   above it does not move while a connect is in flight. */
+.toolsLoading {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 6px;
-  border-radius: var(--dsw-radius-sm);
-  cursor: pointer;
-}
-
-.importRow:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.importMain {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.importName {
-  display: inline-flex;
-  flex-wrap: wrap;
+  flex: 1 1 auto;
   align-items: center;
-  gap: 6px;
-  font: 12px/18px var(--ds-font-family-code);
-  color: var(--dsw-alias-label-primary);
+  justify-content: center;
+  gap: 8px;
+  min-height: 120px;
+  font: var(--dsw-font-xs-13);
+  color: var(--dsw-alias-label-tertiary);
 }
 
-.importMeta {
-  font: var(--dsw-font-xxs-12);
-  color: var(--dsw-alias-label-tertiary);
-  overflow-wrap: anywhere;
+.toolsLoading .spinner {
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--dsw-alias-bg-skeleton);
+  border-top-color: var(--dsw-alias-label-tertiary);
+  border-radius: 50%;
+}
+
+@keyframes mcp-tool-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .toolsLoading .spinner {
+    animation: mcp-tool-spin 800ms linear infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toolsLoading .spinner {
+    animation: none;
+  }
 }
 
 /* ---- Credentials pane ----
@@ -829,10 +778,6 @@
    leaves this column near 564px inside the settings panel, so a window-keyed
    rule would never fire where it is needed. */
 @container mcp-manager (max-width: 480px) {
-  .tabs {
-    max-width: none;
-  }
-
   .listActions {
     margin-left: 0;
   }
@@ -842,7 +787,11 @@
     align-items: stretch;
   }
 
+  /* Stacked, the trailing group is a line of its own and spans it: centering it
+     (the row's own default) would shrink it to its content and drop the switch
+     away from the right edge. */
   .mcpRight {
+    align-self: stretch;
     justify-content: space-between;
   }
 
@@ -851,18 +800,13 @@
     max-width: none;
     flex: 1 1 100%;
   }
-
-  .importScope {
-    flex: 1 1 100%;
-  }
 }
 
 /* Whole rows are the touch target, so a checkbox row stays reachable without
    hitting the box itself. */
 @media (pointer: coarse) {
   .mcpRow,
-  .toolRow,
-  .importRow {
+  .toolRow {
     min-height: 44px;
   }
 }

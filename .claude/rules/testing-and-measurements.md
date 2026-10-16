@@ -36,6 +36,14 @@ paths:
 `node _team/audit-ui-standard.mjs dsh-mcp-manager` **0 项**；产物 `lib/index.mjs` = `121B8C0A…`、
 `lib/client.js` = `1D0FC432…`（合并后重建）。上一条与 `docs/testing.md` 里的 `E1B1051A…` client 产物是**合并前**
 main 侧的历史读数。
+**2026-10-16 名册与弹窗 UI 七轮改（D26–D32，当前产物）**：`npm test` **23/258 通过**（新增
+`tests/mcp-spec.spec.ts` 5 项：服务器名推断；`tests/mcp-tokens.spec.ts` 5 项：工具 token 估算；删
+`tests/claude-import.spec.ts` 11 项：导入功能已按需求移除）、`npm run test:harness` **6/25 通过**、
+`npm run test:metadata` 通过、`npm run typecheck` / `npm run build` 通过；产物 `lib/index.mjs` = `2771BA61…`、
+`lib/client.js` = `4FEC5E73…`。浏览器实测（名册行右侧对齐与上下居中、平面标记芯片、页签全宽、新增弹窗一个落点
+下拉、全局不可写时的灰项与原因、必填 `*` 与自动命名、工具列表 token 与居中 loading、设置页无残留描述、名册无导入
+按钮、JSON 校验落在字段标签行且失焦才判、工具页签无加载按钮且进页签即列举）见 [docs/testing.md](../docs/testing.md)
+第十一至十七节。
 **隔离实例实测通过（最终产物 `121B8C0A…`/`E1B1051A…`）**：`dynamic` 启动后四个 marker 全不存在、进程 0、
 stderr 为空；`eager` 对照四台长期存活；多次 `mcp_load` 复用同一条子进程（同一 pid）、末位释放才停；全局行的
 开关（形状 A：行写在自己的 Include 文件里）在设置页真正可用，被用户停用的行开关立即显示为关。

@@ -14,7 +14,7 @@ import type {
 import { admits, parseMcpToolFilter } from '../mcp-tool-filter.ts'
 import { mcpEntryConfig } from '../mcp-config.ts'
 import { isBlockingConfigIssue, diagnoseMcpSpec } from '../mcp-diagnostics.ts'
-import { flattenSpec, parseSpecText } from '../mcp-spec.ts'
+import { flattenSpec, parseSpecText, serverNameFromSpec } from '../mcp-spec.ts'
 import {
   credentialText,
   credentialValues,
@@ -22,6 +22,7 @@ import {
   type CredentialKind,
 } from './credential-fields.ts'
 import { formatMcpConfigIssues } from './config-issues.ts'
+import { McpTargetSelect, initialTarget } from './McpTargetSelect.tsx'
 import { MCP_READ_ONLY_REASON, type McpSectionKey } from './locales.ts'
 import type { McpPlane, McpPresetOption, McpServer } from './settings-controller.ts'
 import css from './McpSection.module.css'
@@ -92,26 +93,18 @@ function rowKey(scope: 'global' | 'preset', agentPreset: string, serverName: str
 }
 
 /**
- * The plane one row lives in, in this dialog's own vocabulary. A row's scope is
- * `global` or `preset`; a plane a new row can be written to is `global` or
- * `agent` (an agent row addressed through one preset).
- * @param server - the row being edited, when there is one.
- * @returns the plane that row belongs to.
- */
-function planeOf(server: McpServer | undefined): McpPlane {
-  return server?.scope === 'global' ? 'global' : 'agent'
-}
-
-/**
  * The composition a save addresses: an edited row keeps its own plane, and a new
- * row goes to the plane the section shows. Undefined when that plane cannot be
- * named — an agent row with no preset to address.
+ * row goes to the home its picker names. Undefined when the edited row has no
+ * addressable entry.
+ * @param mode - whether the dialog creates a row or replaces one.
+ * @param server - the row being edited, when there is one.
+ * @param choice - a new row's home: `''` for the global plane, else a preset id.
+ * @returns the target to write, or undefined when there is none.
  */
 function editorTarget(
   mode: McpEditorMode,
   server: McpServer | undefined,
-  plane: McpPlane,
-  presetId: string,
+  choice: string,
 ): McpTarget | undefined {
   if (mode === 'edit') {
     if (server === undefined || server.entryId === null) return undefined
@@ -119,8 +112,7 @@ function editorTarget(
       ? { scope: 'global' }
       : { scope: 'preset', agentPreset: server.presetId ?? '' }
   }
-  if (plane === 'global') return { scope: 'global' }
-  return presetId === '' ? undefined : { scope: 'preset', agentPreset: presetId }
+  return choice === '' ? { scope: 'global' } : { scope: 'preset', agentPreset: choice }
 }
 
 /** The connection-spec JSON prefilled in the box (no scope/title — those are fields). */
@@ -185,13 +177,15 @@ function McpCredentialsPane({ json, kind, baseline, disabled, onPush, t }: {
 export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, plane, tab: openTab, globalWritable, preset, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
   const [tab, setTab] = useState<McpEditorTab>(openTab)
   const tabId = useId()
-  /** Chosen agent preset for a new row; a placeholder while the list loads. */
-  const [presetId, setPresetId] = useState(server?.scope === 'preset' ? server.presetId ?? '' : preset ?? '')
+  /**
+   * A new row's home, as this dialog's own field: the empty value is the global
+   * plane, any other value a preset id. An edited row's home is never this field
+   * — it keeps its own plane — so the value only decides an add.
+   */
+  const [choice, setChoice] = useState(initialTarget(plane, preset))
   const [presetOptions, setPresetOptions] = useState<readonly McpPresetOption[]>([])
   /** Whether the preset read answered, so an empty list can be told from a pending one. */
   const [presetLoaded, setPresetLoaded] = useState(false)
-  /** Chosen plane for a new row, as this dialog's own field. */
-  const [planeChoice, setPlaneChoice] = useState<McpPlane>(plane)
   const [title, setTitle] = useState(server?.serverName ?? '')
   const [description, setDescription] = useState(descriptionInitial)
   const [json, setJson] = useState('')
@@ -207,20 +201,36 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
    * tick, and the pane's own writes all land here too.
    */
   const jsonBox = useRef('')
+  /**
+   * Whether the user has named the row themselves.
+   *
+   * The name is derivable from the spec (`@scope/pkg` → `pkg`), so a new row is
+   * named as soon as its JSON says what it is. Typing in the field takes the name
+   * back: from then on the JSON never touches it again.
+   */
+  const nameTouched = useRef(false)
   const [localError, setLocalError] = useState<string | null>(null)
+  /**
+   * What is wrong with the JSON box, if anything, shown under the box itself.
+   *
+   * A document that cannot be read is the one failure the user can fix right
+   * there, so its reason sits beside the field rather than on the form's shared
+   * error line at the bottom of the dialog.
+   */
+  const [jsonError, setJsonError] = useState<string | null>(null)
   const [configNotice, setConfigNotice] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  /**
+   * What the rendered listing was taken for, so opening the pane again after the
+   * form changed lists again instead of showing a listing that no longer
+   * describes the row.
+   */
+  const listedFor = useRef<string | null>(null)
   const [tools, setTools] = useState<readonly McpToolRow[] | null>(null)
   const [hiddenTools, setHiddenTools] = useState<ReadonlySet<string>>(() => new Set<string>())
   const [toolsBusy, setToolsBusy] = useState(false)
   const [toolsError, setToolsError] = useState<string | null>(null)
   const editKey = `${server?.scope ?? ''}:${server?.presetId ?? ''}:${server?.entryId ?? ''}`
-  /**
-   * The plane this save addresses: an edited row keeps its own, a new one uses
-   * the field below. Editing never follows the field, so a row cannot be written
-   * to the wrong side by opening its editor after a scope change.
-   */
-  const targetPlane: McpPlane = mode === 'edit' ? planeOf(server) : planeChoice
   /** The credential map this row's transport carries; `env` until the transport is known. */
   const credentialKind: CredentialKind = (() => {
     try {
@@ -228,6 +238,27 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       return parsed.spec.type === 'stdio' ? 'env' : 'headers'
     } catch { return 'env' }
   })()
+
+  /**
+   * Name a new row from the spec it describes, while the user has not named it.
+   *
+   * The name is the one field of this form the JSON already answers — a spec's
+   * `args`/`url` imply it — so asking for it before the paste is asking for
+   * something the dialog can fill in. An edited row keeps its own name: renaming
+   * it is a deliberate act, not a side effect of touching the JSON.
+   * @param text - the JSON box's current text.
+   */
+  const syncName = (text: string): void => {
+    if (mode !== 'add' || nameTouched.current) return
+    try {
+      const parsed = parseSpecText(text, t('mcp.form.jsonInvalid'))
+      // A document that names itself wins; otherwise the launch command (or the
+      // URL's host) is what the name is derived from.
+      const suggested = parsed.serverName ?? serverNameFromSpec(parsed.spec)
+      // A half-typed document names nothing yet; the field keeps what it has.
+      if (suggested !== '') setTitle(suggested)
+    } catch { /* unparseable text has no name to offer */ }
+  }
 
   /**
    * Apply one credential field to the JSON box, which is the document the save
@@ -239,6 +270,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
     if (next === undefined) return
     jsonBox.current = next
     setJson(next)
+    syncName(next)
   }
 
   /**
@@ -257,8 +289,8 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
    * @param spec - transport to connect with.
    * @param serverName - namespace for diagnostics; required by the Host.
    * @param fromRules - seed the checkboxes from the row's stored rules (the
-   *   dialog's first listing); a manual reload keeps the user's own choices and
-   *   treats tools it has not seen before as enabled.
+   *   dialog's first listing); a later listing of the same row keeps the user's
+   *   own choices and treats tools it has not seen before as enabled.
    */
   const loadTools = (spec: McpSpec, serverName: string, fromRules: boolean): void => {
     if (serverName.trim() === '') {
@@ -270,6 +302,9 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
     void listMcpTools({ spec, serverName }).then(
       (result) => {
         setTools(result.tools)
+        // What this listing describes, so returning to the pane can tell whether
+        // the form has moved on since.
+        listedFor.current = listingKey(serverName, spec)
         setHiddenTools((previous) => {
           const filter = parseMcpToolFilter(toolRulesInitial)
           const next = new Set<string>()
@@ -288,60 +323,123 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
   }
 
   /**
+   * The identity of one listing: the namespace and the spec it was taken for.
+   * @param serverName - namespace the listing used.
+   * @param spec - transport the listing connected with.
+   * @returns the key two listings are compared by.
+   */
+  const listingKey = (serverName: string, spec: McpSpec): string => `${serverName}\u0000${JSON.stringify(spec)}`
+
+  /**
+   * The reason the JSON box cannot be used, or null when it describes a usable
+   * connection.
+   *
+   * The two levels the save checks, and nothing else: whether the document
+   * parses, and whether the transport it describes is structurally complete. A
+   * missing server name is not this box's business, and what only the Host can
+   * answer (whether a `${...}` reference resolves) stays with the roster.
+   * @param text - the JSON box's current text.
+   * @returns the localized reason, or null when the box is usable.
+   */
+  const jsonProblem = (text: string): string | null => {
+    try {
+      const parsed = parseSpecText(text, t('mcp.form.jsonInvalid'))
+      const blocking = diagnoseMcpSpec(parsed.spec, {}).filter(isBlockingConfigIssue)
+      return blocking.length === 0 ? null : formatMcpConfigIssues(blocking, t)
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : t('mcp.form.jsonInvalid')
+    }
+  }
+
+  /**
+   * The spec and namespace the form currently describes, or null when there is
+   * nothing to list.
+   *
+   * A box that cannot be read is reported beside itself and the pane holding it
+   * comes back into view — a connection error about a spec that was never
+   * readable would name the wrong thing. A row with no name yet says so in this
+   * pane, because the name is the pane's own requirement.
+   * @returns what a listing would connect with, or null when it cannot start.
+   */
+  const listingTarget = (): { spec: McpSpec; serverName: string } | null => {
+    const problem = jsonProblem(json)
+    if (problem !== null) {
+      setJsonError(problem)
+      setTab('config')
+      return null
+    }
+    const parsed = parseSpecText(json, t('mcp.form.jsonInvalid'))
+    const serverName = (title.trim() !== '' ? title.trim() : parsed.serverName ?? '').trim()
+    if (serverName === '') {
+      setToolsError(t('mcp.form.toolsNeedsName'))
+      return null
+    }
+    return { spec: parsed.spec, serverName }
+  }
+
+  /**
    * List the tools of the spec the form currently shows. The JSON box is the
    * source, so an edited command or url is listed as edited.
    * @param fromRules - seed the checkboxes from the row's stored rules.
    */
   const loadToolsFromForm = (fromRules: boolean): void => {
-    try {
-      const parsed = parseSpecText(json, t('mcp.form.jsonInvalid'))
-      const serverName = (title.trim() !== '' ? title.trim() : parsed.serverName ?? '').trim()
-      loadTools(parsed.spec, serverName, fromRules)
-    } catch (cause) {
-      setToolsError(cause instanceof Error ? cause.message : t('mcp.form.jsonInvalid'))
-    }
+    const target = listingTarget()
+    if (target === null) return
+    loadTools(target.spec, target.serverName, fromRules)
   }
 
   /**
-   * Opening the tools pane is what asks the server for its listing: connecting
-   * spawns a child process for stdio rows, and a row the user only renames never
-   * needs one. `tools` stays null until a listing was actually shown, which is
-   * what keeps the save from rewriting the stored rules with an empty set.
+   * Opening the tools pane is the only trigger for a listing: connecting spawns
+   * a child process for stdio rows, and a row the user only renames never needs
+   * one. There is no load button, so the pane opens on what the form describes —
+   * and lists again when the form changed since the listing it already has.
+   * `tools` stays null until a listing was actually shown, which is what keeps
+   * the save from rewriting the stored rules with an empty set.
    */
   const pickTab = (next: McpEditorTab): void => {
     setTab(next)
-    if (next !== 'tools' || mode !== 'edit' || loading) return
+    if (next !== 'tools' || loading || toolsBusy) return
     // A global row's rules could not take effect, so listing its tools would spawn
     // a connection for a pane the user cannot use.
     if (toolsReadOnly) return
-    if (tools !== null || toolsBusy) return
-    loadToolsFromForm(true)
+    if (tools === null) {
+      loadToolsFromForm(true)
+      return
+    }
+    // A listing of the same spec stays as it is: re-listing on every visit would
+    // connect for a pane whose answer cannot have changed.
+    const problem = jsonProblem(json)
+    if (problem !== null) return
+    const parsed = parseSpecText(json, t('mcp.form.jsonInvalid'))
+    const serverName = (title.trim() !== '' ? title.trim() : parsed.serverName ?? '').trim()
+    if (listedFor.current === listingKey(serverName, parsed.spec)) return
+    loadTools(parsed.spec, serverName, false)
   }
 
   useEffect(() => {
     if (!open) return
     let current = true
     setLocalError(null)
+    setJsonError(null)
     setConfigNotice(null)
     // The pane this dialog opens on: the row's own button asks for its
     // credentials, and everything else asks for the config. The dialog stays
     // mounted while it is closed, so the pane cannot come from the state
     // initializer alone — it has to be applied on every open.
     setTab(openTab)
-    // An edited row keeps its own preset; a new row opens on the preset the list
-    // is narrowed to, which is the one the section will write into. Losing that
-    // here left the picker on the first preset, so a row landed somewhere the
-    // user was not looking. `preset` is deliberately not a dependency: the list
-    // can refresh while this dialog is open, and re-running this effect would
-    // reset the form under the user.
-    setPresetId(server?.scope === 'preset' ? server.presetId ?? '' : preset ?? '')
-    // An edited row keeps its own plane; a new one opens on the plane the caller
-    // started the dialog from, and the field below lets the user change it.
-    setPlaneChoice(mode === 'edit' ? planeOf(server) : plane)
+    // A new row opens on the home the caller started the dialog from — its own
+    // plane, or the preset the list was narrowed to, which is the one the section
+    // will write into. Losing that here left the picker on the first preset, so a
+    // row landed somewhere the user was not looking. `preset` is deliberately not
+    // a dependency: the list can refresh while this dialog is open, and re-running
+    // this effect would reset the form under the user.
+    setChoice(initialTarget(plane, preset))
     setPresetLoaded(false)
+    nameTouched.current = false
     setTitle(server?.serverName ?? '')
     setDescription(descriptionInitial)
     setTools(null)
+    listedFor.current = null
     setHiddenTools(new Set<string>())
     setToolsError(null)
     setToolsBusy(false)
@@ -351,9 +449,14 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
         if (!current) return
         setPresetOptions(list)
         setPresetLoaded(true)
-        // A new agent row needs a preset to address; the first one is the only
-        // sensible default, and the field lets the user change it.
-        setPresetId((previous) => previous !== '' ? previous : (mode === 'add' ? list[0]?.id ?? '' : ''))
+        // A new row needs one addressable home. A global plane that has nothing to
+        // write falls back to the first preset, the only other home there is, and
+        // an agent-plane open waits for the list to name one; the picker lets the
+        // user change it from there.
+        setChoice((previous) => {
+          if (previous !== '' || mode !== 'add') return previous
+          return plane === 'global' && globalWritable ? previous : list[0]?.id ?? previous
+        })
       },
       () => { if (current) { setPresetOptions([]); setPresetLoaded(true) } },
     )
@@ -415,7 +518,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       // until the Host can resolve it: say so on the spot instead of leaving the
       // author to wonder why the row's switch will not turn on.
       setConfigNotice(configIssue.length === 0 ? null : t('mcp.form.pendingConfig'))
-      const target = editorTarget(mode, server, targetPlane, presetId)
+      const target = editorTarget(mode, server, choice)
       if (target === undefined) throw new Error(noTargetReason)
       const entryId = mode === 'edit' ? server?.entryId ?? '' : undefined
       if (mode === 'edit' && entryId === '') throw new Error(t('mcp.form.required'))
@@ -443,7 +546,11 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       // that holds the JSON box comes back into view: the message sits next to
       // the field it names instead of behind the tools tab.
       setTab('config')
-      setLocalError(cause instanceof Error ? cause.message : t('mcp.form.jsonInvalid'))
+      // A document that cannot be used is reported beside the box; what is left
+      // (a missing name, an unaddressable target) stays on the form's own line.
+      const fromJson = jsonProblem(mergeCredentials(json))
+      if (fromJson === null) setLocalError(cause instanceof Error ? cause.message : t('mcp.form.jsonInvalid'))
+      else { setJsonError(fromJson); setLocalError(null) }
     }
   }
 
@@ -461,21 +568,31 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
   const readOnlyRow = mode === 'edit' && server !== undefined && !server.writable
   const formDisabled = disabled || busy || readOnlyRow
   const enabledCount = tools === null ? 0 : tools.length - tools.filter(tool => hiddenTools.has(tool.name)).length
+  /**
+   * What the current checkboxes cost a request: the definitions that stay in it,
+   * and the ones the rules would keep out. Both are the same local estimate the
+   * per-tool numbers use, summed.
+   */
+  const loadedTokens = tools === null
+    ? 0
+    : tools.reduce((sum, tool) => sum + (hiddenTools.has(tool.name) ? 0 : tool.tokens), 0)
+  const droppedTokens = tools === null
+    ? 0
+    : tools.reduce((sum, tool) => sum + (hiddenTools.has(tool.name) ? tool.tokens : 0), 0)
   const titleText = mode === 'add' ? t('mcp.form.addTitle') : t('mcp.form.editTitle')
   // Rules are enforced by this plugin's own carriers, which only run for rows it
   // loads. A global row is mounted by the composition, so its tools are in every
   // request already and a rule could not hide them.
-  const toolsReadOnly = mode === 'edit' ? server?.scope === 'global' : targetPlane === 'global'
-  // A new row needs an addressable target, and which one is missing decides what
-  // the form says: no preset in this composition, a preset that was not chosen
-  // yet, or the global plane having no file to write.
-  const agentTargetMissing = mode === 'add' && targetPlane === 'agent' && presetId === ''
-  const globalTargetMissing = mode === 'add' && targetPlane === 'global' && !globalWritable
-  const noTarget = agentTargetMissing || globalTargetMissing
-  const noTargetReason = presetLoaded && presetOptions.length === 0 && !globalWritable
+  const toolsReadOnly = mode === 'edit' ? server?.scope === 'global' : choice === ''
+  // The only home a new row can fail to have is the global plane with no file to
+  // write: a preset id in the picker always names an addressable preset. The
+  // picker always lists the global plane, so a greyed-out entry is explained by
+  // the hint below it — and only a composition that cannot write global carries
+  // that hint at all.
+  const noTarget = mode === 'add' && choice === '' && !globalWritable
+  const noTargetReason = presetLoaded && presetOptions.length === 0
     ? t('mcp.form.noTarget')
-    : globalTargetMissing ? t('mcp.global.unavailable') : t('mcp.form.noPreset')
-  const showsCurrentPreset = presetId !== '' && !presetOptions.some(option => option.id === presetId)
+    : t('mcp.global.unavailable')
   /** The plane this row is written to, as the dialog states it for an edited row. */
   const scopeLabel = mode === 'edit'
     ? (server?.scope === 'global' ? t('mcp.scopeGlobal') : `${t('mcp.scopePreset')} · ${server?.presetId ?? ''}`)
@@ -520,41 +637,24 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
         >
           {mode === 'add' ? (
             <>
-              {/* A new row's target is a field of this form, not a property of the
+              {/* A new row's home is a field of this form, not a property of the
                   page behind it: the page has no control that names a plane, so
-                  deriving one from it left the global plane unreachable. */}
+                  deriving one from it left the global plane unreachable. The one
+                  picker names the whole home, because a row lives in exactly one
+                  of the two and a second field answering "which preset" while the
+                  first said "global" was the same question twice. */}
               <label className={css.formField}>
-                <span className={css.formLabel}>{t('mcp.form.scope')}</span>
-                <select
-                  className={css.formSelect}
-                  value={targetPlane}
+                <McpTargetSelect
+                  label={t('mcp.form.scope')}
+                  value={choice}
+                  presets={presetOptions}
+                  globalWritable={globalWritable}
                   disabled={formDisabled}
-                  aria-label={t('mcp.form.scope')}
-                  onChange={(event) => { setPlaneChoice(event.currentTarget.value as McpPlane); setLocalError(null) }}
-                >
-                  <option value="global" disabled={!globalWritable}>{t('mcp.scopeGlobal')}</option>
-                  <option value="agent" disabled={presetOptions.length === 0}>{t('mcp.form.presetScope')}</option>
-                </select>
-                {globalWritable ? null : <span className={css.fieldHint}>{t('mcp.global.unavailable')}</span>}
+                  onChange={(next) => { setChoice(next); setLocalError(null) }}
+                  t={t}
+                />
               </label>
-              {targetPlane === 'agent' ? (
-                <label className={css.formField}>
-                  <span className={css.formLabel}>{t('mcp.form.presetScope')}</span>
-                  <select
-                    className={css.formSelect}
-                    value={presetId}
-                    disabled={formDisabled}
-                    aria-label={t('mcp.form.presetScope')}
-                    onChange={(event) => { setPresetId(event.currentTarget.value); setLocalError(null) }}
-                  >
-                    {presetOptions.map(option => (
-                      <option key={option.id} value={option.id}>{option.name}</option>
-                    ))}
-                    {showsCurrentPreset ? <option value={presetId}>{presetId}</option> : null}
-                  </select>
-                </label>
-              ) : null}
-              {presetLoaded && noTarget ? <span className={css.fieldHint}>{noTargetReason}</span> : null}
+              {globalWritable ? null : <span className={css.fieldHint}>{noTargetReason}</span>}
             </>
           ) : (
             <label className={css.formField}>
@@ -563,26 +663,56 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
             </label>
           )}
           <label className={css.formField}>
-            <span className={css.formLabel}>{t('mcp.form.serverName')}</span>
-            <Input value={title} disabled={formDisabled} aria-label={t('mcp.form.serverName')} onChange={(event) => { setTitle(event.currentTarget.value); setLocalError(null) }} />
+            <span className={css.formLabel}>
+              {t('mcp.form.serverName')}
+              <span className={css.requiredMark} aria-hidden="true">*</span>
+            </span>
+            <Input
+              value={title}
+              disabled={formDisabled}
+              aria-label={t('mcp.form.serverName')}
+              aria-required="true"
+              onChange={(event) => {
+                // A name the user typed is theirs: the JSON no longer refills it.
+                nameTouched.current = true
+                setTitle(event.currentTarget.value)
+                setLocalError(null)
+              }}
+            />
           </label>
           <label className={css.formField}>
             <span className={css.formLabel}>{t('mcp.form.description')}</span>
             <Input value={description} disabled={formDisabled} aria-label={t('mcp.form.description')} onChange={(event) => { setDescription(event.currentTarget.value); setLocalError(null) }} />
           </label>
           <label className={css.formField}>
-            <span className={css.formLabel}>{t('mcp.form.json')}</span>
+            {/* The document's own verdict sits on the label line, beside the
+                field it is about: under the box it would be the last thing the
+                scrolling dialog shows, and the author would have to hunt for it. */}
+            <span className={css.formLabel}>
+              {t('mcp.form.json')}
+              <span className={css.requiredMark} aria-hidden="true">*</span>
+              {jsonError === null ? null : <span className={css.fieldError} role="alert">{jsonError}</span>}
+            </span>
             <textarea
               className={css.formJson}
               value={json}
               disabled={formDisabled}
               spellCheck={false}
               aria-label={t('mcp.form.json')}
+              aria-required="true"
+              aria-invalid={jsonError !== null}
               onChange={(event) => {
                 jsonBox.current = event.currentTarget.value
                 setJson(event.currentTarget.value)
+                syncName(event.currentTarget.value)
+                // The box is being edited again, so the verdict from the last
+                // time it was left is stale; leaving it shows the new one.
+                setJsonError(null)
                 setLocalError(null)
               }}
+              // Checking on the way out is what lets the author finish typing a
+              // half-written document without being told it is broken.
+              onBlur={() => { setJsonError(jsonProblem(jsonBox.current)) }}
             />
           </label>
           {loading ? <p className={css.mcpStatus}>{t('mcp.loading')}</p> : null}
@@ -614,32 +744,32 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
           className={css.editorPanel}
           hidden={tab !== 'tools'}
         >
+          {/* One row, always present: the count and the bulk toggles appear with
+              a listing, and the line under it must not move when they do. */}
           <div className={css.toolsHead}>
             {tools !== null ? <span className={css.toolsCount}>{`${enabledCount}/${tools.length}`}</span> : null}
-            <span className={css.toolsActions}>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={formDisabled || toolsBusy || toolsReadOnly}
-                onClick={() => { loadToolsFromForm(tools === null) }}
-              >
-                {toolsBusy ? t('mcp.form.toolsLoading') : t('mcp.form.toolsReload')}
-              </Button>
-              {tools !== null && tools.length > 0 ? (
-                <>
-                  <Button variant="ghost" size="sm" disabled={formDisabled || toolsReadOnly} onClick={() => { setHiddenTools(new Set<string>()) }}>
-                    {t('mcp.form.toolsAll')}
-                  </Button>
-                  <Button variant="ghost" size="sm" disabled={formDisabled || toolsReadOnly} onClick={() => { setHiddenTools(new Set(tools.map(tool => tool.name))) }}>
-                    {t('mcp.form.toolsNone')}
-                  </Button>
-                </>
-              ) : null}
-            </span>
+            {tools !== null && tools.length > 0 ? (
+              <span className={css.toolsActions}>
+                <Button variant="ghost" size="sm" disabled={formDisabled || toolsReadOnly} onClick={() => { setHiddenTools(new Set<string>()) }}>
+                  {t('mcp.form.toolsAll')}
+                </Button>
+                <Button variant="ghost" size="sm" disabled={formDisabled || toolsReadOnly} onClick={() => { setHiddenTools(new Set(tools.map(tool => tool.name))) }}>
+                  {t('mcp.form.toolsNone')}
+                </Button>
+              </span>
+            ) : null}
           </div>
-          <span className={css.fieldHint}>{toolsReadOnly ? t('mcp.form.toolsGlobal') : t('mcp.form.toolsHint')}</span>
+          {/* What the checkboxes mean, in the currency the setting is about: the
+              definitions a request carries and the ones a rule keeps out of it. */}
+          <span className={css.fieldHint}>
+            {toolsReadOnly
+              ? t('mcp.form.toolsGlobal')
+              : t('mcp.form.toolsHint')
+                .replace('{n}', loadedTokens.toLocaleString())
+                .replace('{m}', droppedTokens.toLocaleString())}
+          </span>
           {toolsError !== null ? <p className={css.formError} role="alert">{toolsError}</p> : null}
-          {tools !== null && tools.length === 0 ? <p className={css.mcpStatus}>{t('mcp.form.toolsEmpty')}</p> : null}
+          {tools !== null && tools.length === 0 && !toolsBusy ? <p className={css.mcpStatus}>{t('mcp.form.toolsEmpty')}</p> : null}
           {tools !== null && tools.length > 0 ? (
             <div className={css.toolsList}>
               {tools.map(tool => (
@@ -653,9 +783,21 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
                   />
                   <span className={css.toolName}>{tool.name}</span>
                   {tool.description === '' ? null : <span className={css.toolDesc}>{tool.description}</span>}
+                  <span className={css.toolTokens}>
+                    {t('mcp.form.toolTokens').replace('{n}', tool.tokens.toLocaleString())}
+                  </span>
                 </label>
               ))}
             </div>
+          ) : null}
+          {/* The listing is a connect, so it can take seconds: the wait sits in
+              the middle of the panel, under the line that explains it, and the
+              line stays exactly where it was instead of moving down with it. */}
+          {toolsBusy ? (
+            <span className={css.toolsLoading} role="status">
+              <span className={css.spinner} aria-hidden="true" />
+              {t('mcp.form.toolsLoading')}
+            </span>
           ) : null}
         </div>
         {localError !== null ? <p className={css.formError} role="alert">{localError}</p> : null}

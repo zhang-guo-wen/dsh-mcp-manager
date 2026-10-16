@@ -19,13 +19,11 @@ import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import { findPresetDeclaration, writePresetRows, type PresetDeclaration } from './preset-source.ts'
 import { assertServerName, mcpEntryConfig, specFromEntryConfig, type McpEntryConfig } from './mcp-config.ts'
 import { describeMcpConfigIssues, diagnoseRowConfig } from './mcp-diagnostics.ts'
-import { scanClaudeMcp } from './claude-import.ts'
 import { connectLazyWithin } from './lazy-mcp.ts'
 import { readMcpRoster } from './mcp-roster.ts'
+import { estimateToolTokens } from './mcp-tokens.ts'
 import type {
   AddMcpRequest,
-  AddMcpsRequest,
-  AddMcpsResult,
   ClearMcpCatalogRequest,
   ClearMcpCatalogResult,
   DescribeMcpRequest,
@@ -43,8 +41,6 @@ import type {
   McpMutationResult,
   McpSpec,
   McpTarget,
-  ScanClaudeMcpRequest,
-  ScanClaudeMcpResult,
 } from './types.ts'
 import { McpCatalog } from './mcp-catalog.ts'
 import type { LazyTool } from './mcp-carrier.ts'
@@ -68,14 +64,6 @@ interface IncludeTree extends EntryTree {
    * global write becomes live without Loader write-back.
    */
   refresh(): Promise<void>
-}
-
-/** One batch row that passed validation, with the request position it answers. */
-interface PlannedRow {
-  readonly index: number
-  readonly serverName: string
-  readonly entryId: string
-  readonly config: McpEntryConfig
 }
 
 type WritableIncludeTree = IncludeTree & { readonly filename: string }
@@ -158,24 +146,6 @@ export class McpManager extends TypertRemoteService {
   @Remote('addMcp')
   async addMcp(request: AddMcpRequest): Promise<McpMutationResult> {
     const result = await this.enqueue(() => this.add(request))
-    this.catalog.clear()
-    await this.gate.reconcile()
-    return result
-  }
-
-  /**
-   * Add several MCP client rows to one composition in a single write.
-   *
-   * Every appended row is validated on its own, so one rejected row does not
-   * cost the rest of the batch, but the accepted rows commit together: an agent
-   * preset re-mounts once per write and starting its MCP servers again is what
-   * makes a row-per-call import slow.
-   * @param request - target composition and the rows to append.
-   * @returns one outcome per requested row, in request order.
-   */
-  @Remote('addMcps')
-  async addMcps(request: AddMcpsRequest): Promise<AddMcpsResult> {
-    const result = await this.enqueue(() => this.addMany(request))
     this.catalog.clear()
     await this.gate.reconcile()
     return result
@@ -337,28 +307,19 @@ export class McpManager extends TypertRemoteService {
     }
     try {
       return {
-        tools: connection.tools.map(tool => ({ name: tool.name, description: tool.description ?? '' })),
+        tools: connection.tools.map(tool => ({
+          name: tool.name,
+          description: tool.description ?? '',
+          // Measured here, where the definition is whole: the schema is what a
+          // listing mostly costs and the browser never receives it.
+          tokens: estimateToolTokens(tool),
+        })),
       }
     } finally {
       // The listing owns this connection for its whole lifetime; a close
       // failure must not replace the tools it already read.
       await connection.client.close().catch(() => {})
     }
-  }
-
-  /**
-   * Report the MCP servers the Claude Code configuration files declare, so the
-   * settings page can offer them for import. Reads only: nothing is mounted and
-   * no composition is touched, so a scan is safe to run on every dialog open.
-   * @param request - working directory whose project scope should be read.
-   * @returns every readable source and the servers it declares, including the
-   *   ones that cannot be imported and why.
-   */
-  @Remote('scanClaudeMcp')
-  async scanClaudeMcp(request: ScanClaudeMcpRequest): Promise<ScanClaudeMcpResult> {
-    // The scan is a plain read of user-owned files, so it answers even when the
-    // gate or the Loader is mid-reconcile; only the import behind it mutates.
-    return await scanClaudeMcp(request.cwd ?? process.cwd())
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -406,144 +367,6 @@ export class McpManager extends TypertRemoteService {
       }
     }, this.warnPatch)
     return { target, entryId, serverName: request.serverName, disabled: false }
-  }
-
-  /**
-   * Plan and commit a batch add. Each row is validated on its own so one bad row
-   * does not cost the rest; the accepted rows then commit in one write, which
-   * matters most for a preset: it re-mounts once per write, and every MCP server
-   * it declares starts again on each mount.
-   * @param request - target composition and the requested rows.
-   * @returns one outcome per requested row, in request order.
-   */
-  private async addMany(request: AddMcpsRequest): Promise<AddMcpsResult> {
-    const target = validateTarget(request.target)
-    const reasons = new Map<number, string>()
-    const planned: PlannedRow[] = []
-    const takenIds = new Set<string>()
-    const takenNames = new Set<string>()
-    request.rows.forEach((row, index) => {
-      try {
-        const entryId = row.entryId ?? row.serverName
-        validateEntryId(entryId, target, true)
-        const config = configFromSpec(row.spec, row.serverName, target)
-        // Two rows of one batch may not claim the same identity either.
-        if (takenIds.has(entryId)) throw conflict(target, entryId, undefined, 'the row id is already in use')
-        if (takenNames.has(row.serverName)) {
-          throw conflict(target, entryId, row.serverName, 'the serverName is already in use')
-        }
-        takenIds.add(entryId)
-        takenNames.add(row.serverName)
-        planned.push({ index, serverName: row.serverName, entryId, config })
-      } catch (cause) {
-        reasons.set(index, cause instanceof Error ? cause.message : String(cause))
-      }
-    })
-    if (planned.length > 0) {
-      const refused = target.scope === 'global'
-        ? await this.writeGlobalBatch(target, planned)
-        : await this.writePresetBatch(target, planned)
-      for (const [index, reason] of refused) reasons.set(index, reason)
-    }
-    const entryOf = new Map(planned.map(row => [row.index, row.entryId]))
-    return {
-      target,
-      outcomes: request.rows.map((row, index) => {
-        const reason = reasons.get(index)
-        return reason === undefined
-          ? { serverName: row.serverName, entryId: entryOf.get(index) ?? null }
-          : { serverName: row.serverName, entryId: null, reason }
-      }),
-    }
-  }
-
-  /**
-   * Commit a global batch: one file patch, one Include reload, then a liveness
-   * check per accepted row.
-   * @param target - the global plane.
-   * @param planned - validated rows, in request order.
-   * @returns per-row refusal reasons keyed by request position.
-   */
-  private async writeGlobalBatch(
-    target: Extract<McpTarget, { scope: 'global' }>,
-    planned: readonly PlannedRow[],
-  ): Promise<Map<number, string>> {
-    const refused = new Map<number, string>()
-    const include = await this.globalInclude(target)
-    const live = [...include.tree.entries()]
-    for (const row of planned) {
-      if (live.some(entry => entry.options.id === row.entryId)) {
-        refused.set(row.index, conflict(target, row.entryId, undefined, 'the row id is already in use').message)
-      } else if (live.some(entry => entry.options.name === MCP_CLIENT_MODULE
-        && serverNameOf(entry.options) === row.serverName)) {
-        refused.set(row.index, conflict(target, row.entryId, row.serverName, 'the serverName is already in use').message)
-      }
-    }
-    const accepted = planned.filter(row => !refused.has(row.index))
-    if (accepted.length === 0) return refused
-    try {
-      await this.writeGlobalRow(include, target, {
-        insert: accepted.map(row => ({ id: row.entryId, name: MCP_CLIENT_MODULE, config: row.config })),
-      }, (fileRows) => {
-        const ids = entryIds(fileRows)
-        for (const row of accepted) {
-          if (ids.has(row.entryId)) {
-            throw conflict(target, row.entryId, undefined, 'the row id is already in use')
-          }
-          if (fileRows.some(file => file.name === MCP_CLIENT_MODULE && serverNameOf(file) === row.serverName)) {
-            throw conflict(target, row.entryId, row.serverName, 'the serverName is already in use')
-          }
-        }
-      }, accepted.map(row => row.entryId))
-    } catch (cause) {
-      const reason = cause instanceof Error ? cause.message : String(cause)
-      for (const row of accepted) refused.set(row.index, reason)
-    }
-    return refused
-  }
-
-  /**
-   * Commit a preset batch as one patch, so the preset reconciles once.
-   * @param target - the addressed preset.
-   * @param planned - validated rows, in request order.
-   * @returns per-row refusal reasons keyed by request position.
-   */
-  private async writePresetBatch(
-    target: Extract<McpTarget, { scope: 'preset' }>,
-    planned: readonly PlannedRow[],
-  ): Promise<Map<number, string>> {
-    const refused = new Map<number, string>()
-    const preset = await this.resolvePreset(target)
-    const declared = entryIds(preset.rows)
-    for (const row of planned) {
-      if (declared.has(row.entryId)) {
-        refused.set(row.index, conflict(target, row.entryId, undefined, 'the row id is already in use').message)
-      } else if (preset.rows.some(entry => entry.name === MCP_CLIENT_MODULE
-        && serverNameOf(entry) === row.serverName)) {
-        refused.set(row.index, conflict(target, row.entryId, row.serverName, 'the serverName is already in use').message)
-      }
-    }
-    const accepted = planned.filter(row => !refused.has(row.index))
-    if (accepted.length === 0) return refused
-    try {
-      await writePresetRows(this.ctx, preset, {
-        insert: accepted.map(row => ({ id: row.entryId, name: MCP_CLIENT_MODULE, config: row.config })),
-      }, (rows) => {
-        const ids = entryIds(rows)
-        for (const row of accepted) {
-          if (ids.has(row.entryId)) {
-            throw conflict(target, row.entryId, undefined, 'the row id is already in use')
-          }
-          if (rows.some(entry => entry.name === MCP_CLIENT_MODULE && serverNameOf(entry) === row.serverName)) {
-            throw conflict(target, row.entryId, row.serverName, 'the serverName is already in use')
-          }
-        }
-      }, this.warnPatch)
-    } catch (cause) {
-      const reason = cause instanceof Error ? cause.message : String(cause)
-      for (const row of accepted) refused.set(row.index, reason)
-    }
-    return refused
   }
 
   /**

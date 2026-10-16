@@ -41,7 +41,7 @@ MCP Apps 宿主 [sugarforever/dsh-mcp-apps](https://github.com/sugarforever/dsh-
 | OAuth | 只有静态 header / env | 五家都有 PKCE + 动态注册 + 回环回调 + 刷新（**动态注册在 2026-07-28 已弃用，改走 CIMD**）；我们缺的是整条 401 驱动的链路，见 P2-9 |
 | Resources / Prompts | 按需加载（`dynamic` / `lazy`）的服务器都拿不到 resources：`mount` 载体已删除，原生注册绕开了 mcp-client | PerryLink 只读浏览 resources；hyqhyq3 与 labmimors 都处理了 |
 | 探测与试调 | 只有启用停用与名册 | Js2Hou 探测报延迟 + 工具数；PerryLink `/mcp call` 试调走官方执行管线 |
-| 配置导入 | 导入 Claude Code 全部来源（用户 / 项目 / 设置 / `.mcp.json`），名称按规范预检，逐条独立导入，目标跟随当前平面（全局分组或选中的预设） | Imzl-zl 导入 Claude / Cursor / Cline / Roo / VS Code 配置 |
+| 配置导入 | **已删除**（2026-10-16，D29）——只保留编辑器里粘贴 Claude 形状 JSON；历史能力：导入 Claude Code 全部来源（用户 / 项目 / 设置 / `.mcp.json`）、名称按规范预检、逐条独立导入 | Imzl-zl 导入 Claude / Cursor / Cline / Roo / VS Code 配置 |
 | 作用域 | 全局 + preset；`mcp_load` 的工具注册绑到调用方会话（连接是宿主级常驻池） | 多数只有全局；五家做项目或工作区级（见[作用域分层](#作用域分层)） |
 | 写配置的可回滚 | atomic write；全局行改文件 + `Include.refresh()`，preset 行走 `configEditor.edit` | PerryLink 审批门 + 自动备份；null119 override + revert/restore；ArvinQi 受管块 + `.bak` + 幂等 |
 | CLI / HTTP API | 无 | Fishquito7 全套 `dsh-panel` CLI；xxxyz `POST /dsh-mcp-manager/api`（同源 + token 校验） |
@@ -199,11 +199,10 @@ lilyblessing 记录过一次事故：**运行期写 preset 文件会触发 stand
 
 ### P3 —— 管理面增强
 
-12. ~~批量导入 Claude Code 的 `mcpServers`~~ —— **已完成**：设置页工具栏「导入 Claude 配置」，
-    读 `~/.claude.json`（含 `projects[<cwd>]` 分区）、`~/.claude/settings.json`、`settings.local.json`
-    与项目 `.mcp.json`，勾选后一次 `addMcps` 导入；**目标跟随当前平面**（全局分组，或预设下拉选中的预设），
-    见 [AGENTS.md](../AGENTS.md)。
-    仍未做：Cursor / Cline / Roo / VS Code 的配置文件（Imzl-zl 覆盖的那批）。
+12. ~~批量导入 Claude Code 的 `mcpServers`~~ —— **做过又删了**（2026-10-16，D29）：旧实现读 `~/.claude.json`
+    （含 `projects[<cwd>]` 分区）、`~/.claude/settings.json`、`settings.local.json` 与项目 `.mcp.json`，勾选后
+    一次 `addMcps` 导入。用户要求删除，整条链路（扫描 / 批量写入 / 弹窗 / 两个 Remote / 字典键 / 测试）已移除。
+    仍未做也未要求：Cursor / Cline / Roo / VS Code 的配置文件（Imzl-zl 覆盖的那批）。
 13. 配置写入的备份与 revert；14. UI 内工具试调（走官方执行管线，不进模型上下文）；
 15. 观察项：MCP Apps（`_meta.ui.resourceUri`）已经进入生态，我们的三种模式都未考虑它。
 

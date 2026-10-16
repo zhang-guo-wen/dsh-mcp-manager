@@ -68,46 +68,6 @@ export interface AddMcpRequest {
   readonly spec: McpSpec
 }
 
-/** One row a batch add appends; an unusable row is reported, not thrown. */
-export interface AddMcpBatchRow {
-  /** Row id; defaults to `serverName` when omitted. */
-  readonly entryId?: string
-  /** MCP namespace used in tool names. */
-  readonly serverName: string
-  /** Claude-compatible transport specification. */
-  readonly spec: McpSpec
-}
-
-/**
- * Request to append several MCP client rows to one composition in a single
- * write. Importing a configuration one row per call re-mounts an agent preset
- * once per row, which respawns every MCP server that preset declares.
- */
-export interface AddMcpsRequest {
-  /** Composition that receives every row. */
-  readonly target: McpTarget
-  /** Rows to append, in the order they should appear. */
-  readonly rows: readonly AddMcpBatchRow[]
-}
-
-/** What became of one row of a batch add. */
-export interface AddMcpBatchOutcome {
-  /** MCP namespace the row asked for. */
-  readonly serverName: string
-  /** Address of the appended row, or null when the row was refused. */
-  readonly entryId: string | null
-  /** Why this row was refused; absent on success. */
-  readonly reason?: string
-}
-
-/** Per-row result of a batch add, in request order. */
-export interface AddMcpsResult {
-  /** Composition the batch addressed. */
-  readonly target: McpTarget
-  /** One outcome per requested row, in request order. */
-  readonly outcomes: readonly AddMcpBatchOutcome[]
-}
-
 /** Request to replace one MCP client row's connection configuration. */
 export interface EditMcpRequest {
   /** Composition containing the row. */
@@ -170,6 +130,12 @@ export interface McpToolRow {
   readonly name: string
   /** The server's description, empty when it declared none. */
   readonly description: string
+  /**
+   * Estimated tokens this definition adds to a request, so the list can show
+   * which tools cost the most and what unchecking them saves. An estimate: see
+   * `src/mcp-tokens.ts` for what it counts.
+   */
+  readonly tokens: number
 }
 
 /**
@@ -342,75 +308,6 @@ export interface ListMcpsResult {
    * rewrites its file on every start.
    */
   readonly globalWritable: boolean
-}
-
-/** Request the MCP servers the Claude Code configuration files declare. */
-export interface ScanClaudeMcpRequest {
-  /**
-   * Working directory whose project scope should be read from the user file's
-   * `projects` map and from `<cwd>/.mcp.json`. Omitted means the Host's own
-   * working directory.
-   */
-  readonly cwd?: string
-}
-
-/** Which configuration file an imported entry was read from. */
-export type ClaudeMcpSourceLabel = 'user' | 'projectScope' | 'settings' | 'projectFile'
-/** Why a scanned source or entry could not be offered for import. */
-export type ClaudeMcpProblem =
-  | 'missing'
-  | 'unreadable'
-  | 'malformed'
-  | 'too-large'
-  | 'unsupported'
-  | 'unsupported-name'
-
-/** One MCP server found in a Claude Code configuration file. */
-export interface ClaudeMcpEntry {
-  /** The server's name as its configuration file declares it. */
-  readonly serverName: string
-  /** Id of the source this entry came from. */
-  readonly sourceId: string
-  /** Which kind of file it was read from. */
-  readonly sourceLabel: ClaudeMcpSourceLabel
-  /** Absolute path of the file it was read from. */
-  readonly sourcePath: string
-  /** The `projects` key this entry came from, for a per-directory scope. */
-  readonly sourceDetail?: string
-  /** The parsed transport, ready to hand to `addMcp`. */
-  readonly spec: McpSpec
-  /**
-   * Names of the `env`/`headers` keys the entry declares, so the dialog can say
-   * which secrets an import would carry without printing their values. The
-   * values themselves live in `spec`, which the import writes verbatim.
-   */
-  readonly envKeys: readonly string[]
-  /** Another entry earlier in the scan already used this server name. */
-  readonly duplicate: boolean
-  /** Set when the entry cannot be imported; `spec` is then a placeholder. */
-  readonly problem?: ClaudeMcpProblem
-}
-
-/** One configuration file that was read, or skipped. */
-export interface ClaudeMcpSource {
-  /** Stable id addressing this source within one scan result. */
-  readonly id: string
-  /** Which kind of file this is. */
-  readonly label: ClaudeMcpSourceLabel
-  /** Absolute path that was inspected. */
-  readonly path: string
-  /** The `projects` key, for a per-directory scope. */
-  readonly sourceDetail?: string
-  /** Servers this source declares, in the file's own order. */
-  readonly entries: readonly ClaudeMcpEntry[]
-  /** Set when the file could not be read at all. */
-  readonly problem?: ClaudeMcpProblem
-}
-
-/** Every MCP server the Claude Code configuration files declare. */
-export interface ScanClaudeMcpResult {
-  /** Sources that exist and were readable, in scan order. */
-  readonly sources: readonly ClaudeMcpSource[]
 }
 
 /** Failure details owned by the MCP authoring Remote. */declare module '@deepseek-ai/dsh-typert-protocol' {

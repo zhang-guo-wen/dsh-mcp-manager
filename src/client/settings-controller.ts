@@ -15,8 +15,6 @@
 
 import type {
   AddMcpRequest,
-  AddMcpsRequest,
-  AddMcpsResult,
   ClearMcpCatalogRequest,
   ClearMcpCatalogResult,
   DescribeMcpRequest,
@@ -32,8 +30,6 @@ import type {
   McpFiberPhase,
   McpMutationResult,
   McpRowReadOnly,
-  ScanClaudeMcpRequest,
-  ScanClaudeMcpResult,
 } from '../types.ts'
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -150,8 +146,6 @@ export interface McpPresetOption {
 export interface McpAuthoringActions {
   /** Add one MCP row and resolve after the Host commits it. */
   addMcp: (request: AddMcpRequest) => Promise<McpMutationResult>
-  /** Add a batch of MCP rows in one write and resolve after the Host commits it. */
-  addMcps: (request: AddMcpsRequest) => Promise<AddMcpsResult>
   /** Replace one MCP row and resolve after the Host commits it. */
   editMcp: (request: EditMcpRequest) => Promise<McpMutationResult>
   /** Set one MCP row's disabled flag and resolve after the Host commits it. */
@@ -160,8 +154,6 @@ export interface McpAuthoringActions {
   describeMcp: (request: DescribeMcpRequest) => Promise<DescribeMcpResult>
   /** Connect once with a spec and report the tools it publishes. */
   listMcpTools: (request: ListMcpToolsRequest) => Promise<ListMcpToolsResult>
-  /** Read the MCP servers the Claude Code configuration files declare. */
-  scanClaudeMcp: (request: ScanClaudeMcpRequest) => Promise<ScanClaudeMcpResult>
   /** Read what the discovery catalogue remembers, for the optimization page. */
   catalogState: (request: McpCatalogStateRequest) => Promise<McpCatalogStateResult>
   /** Forget every recorded discovery result. */
@@ -225,8 +217,6 @@ export interface McpSectionFace {
   setOptimize: (field: string, value: unknown) => Promise<void>
   /** Add one MCP row through the Claude-compatible Host Remote. */
   addMcp: (request: AddMcpRequest) => Promise<McpMutationResult>
-  /** Add a batch of MCP rows in one write through the Claude-compatible Host Remote. */
-  addMcps: (request: AddMcpsRequest) => Promise<AddMcpsResult>
   /** Edit one MCP row through the Claude-compatible Host Remote. */
   editMcp: (request: EditMcpRequest) => Promise<McpMutationResult>
   /** Enable or disable one MCP row through the Claude-compatible Host Remote. */
@@ -235,8 +225,6 @@ export interface McpSectionFace {
   describeMcp: (request: DescribeMcpRequest) => Promise<DescribeMcpResult>
   /** List the tools a connection spec publishes through the Host Remote. */
   listMcpTools: (request: ListMcpToolsRequest) => Promise<ListMcpToolsResult>
-  /** Read the MCP servers the Claude Code configuration files declare. */
-  scanClaudeMcp: (request: ScanClaudeMcpRequest) => Promise<ScanClaudeMcpResult>
   /** Read what the discovery catalogue remembers. */
   catalogState: () => Promise<McpCatalogStateResult>
   /** Forget every recorded discovery result. */
@@ -350,12 +338,10 @@ export class McpSettingsController {
       updateMcpTools: (key, patterns) => this.updateMcpTools(key, patterns),
       setOptimize: (field, value) => this.setOptimize(field, value),
       addMcp: this.authoring.addMcp,
-      addMcps: this.authoring.addMcps,
       editMcp: this.authoring.editMcp,
       disableMcp: this.authoring.disableMcp,
       describeMcp: this.authoring.describeMcp,
       listMcpTools: this.authoring.listMcpTools,
-      scanClaudeMcp: this.authoring.scanClaudeMcp,
       catalogState: () => this.authoring.catalogState({}),
       clearCatalog: () => this.authoring.clearCatalog({}),
       suppressedMcps: this.suppressed,

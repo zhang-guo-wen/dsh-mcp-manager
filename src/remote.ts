@@ -74,7 +74,6 @@ export const TYPERT_REMOTE: TypertRemoteContribution = {
   package: '@guowenzhang/dsh-mcp-manager',
   descriptors: [
     descriptor('addMcp'),
-    descriptor('addMcps'),
     descriptor('editMcp'),
     descriptor('disableMcp'),
     descriptor('describeMcp'),
@@ -83,6 +82,5 @@ export const TYPERT_REMOTE: TypertRemoteContribution = {
     descriptor('gateState'),
     descriptor('catalogState'),
     descriptor('clearCatalog'),
-    descriptor('scanClaudeMcp'),
   ],
 }

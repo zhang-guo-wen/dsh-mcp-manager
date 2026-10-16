@@ -302,7 +302,6 @@ export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
 
   return (
     <div className={css.section}>
-      <p className={css.intro}>{t('opt.intro')}</p>
       {!state.available ? <p className={css.unavailable}>{t('unavailable')}</p> : null}
 
       <section className={css.group}>

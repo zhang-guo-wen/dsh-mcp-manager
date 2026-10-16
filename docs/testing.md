@@ -1065,6 +1065,271 @@ section 被压到约 36px 宽、行卡片被裁切（截图 `shots/v-03-width-36
   所以一个 `env` 值全是 `!!js` 表达式的行在名册上显示「编辑」而不是「密钥」，而打开编辑器后密钥页仍会列出这些键 —— 这个
   不一致本轮只做了源码阅读，未在浏览器里实测。
 
+## 十一、行内按钮去掉、状态换位、页签占满整列（2026-10-16，D26，client 产物 `A8EAD3FE…`）
+
+用户看着名册截图一次提了三条：去掉行内的「密钥 / 编辑」按钮；把状态与平面标记（预设名 / 全局标签）调换位置，
+因为状态有时候没有、导致不对齐；「服务器 / 设置」两个页签占满整行。取舍与被否决方案见
+[design-decisions.md](design-decisions.md) D26。
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 宿主 / `DSH_HOME` / 端口 | `@deepseek-ai/dsh@0.2.0-rc.2`（npx 缓存 `_npx/7eff65a5cfe9d1d1`）；`.scratch/harness-tests/mcp-layout-0.2.0-rc.2-a7f3`（沿用名册布局轮那台）；44917（跑完端口已释放，只停本轮启动的进程） |
+| 插件装载 | 该 profile 的 `node_modules/@guowenzhang/dsh-mcp-manager` 是指向本仓的符号链接，重建 `lib/client.js` 后重启实例即生效 |
+| 浏览器 | Playwright（npx 缓存 `_npx/381cec31605a419a`）+ `chromium_headless_shell-1228`，无头 Chromium，1440×900 起测 |
+| 本轮 client 产物 | `lib/client.js` = `A8EAD3FE4B67AC1A12D333817F65270873127CD5802A82D6F76B04C21D3D1E15`（195,773 字节）；同一张表在下一轮的产物 `97C389FC…` 上**复跑一次读数完全相同**（见第十二节），两轮的差别只在编辑器与导入弹窗，未碰名册 |
+| host 产物 | `lib/index.mjs` = `444E9B1E5F6CD35E86055B743DB2FB6C962F8F7E9C851CF5136987FF3CF5ECE5`（未改 host，与第八/十节同一份） |
+| 夹具 | 该 profile 原有的 `global-entries.yml`（`gv-headers` / `gv-plain` / `gv-stdio-env`）与预设 `mcp-verify`（`pv-env` / `pv-plain`），本轮**追加**一行 `gv-nourl`（HTTP 行不带 `url` → 「未配置」徽标），备份 `global-entries.yml.bak-d26`。追加原因：追加前 5 行**全都没有状态**，混排"有状态/无状态"才是这次要验的场景 |
+| 脚本与读数 | `.scratch/mcp-layout-verify/verify-d26.mjs`，结果 `results-d26.json`，截图 `shots/d26-<宽>-<主题>.png` |
+
+### 逐项读数（真实盒子测量，非 CSS 字符串断言）
+
+| 验收项 | 结果 |
+|---|---|
+| 页签占满整行 | ✅ 1440px：`.tabs` 盒 532→1096（564px），与 `.section` 532→1096（564px）**逐位相同**，两个页签各 282px。其余档 `tabs == section`：760px 476=476、601px 317=317、360px 76=76（section 随宿主设置壳收窄，见下方缺口） |
+| 行内没有「编辑 / 密钥」按钮 | ✅ 6 行的 `row.querySelectorAll('button')` 文本集合是 `["添加描述", ""]`——「添加描述」是描述就地编辑按钮，空文本那个是 `role="switch"` 的开关；浅色与深色一致 |
+| 状态排在平面标记之前 | ✅ `gv-nourl` 的子元素顺序为 `[status「未配置」939→991, plane「全局」999→1037, switch 1045→1081]`；其余 5 行是 `[plane, switch]` |
+| 有状态与无状态的行仍然对齐 | ✅ 1440px 六行：开关左缘**唯一值** `[1045]`、平面标记右缘**唯一值** `[1037]`（各 8px 间距）。`gv-nourl` 的「未配置」只占掉它左边的 52px，右侧两列不动——这正是换序要的结果（换序前状态夹在标记与动作组之间，它一出现就把标记与按钮推左 60px） |
+| 深色同样成立 | ✅ `colorScheme: dark` 的 1440px 读数与浅色逐位相同（tabs 564、switchX `[1045]`、planeRight `[1037]`）；截图 `shots/d26-1440-dark.png` |
+| 窄列仍可读 | ✅ 601/760px 触发既有的堆叠规则（容器 ≤480px：行改上下、`.mcpRight` 用 `space-between` 把元素推向两端），状态 / 平面标记 / 开关各在其位；截图 `shots/d26-601-light.png` |
+| 控制台干净 | ✅ 五档（1440 浅 / 1440 深 / 760 / 601 / 360）`console.error` / `pageerror` / `requestfailed` 均为 **0** |
+| 静态约束 | ✅ `npm run typecheck` 通过；`npm test` **22 文件 / 259 项**全绿（与改动前同数；`tests/client-css.spec.ts` 的"CSS 类必须被 TSX 引用"正是逼着删 `.mcpActions` 时同步删引用的那条）；`npm run test:metadata` 1 项通过 |
+| host 侧 harness 回归 | ✅ `npm run test:harness`（`DSH_HARNESS_ROOT` 指向本机 `deepseekharness` checkout）**6 文件 / 25 项**全绿，与 D17 读数一致；重建后 `lib/index.mjs` / `lib/client.js` 两个哈希与上表逐位相同（构建幂等） |
+
+### 本节未覆盖（如实）
+
+- **真实点击未复跑**：本轮只做盒子测量与截图比对，没有点行卡片、开关或保存；那几条交互读数是名册布局轮的，属**旧产物**。
+- **紧凑布局下平面标记仍会随状态移动**（601px 读数 `planeRight = [289, 421.5, 307.4]`，760px `[289, 501, 307.4]`）：`space-between` 把状态、标记、开关三个元素均匀推开，所以 `gv-nourl` 的标记比别的行靠右。这是容器查询里的既有设计（元素推到两端），本轮**只按要求换序，没有改紧凑布局**；要消除它得把状态与标记包进同一个子容器，属另一件事。
+- **`npm run test:harness` 本轮复跑且通过**（6 文件 / 25 项），但它是**改动后**在同一份 host 产物（`444E9B1E…`，与第八/十节同一份，未变）上跑的：本次只碰浏览器半边，host 行为没有可回归的差异，harness 项数也与 D17 相同，不能据此宣称覆盖了 UI 行为。
+- **`prefers-reduced-motion`、`pointer: coarse`、真机软键盘与安全区未测**：与前几节同样的缺口。
+- **360px 下 section 只有 76px**：宿主设置壳在窄窗口仍保留左侧 188px 导航造成的既知缺口（第七节已记）；本轮未改宿主，"页签占满整行"只保证与 section 同宽。
+- **第十节记的 `!!js` 表达式显示/回写缺口**未受本次改动影响，也未修复。
+
+## 十二、写入落点两级下拉合成一个（2026-10-16，D27，client 产物 `97C389FC…`）
+
+> **历史提示（2026-10-16 第五轮，D29）**：导入 Claude 配置的整条链路（含本节验过的「导入到」下拉）已按用户要求
+> 删除，本节关于导入弹窗的读数只作为当轮记录保留；新增弹窗那部分在后续产物 `F92245F7…` 上复跑仍逐项成立（见
+> 第十三/十五节）。
+
+用户看着新增弹窗的截图问：这两个下拉（「配置范围」+「Agent 预设」）不能合并成一个吗 —— 全局肯定不是某个 agent，
+agent 也肯定不是全局。本轮把新增弹窗与导入弹窗的这两级都合成一个「落点」下拉，两个弹窗共用
+`src/client/McpTargetSelect.tsx`；取舍与被否决方案见 [design-decisions.md](design-decisions.md) D27。
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 宿主 / `DSH_HOME` / 端口 | `@deepseek-ai/dsh@0.2.0-rc.2`；`.scratch/harness-tests/mcp-layout-0.2.0-rc.2-a7f3`（与第十一节同一台）；44917（跑完端口已释放，只停本轮启动的进程） |
+| 插件装载 | 该 profile 的 `node_modules/@guowenzhang/dsh-mcp-manager` 是指向本仓的符号链接；**改完 `lib/client.js` 必须重启实例**（宿主按启动时的内容 revision 供包），本轮两组读数各自跑在重启后的实例上 |
+| 浏览器 | Playwright + `chromium_headless_shell-1228`，无头 Chromium，1440×900，浅色 |
+| 本轮 client 产物 | `lib/client.js` = `97C389FCB6B4FAD5DC0F46F5B07060E40567080FDA2DD311E0BD5E8806AC9A40`（193,367 字节）；同一批读数在第十三节的产物 `37F19C55…` 上**复跑逐项相同**（两轮差别只在编辑器表单与行的芯片/居中，未碰下拉合并） |
+| host 产物 | `lib/index.mjs` = `444E9B1E5F6CD35E86055B743DB2FB6C962F8F7E9C851CF5136987FF3CF5ECE5`（未改 host） |
+| 夹具 A | 第十一节的 6 行名册夹具（`mcp-verify` 预设 + 可写的全局 Include）→ **全局档可选** |
+| 夹具 B | 在该 profile 的 `cordis.patch.yml` 末尾临时追加 `- id: mcp-verify-global-include` + `disabled: true`（备份后已还原）→ **全局档不可写**，正是用户日常组合的形状 |
+| 脚本与读数 | `.scratch/mcp-layout-verify/verify-d27.mjs`（夹具 A）、`verify-d27b.mjs`（夹具 B），结果 `results-d27.json` / `results-d27b.json`，截图 `shots/d27-*.png` |
+
+### 逐项读数
+
+| 验收项 | 结果 |
+|---|---|
+| 新增弹窗只剩一个落点下拉 | ✅ 夹具 A：对话框内 `select` 数量 **1**，`aria-label = 配置范围`，页面文本里不再出现「Agent 预设」这个标签（旧实现是 2 个 select + 2 个标签） |
+| 选项 = 全局 + 全部已声明预设 | ✅ `[全局(值 "")、预设 · standard、预设 · ptc、预设 · minimal、预设 · cordis、预设 · mcp-verify]`（与名册筛选下拉列出的已声明预设集合一致） |
+| 一个控件承载两种落点 | ✅ 打开时选中 `mcp-verify`（名册筛到的那个预设）→ 选「全局」后 `select.value` 变 `""` → 再选回预设仍是 `mcp-verify`，全程只有这一个 select |
+| 导入弹窗同样合并 | ✅ `select` 数量 **1**，`aria-label = 导入到`，选项集合与新增弹窗逐项相同；切到「全局」后 `value` 变 `""` |
+| 全局不可写时不卡住保存 | ✅ 夹具 B：新增弹窗落点下拉的**初值直接是第一个预设 `standard`**，`全局` 档 `disabled=true`，控件下方给出原因「这个组合没有唯一的文件型 Include，全局平面没有可写入的文件。」，「保存」**可用**（`disabled=false`） |
+| 导入弹窗的不可写全局 | ✅ 夹具 B：同样 1 个下拉、初值 `standard`、`全局` 灰掉、同一条原因句；「导入所选」的禁用来自"没有可导入的条目"（该 DSH_HOME 里 Claude 配置没有可导入项），**不是** `noTarget` |
+| 控制台 | ✅ 两组读数都是 0 条 `error` / `pageerror` / `requestfailed` |
+| 名册读数未受影响 | ✅ 第十一节那张表在 `97C389FC…` 上复跑：tabs 564=564、六行 `switchX=[1045]`、`planeRight=[1037]`、行内按钮只有「添加描述」与开关，读数与 `A8EAD3FE…` 逐位相同 |
+| 静态约束 | ✅ `npm run typecheck` 通过；`npm test` **22 文件 / 259 项**全绿（`tests/client-css.spec.ts` 已把新组件纳入类名检查名单） |
+
+### 本节未覆盖（如实）
+
+- **没有真实保存/导入**：两组读数都只到"表单状态正确、按钮可用"为止，没有点「保存」写回 composition 文件，也没有跑一次真实导入（写入路径的回归当时只有单测 `tests/mcp-authoring.spec.ts` / `tests/claude-import.spec.ts`；**后者与导入功能本身已于第十四节删除**）。
+- **没有测「已不在名册里的预设 id」兜底项**：那段逻辑（`unlisted`）只做了类型与代码层保证，浏览器里没有构造出这种值。
+- **`npm run test:harness` 未在 `97C389FC…` 上复跑**：本轮改动只在浏览器半边（两个弹窗 + 字典），host 产物哈希未变；harness 读数仍以第十一节的 6 文件 / 25 项为准。
+- **`prefers-reduced-motion`、`pointer: coarse`、真机软键盘与安全区未测**：与前几节同样的缺口。
+- **README 里的截图（`docs/images/mcp-editor-import.png` 等）未重拍**：图上是旧的两级下拉与行内按钮，本轮只改了正文文字。
+
+## 十三、必填标记与自动命名、平面标记改芯片并居中（2026-10-16，D28，client 产物 `37F19C55…`）
+
+用户提了两条：新增弹窗的必填字段要打 `*`、"能给默认值或者自动设置就设置"；名册里「未配置 / standard / 开关」
+这一组要**上下居中**，并且 agent 范围的样式"类似 tab"。取舍与被否决方案见 [design-decisions.md](design-decisions.md) D28。
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 宿主 / `DSH_HOME` / 端口 | `@deepseek-ai/dsh@0.2.0-rc.2`；`.scratch/harness-tests/mcp-layout-0.2.0-rc.2-a7f3`（第十一/十二节同一台）；44917（跑完端口已释放，只停本轮启动的进程） |
+| 浏览器 | Playwright + `chromium_headless_shell-1228`，无头 Chromium，1440×900，浅色 |
+| 本轮 client 产物 | `lib/client.js` = `37F19C55534DAF5A50F3338D339B4B87B4F7690B90FA0D4099CBDD840EE030C2`（197,973 字节） |
+| host 产物 | `lib/index.mjs` = `444E9B1E…`（未改 host） |
+| 夹具 | 第十一节那 6 行（3 全局 + 1 未配置 + 2 预设行），全局 Include 可写 |
+| 脚本与读数 | `.scratch/mcp-layout-verify/verify-d28.mjs`，结果 `results-d28.json`，截图 `shots/d28-rows.png`、`shots/d28-add-required.png` |
+
+### 逐项读数（真实盒子测量）
+
+| 验收项 | 结果 |
+|---|---|
+| 行右侧那组上下居中 | ✅ 六行的 `rowCenterY` 与 `.mcpRight` 盒子中心**逐行相等**：351=351、431=431、511=511、591=591、671=671、751=751 |
+| 平面标记是 tab 样式芯片 | ✅ 六行的芯片 `border-radius: 12px`（= `--dsw-radius-md`，与宿主页签选中态同款），`全局` 与 `mcp-verify` 用同一个类；芯片盒高 24px |
+| 芯片与开关仍成一列 | ✅ 六行 `switchX=[1045]`、芯片右缘 `[1037]`（唯一值），与第十一节同列 |
+| 必填标记 | ✅ 表单字段名依次为 `["配置范围","服务器名*","描述（写进系统提示，帮模型选要加载哪台）","JSON 配置*"]`；两个 `*` 的颜色 `rgb(236,19,19)`；`aria-required`：服务器名 `true`、JSON `true` |
+| 名称自动填 | ✅ 空表单 → 粘贴 `{"type":"stdio","command":"npx","args":["-y","@upstash/context7-mcp"]}` 后输入框自动变成 **`context7`** |
+| 手填的名字不被覆盖 | ✅ 把名字改成 `my-own-name` 后再粘贴另一份 JSON（`server-filesystem`），输入框仍是 `my-own-name`；清空后也不再自动填（用户碰过这个字段就不再自动写） |
+| 控制台 | ✅ 0 条 `error` / `pageerror` / `requestfailed` |
+| 前两节读数复跑 | ✅ 第十一节（页签全宽、对齐、无行内按钮）与第十二节（两个弹窗各一个落点下拉）在同一产物上复跑：1440px `tabs=564=section`、`switchX=[1045]`、芯片右缘 `[1037]`、`selectCount=1`、选项集合逐项相同 |
+| 静态约束 | ✅ `npm run typecheck` 通过；`npm test` **23 文件 / 264 项**全绿（新增 `tests/mcp-spec.spec.ts` 5 项） |
+
+### 本节未覆盖（如实）
+
+- **没有真实保存**：自动填出来的名字与必填标记只验到"表单状态正确"，没有点「保存」把这一行写进 composition。
+- **URL 主机推断只在单测里覆盖**：浏览器里只粘贴了 stdio 的 JSON；`https://mcp.yunxiao.com/mcp` → `yunxiao` 这条是 `tests/mcp-spec.spec.ts` 的读数，不是浏览器读数。
+- **真实粘贴（`Ctrl+V`）未测**：脚本用 Playwright 的 `fill` 设值并触发 `input`，走的是同一条 `onChange`，但没有覆盖 IME、拖拽或从剪贴板粘贴的多事件序列。
+- **深色只看了第十一节那批截图的同款布局**，本轮 D28 的截图只拍了浅色；芯片用的都是语义 token，未逐像素比对深色。
+- **`pointer: coarse` / 真机软键盘 / `prefers-reduced-motion` 未测**：与前几节同样的缺口。
+- **`npm run test:harness` 未在本轮复跑**（改的是浏览器半边与纯函数推断，host 产物哈希未变）；harness 读数仍以第十一节的 6 文件 / 25 项为准。
+- **README 截图（`docs/images/mcp-editor-import.png`）未重拍**：图上仍是旧的两级下拉、行内按钮与灰字预设名。
+
+## 十四、删除「导入 Claude 配置」整条链路（2026-10-16，D29，client `F92245F7…` / host `2771BA61…`）
+
+用户原话：「删除导入Claude配置的功能」。删掉的文件与符号见 [design-decisions.md](design-decisions.md) D29。
+本节记录**验证**：删干净了、没留死引用、名册工具栏不再有入口。
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 宿主 / `DSH_HOME` / 端口 | `@deepseek-ai/dsh@0.2.0-rc.2`；`.scratch/harness-tests/mcp-layout-0.2.0-rc.2-a7f3`（第十一/十二/十三节同一台）；44917（跑完端口已释放） |
+| 本轮产物 | `lib/client.js` = `F92245F7…`（175,154 字节，删导入后变小）；`lib/index.mjs` = `2771BA61…`（196,091 字节，host 侧删了扫描与批次写入） |
+| 浏览器 | Playwright + `chromium_headless_shell-1228`，1440×900，浅色 |
+| 脚本与读数 | `.scratch/mcp-layout-verify/verify-d29.mjs`，结果 `results-d29.json` |
+
+### 逐项读数
+
+| 验收项 | 结果 |
+|---|---|
+| 名册工具栏不再有导入入口 | ✅ 工具栏按钮集合 = `["新增 MCP"]`（旧实现是「导入 Claude 配置」+「新增 MCP」） |
+| 死引用为零 | ✅ `npm run typecheck` 通过（tsc 会报未用的导入、缺失的导出与类型）；`npm test` 无 TSX/字典残缺；`tests/client-css.spec.ts` 的"类必须被引用"因此挡住了留 `.mcpActionError` 这类孤儿样式的写法（删导入时正好命中） |
+| host 侧 RPC 已撤 | ✅ `src/remote.ts` 的 descriptor 列表不再有 `addMcps` / `scanClaudeMcp`；`mcp-remote.ts` 不再有对应方法（§见以下"未覆盖"：没有在隔离实例上验证客户端调用旧方法会拿到 404） |
+| 字典无残留 | ✅ `mcp.import.*` 的中英各 33 条全部删除；`McpSectionKey` 由 `zh` 推导，`en` 是 `Record<McpSectionKey, string>`，所以少一条都会编译失败 |
+| 测试数变化符合预期 | ✅ `npm test` **22 文件 / 253 项**（删除前 23 / 264；`tests/claude-import.spec.ts` 的 11 项随文件一起删） |
+
+### 本节未覆盖（如实）
+
+- **没有在浏览器里点过已删除的入口**：按钮不存在是读 DOM 得到的（按钮集合断言），不是"点了没反应"的读数。
+- **旧客户端调用已撤 RPC 的失败形态未测**：`addMcps` / `scanClaudeMcp` 的 descriptor 已从贡献里移除，理论上调用方会拿到"未注册的方法"；本轮没有构造旧 bundle 去触发它。
+- **`docs/images/mcp-editor-import.png` 未处理**：那张图右半是已删除的导入弹窗；README 里的引用已撤，图片文件本身仍留在 `docs/images/`（其余几张截图也早于本轮的多处 UI 改动，一并待重拍）。
+
+## 十五、工具列表 token、加载态居中、设置页整理（2026-10-16，D30，client `F92245F7…`）
+
+用户提了三条：工具列表的说明改成"取消勾选则不加载进入上下文，当前加载 xx token，取消 xx token"、每行后面显示
+token 量；「连接中……」应该是个 loading、放到中间、不要把描述挤下来；删掉「立即生效…」与策略区总述两句描述，
+加载方式的 tab 占满整行。取舍见 [design-decisions.md](design-decisions.md) D30。
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 宿主 / `DSH_HOME` / 端口 | 同第十四节（同一台隔离实例、同一端口） |
+| 本体产物 | `lib/client.js` = `F92245F7…`、`lib/index.mjs` = `2771BA61…`（同第十四节，两轮改动同一份产物） |
+| 夹具 | 该 profile 的预设 `mcp-verify` 下**新增两行**：`pv-tools`（`node <script>`，跑一个用本仓 `@modelcontextprotocol/sdk` 写的三工具 fixture 服务器）、`pv-slow`（同一 SDK，`tools/list` 延迟 60s）；脚本 `.scratch/mcp-layout-verify/fixture-mcp-server.mjs` / `fixture-mcp-slow.mjs`，patch 备份 `cordis.patch.yml.bak-d29`。**保留在该隔离命名空间里**，重跑直接可用 |
+| 浏览器 | Playwright + `chromium_headless_shell-1228`，1440×900，浅色 |
+| 脚本与读数 | `.scratch/mcp-layout-verify/verify-d29.mjs`，结果 `results-d29.json`，截图 `shots/d29-*.png` |
+
+### 逐项读数（真实盒子 + 真实 MCP 列举）
+
+| 验收项 | 结果 |
+|---|---|
+| 每行显示 token | ✅ 真实列举（`pv-tools`，fixture 服务器）：`ping` `≈26`、`echo` `≈46`、`big_tool` `≈778`（长 schema + 中文描述）；计数 `3/3` |
+| 提示句就是两份合计 | ✅ `取消勾选则不加载进上下文：当前加载 ≈850 token，取消 ≈0 token。`——26+46+778 = **850**，与逐行数字自洽 |
+| 取消勾选后两个数反号 | ✅ 取消 `big_tool` 后计数 `2/3`，提示句变 `当前加载 ≈72 token，取消 ≈778 token。`（26+46=72） |
+| 加载态居中 | ✅ `pv-slow`（60s 才答复）上：`role="status"` 的盒子中心与面板中心**差 0px**；文字 `连接中……`；转圈元素 `animation-name = mcp-tool-spin` |
+| 描述不被挤动 | ✅ 提示句的 `getBoundingClientRect().y` 在点击「加载工具列表」前后**都是 373**（等待期间新增的是下方居中的那一块，上方文字不动） |
+| 按钮不再换字 | ✅ 忙碌时「加载工具列表」仍是该文案（只是 disabled），`mcp.form.toolsLoading` 只出现在居中的状态块里 |
+| 设置页两句已删 | ✅ `innerText` 里 `立即生效` = **false**、`控制一次调用把多少工具内容交给模型` = **false** |
+| 加载方式占满整行 | ✅ `[role="tablist"]`（全部加载 / 动态插入 / 延迟加载）盒子 532→1096 = **564px**，与其所在块、与设置列**逐位相同** |
+| 控制台 | ✅ 0 条 `error` / `pageerror` / `requestfailed` |
+| 静态约束 | ✅ `npm run typecheck` 通过；`npm test` **23 文件 / 258 项**（新增 `tests/mcp-tokens.spec.ts` 5 项） |
+| 第十三节读数复跑 | ✅ 在**同一产物** `F92245F7…` 上复跑 `verify-d28.mjs`：八行（本轮夹具多了 `pv-tools`/`pv-slow`）的 `rowCenterY == rightCenterY == chipCenterY`、芯片 R12、`switchX=[1045]`、芯片右缘 `[1037]`、必填 `*` 与 `aria-required`、粘贴后自动填 `context7`、手填名不被覆盖——与第十三节逐项相同。第十一/十二节的读数取自较早产物（改动只碰工具列表与设置页，未动名册与新增弹窗结构），**未在最终产物上复跑** |
+
+### 本节未覆盖（如实）
+
+- **深色未拍**：本轮截图只有浅色；新增的 `.toolTokens` / `.toolsLoading` / `.spinner` 都用语义 token，未逐像素比对深色。
+- **`prefers-reduced-motion: reduce` 只做了代码层保证**：`@media (prefers-reduced-motion: reduce)` 关掉转圈动画，没有在浏览器里录到差值（媒体查询本身在前几节也没实测）。
+- **没有跨多行验证数字**：只在一个三工具服务器上验了合计；分页（`pageSize`/`maxTools` 截断）时"当前加载"只算**这一页列出的**工具，未构造真实的多页读数。
+- **token 数是估算**：本节只证明"逐行数字与提示句自洽、取消后反向"，**不证明**它与任何 provider 的实际计费一致（`src/mcp-tokens.ts` 的注释与 D30 都写明这一点）。
+- **`pointer: coarse` / 真机软键盘 / 安全区未测**：同前几节。
+
+## 十六、JSON 校验移到字段标签行、失焦才判（2026-10-16，D31，client `116D3AA7…`）
+
+用户看着新增弹窗的两张截图（配置页与工具列表页各一张，红框画在 `JSON 配置 *` 标签右侧）要求：这个校验显示在配置
+JSON 旁边，鼠标失焦时才显示。取舍见 [design-decisions.md](design-decisions.md) D31。
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 宿主 / `DSH_HOME` / 端口 | 同第十四/十五节那台隔离实例；44917（跑完端口已释放） |
+| 本轮 client 产物 | `lib/client.js` = `116D3AA7…`（177,222 字节） |
+| 浏览器 | Playwright + `chromium_headless_shell-1228`，1440×900，浅色 |
+| 脚本与读数 | `.scratch/mcp-layout-verify/verify-d31.mjs`，结果 `results-d31.json`，截图 `shots/d31-*.png` |
+
+### 逐项读数（真实盒子测量）
+
+| 验收项 | 结果 |
+|---|---|
+| 初始状态不报 | ✅ 打开弹窗（骨架 JSON 合法）：`[role="alert"]` 数量 0，`aria-invalid=false` |
+| 输入时不报 | ✅ 把框填成 `{ "type": "stdio", "command": `（半截文档）后**焦点仍在框内**：alert 数量仍是 0 |
+| 失焦即报 | ✅ 点服务器名输入框后：alert 文本 `JSON 格式或字段不合法`，`aria-invalid=true` |
+| 就在标签行上 | ✅ 该 alert 与 `JSON 配置 *` 标签的**垂直中心差 0px**（`labelDelta = 0`），在文本框**上方** 7px |
+| 没有被弹窗裁掉 | ✅ `visible = true`（第一版把消息放在文本框下方时被弹窗内容区下边缘裁掉，截图 `d31-json-error-from-tools.png` 可复现旧写法的问题） |
+| 改对后消失 | ✅ 换成合法 spec 并失焦：alert 数量 0、`aria-invalid=false` |
+| 从工具列表页触发也落到这里 | ✅ 在半截文档状态下切到「工具列表」并点「加载工具列表」：页签**切回 `["配置"]`**，消息出现在标签行上（旧行为是在工具列表页显示一条连接错误 `toolsError`） |
+| 控制台 | ✅ 0 条 `error` / `pageerror` / `requestfailed` |
+| 静态约束 | ✅ `npm run typecheck` 通过；`npm test` **23 文件 / 258 项**全绿（DSL：`tests/client-css.spec.ts` 的"类必须被引用"覆盖新增的 `.fieldError`） |
+
+### 本节未覆盖（如实）
+
+- **只有中文文案的读数**：英文 `mcp.form.jsonInvalid` 未在浏览器里切换语言验证（字典两语言同步改的是同一个键）。
+- **`role="alert"` 的读屏播报未实测**：只验证了节点与属性存在。
+- **深色未拍**：新增的 `.fieldError` 用 `--dsw-alias-state-error-primary`，未逐像素比对深色。
+- **`${env:…}` 这类只有 Host 能判的引用**不在这个字段的判定范围内（D15/D31），本节的输入也没有覆盖到它。
+
+## 十七、工具列表页去掉加载按钮（2026-10-16，D32，client `4FEC5E73…`）
+
+用户看着加载中的工具列表页提的：那个按钮也去掉，其他按钮都隐藏会让下面的说明句掉一行。取舍见
+[design-decisions.md](design-decisions.md) D32。
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 宿主 / `DSH_HOME` / 端口 | 同第十四至十六节那台隔离实例；44917（跑完端口已释放） |
+| 本轮 client 产物 | `lib/client.js` = `4FEC5E73…` |
+| 夹具 | 该 profile 的预设 `mcp-verify` 下的 `pv-tools`（本仓 `@modelcontextprotocol/sdk` 写的三工具服务器）与 `pv-slow`（`tools/list` 延迟 60s），脚本在 `.scratch/mcp-layout-verify/fixture-mcp-*.mjs` |
+| 浏览器 | Playwright + `chromium_headless_shell-1228`，1440×900，浅色 |
+| 脚本与读数 | `.scratch/mcp-layout-verify/verify-d32.mjs`，结果 `results-d32.json`，截图 `shots/d32-*.png` |
+
+### 逐项读数（真实盒子 + 真实列举）
+
+| 验收项 | 结果 |
+|---|---|
+| 没有加载按钮 | ✅ 弹窗按钮集合 = `["配置","密钥","工具列表","取消","保存"]`；工具页签里只剩「全选 / 全不选」（有列表时） |
+| 进页签即列举（编辑） | ✅ 点 `pv-tools` 卡片 → 点「工具列表」→ 250ms 后已在 `connecting`（`role="status"` 存在、计数为空），随后 `3/3` / 3 行 |
+| 提示行不跳 | ✅ 四种状态（首次列举中 / 列举完成 / 表单改过后重列 / 新增弹窗列举完成）提示行都在 **y=373**；`.toolsHead` 高度恒为 **28px** |
+| 表单变了才重列 | ✅ 改 JSON 指向慢服务器后再进页签：立刻进 `connecting`（`busy=true`），且因为已有上次列表，「全选/全不选」仍在 |
+| 新增弹窗也能列举 | ✅ 「新增 MCP」里填好名字与 JSON → 点「工具列表」→ `3/3`、3 行（旧实现只在编辑模式自动列举） |
+| 控制台 | ✅ 0 条 `error` / `pageerror` / `requestfailed` |
+| 静态约束 | ✅ `npm run typecheck` 通过；`npm test` **23 文件 / 258 项**全绿（删字典键由 `en: Record<McpSectionKey, string>` 守住） |
+
+### 本节未覆盖（如实）
+
+- **没有验证"同一表单再进页签不重连"**：读数覆盖了"变了要重列"，但没有反向断言未变时不重列（需要统计子进程或 RPC 次数）。
+- **慢夹具只用于触发 connecting**：60s 的那次列举在脚本里没有等它结束（页面后续被关闭）。
+- **深色、`pointer: coarse`、`prefers-reduced-motion` 未测**：同前几节。
+- **`mcp.form.toolsNeedsName` 的新文案只在中文界面读过**：英文文案未在浏览器里切换验证。
+
 ## 维护
 
 改加载、池或闸门行为后：先跑 `npm test` 与 `npm run test:harness`，再按上面的隔离实例协议复跑，并把**新结果与

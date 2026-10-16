@@ -33,7 +33,7 @@ const SHEETS: readonly StyleSheet[] = [
     components: [
       '../src/client/McpSection.tsx',
       '../src/client/McpEditor.tsx',
-      '../src/client/ClaudeImportDialog.tsx',
+      '../src/client/McpTargetSelect.tsx',
     ],
     stylesRawControls: true,
   },

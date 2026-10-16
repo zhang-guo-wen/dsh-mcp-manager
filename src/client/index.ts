@@ -38,8 +38,6 @@ import {
 import { TYPERT_REMOTE, REMOTE_NAMESPACE } from '../remote.ts'
 import type {
   AddMcpRequest,
-  AddMcpsRequest,
-  AddMcpsResult,
   ClearMcpCatalogRequest,
   ClearMcpCatalogResult,
   DescribeMcpRequest,
@@ -55,8 +53,6 @@ import type {
   McpGateStateRequest,
   McpGateStateResult,
   McpMutationResult,
-  ScanClaudeMcpRequest,
-  ScanClaudeMcpResult,
 } from '../types.ts'
 
 export type { McpSectionProps } from './McpSection.tsx'
@@ -77,7 +73,6 @@ export const inject = ['slots', 'locale', 'configForms', 'remote']
 /** The namespace service this plugin mounts itself — fetched via `ctx.get`, never injected. */
 interface McpManagerNamespace {
   addMcp(request: AddMcpRequest): Promise<RemoteResult<McpMutationResult>>
-  addMcps(request: AddMcpsRequest): Promise<RemoteResult<AddMcpsResult>>
   editMcp(request: EditMcpRequest): Promise<RemoteResult<McpMutationResult>>
   disableMcp(request: DisableMcpRequest): Promise<RemoteResult<McpMutationResult>>
   describeMcp(request: DescribeMcpRequest): Promise<RemoteResult<DescribeMcpResult>>
@@ -86,7 +81,6 @@ interface McpManagerNamespace {
   gateState(request: McpGateStateRequest): Promise<RemoteResult<McpGateStateResult>>
   catalogState(request: McpCatalogStateRequest): Promise<RemoteResult<McpCatalogStateResult>>
   clearCatalog(request: ClearMcpCatalogRequest): Promise<RemoteResult<ClearMcpCatalogResult>>
-  scanClaudeMcp(request: ScanClaudeMcpRequest): Promise<RemoteResult<ScanClaudeMcpResult>>
 }
 
 /** Unwrap a Typert `RemoteResult` or surface the Host failure. */
@@ -129,12 +123,10 @@ export async function apply(ctx: Context): Promise<void> {
   }
   const authoring: McpAuthoringActions = {
     addMcp: request => unwrapRemote(() => mcpMgr().addMcp(request)),
-    addMcps: request => unwrapRemote(() => mcpMgr().addMcps(request)),
     editMcp: request => unwrapRemote(() => mcpMgr().editMcp(request)),
     disableMcp: request => unwrapRemote(() => mcpMgr().disableMcp(request)),
     describeMcp: request => unwrapRemote(() => mcpMgr().describeMcp(request)),
     listMcpTools: request => unwrapRemote(() => mcpMgr().listMcpTools(request)),
-    scanClaudeMcp: request => unwrapRemote(() => mcpMgr().scanClaudeMcp(request)),
     catalogState: request => unwrapRemote(() => mcpMgr().catalogState(request)),
     clearCatalog: request => unwrapRemote(() => mcpMgr().clearCatalog(request)),
   }

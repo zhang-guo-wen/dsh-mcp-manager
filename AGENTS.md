@@ -17,18 +17,19 @@
 包放在 `packages/*` 下会被装成错误的东西。
 
 - `src/` —— host 入口 `index.ts`；浏览器半边在 `src/client/`（`McpSection.tsx`、`McpEditor.tsx`、
-  `McpOptimizeSection.tsx`、`locales.ts`，纯规则 `agent-filter.ts`、`mcp-row-state.ts`）。
+  `McpTargetSelect.tsx`、`McpOptimizeSection.tsx`、`locales.ts`，纯规则 `agent-filter.ts`、`mcp-row-state.ts`）。
   过滤规则放 `agent-filter.ts`，**不要挪回 controller**（`settings-controller.ts` 会经
   `@deepseek-ai/dsh-client-store` 拉进 `zustand`，在 Node 里加载即报 `Cannot find package 'zustand'`）。
 - 纯逻辑模块（只 import `node:crypto` 与同仓纯模块，不碰 harness 运行时，vitest 直接跑）：`mcp-carrier.ts`、
   `mcp-pool.ts`、`mcp-inventory.ts`、`mcp-tool-filter.ts`、`mcp-optimize.ts`、`mcp-spec.ts`、
   `mcp-diagnostics.ts`、`mcp-variable-refs.ts`、`mcp-tool-name.ts`。
 - 宿主侧其余：`mcp-gate.ts`（预加载闸门）、`mcp-authoring.ts`（行写入）、`mcp-roster.ts`（名册）、
-  `preset-mounts.ts` / `preset-source.ts`、`external-mcp.ts`、`claude-import.ts`、`settings.ts`、
+  `preset-mounts.ts` / `preset-source.ts`、`external-mcp.ts`、`mcp-tokens.ts`（工具定义 token 估算）、
+  `settings.ts`、
   `remote.ts`（手写的客户端 `TYPERT_REMOTE` 贡献对象）、`mcp-modules.ts`（宿主包名常量，gate 与组合读取共用一份拼写）。
 - `lib/` —— 构建产物**已提交进仓库**（`index.mjs` host + `client.js` 浏览器 handoff），别人可直接从 git 安装。
 - `cordis.patch.yml` —— 把插件行插入组合的 bundle 层。
-- `docs/design-decisions.md`（加载决策 D1–D17）、`docs/competitive-landscape.md`（同类对比与路线图）、
+- `docs/design-decisions.md`（加载决策 D1 起）、`docs/competitive-landscape.md`（同类对比与路线图）、
   `docs/testing.md`（行为验证记录）是参考页：改加载模式、闸门、工具过滤的语义前先读第一份并把新决策补进去；
   决定"下一步做什么"前读第二份，做完一条就地更新；改加载行为后按第三份复跑并把新结果写回去。
 
@@ -88,7 +89,7 @@ npm run test:harness   # 先重建分发产物，再跑真实 Loader/registry/sc
 - [tool-filtering.md](.claude/rules/tool-filtering.md)：`tools` 规则语法、四个实现约束、`global:` 为何不生效、`hidden` 计数与编辑弹窗工具列表；改过滤或工具选择 UI 时读。
 - [context-budget.md](.claude/rules/context-budget.md)：按需清单（预算/截断/原文）、`optimize` 三层粒度、游标分页、目录缓存、`mcp_search` 纪律；改清单或优化策略时读。
 - [settings-and-roster.md](.claude/rules/settings-and-roster.md)：设置命名空间与收敛、两条行写入路径、配置诊断、名册读取与可写判据；改设置/写入/名册时读。
-- [settings-ui-and-import.md](.claude/rules/settings-ui-and-import.md)：设置页分区与行级只读、MCP JSON 推断、Claude 配置导入；改设置页交互或导入时读。
+- [settings-ui-and-spec.md](.claude/rules/settings-ui-and-spec.md)：设置页分区与行级只读、行内布局与工具列表 token 估算、MCP JSON 推断；改设置页交互、工具列表或 spec 解析时读。
 - [build-and-contract.md](.claude/rules/build-and-contract.md)：目录与文档分工、构建细节、Cordis 契约、Typert Remote、部署/安装/接线、发版；动构建或通信契约时读。
 - [testing-and-measurements.md](.claude/rules/testing-and-measurements.md)：测试命令与覆盖矩阵、隔离实例测量数据与未覆盖项；跑测试或更新验证记录时读。
 - [pitfalls-and-decisions.md](.claude/rules/pitfalls-and-decisions.md)：44 条易崩清单与 D1–D17 决策表；动相关代码前扫一遍或查决策理由时读。

@@ -46,7 +46,6 @@ import {
 export { McpManager } from './mcp-remote.ts'
 export { assertServerName, mcpEntryConfig, specFromEntryConfig } from './mcp-config.ts'
 export { flattenSpec, parseSpecText, parseSpecValue, secretKeys, serverNameFromCommand, specFromObject } from './mcp-spec.ts'
-export { scanClaudeMcp } from './claude-import.ts'
 export { carrierFor } from './mcp-carrier.ts'
 export type { McpCarrier } from './mcp-carrier.ts'
 export { MCP_LOADING_MODES, parseMcpLoadingMode, registerMcpTools } from './lazy-mcp.ts'
@@ -85,14 +84,6 @@ export type { McpPreloadGate, McpRowGateState } from './mcp-gate.ts'
 export { Config, MCP_SETTINGS_NAMESPACE, readMcpSettings }
 export type { McpSettingsConfig, McpSettingsFlags, McpSettingsSource } from './settings.ts'
 export type { McpSpec, McpTarget } from './types.ts'
-export type {
-  ClaudeMcpEntry,
-  ClaudeMcpProblem,
-  ClaudeMcpSource,
-  ClaudeMcpSourceLabel,
-  ScanClaudeMcpRequest,
-  ScanClaudeMcpResult,
-} from './types.ts'
 export type { AnyRecord as McpSpecRecord } from './mcp-spec.ts'
 export type { McpEntryConfig, McpTransportConfig } from './mcp-config.ts'
 

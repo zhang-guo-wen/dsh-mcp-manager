@@ -170,9 +170,7 @@ export function secretKeys(spec: McpSpec): readonly string[] {
  * @returns a namespace candidate, or an empty string when nothing survives.
  */
 export function serverNameFromCommand(command: string): string {
-  const last = command.split(/[\\/]/).at(-1) ?? command
-  return last
-    .replace(/\.(cmd|exe|ps1|js|mjs|cjs|py)$/i, '')
+  return programName(command)
     .replace(/^@[^/]+\//, '')
     .replace(/-mcp(-server)?$/, '')
     .replace(/-server$/, '')
@@ -180,4 +178,56 @@ export function serverNameFromCommand(command: string): string {
     .replace(/[^A-Za-z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 32)
+}
+
+/** A command's own program, without its path or script extension. */
+function programName(command: string): string {
+  const last = command.split(/[\\/]/).at(-1) ?? command
+  return last.replace(/\.(cmd|exe|ps1|js|mjs|cjs|py)$/i, '')
+}
+
+/**
+ * Programs that only ever launch another program.
+ *
+ * A row whose command is one of them and that carries no package argument is
+ * unfinished — `npx` alone is not a server called `npx`, and naming one after
+ * its launcher would put a wrong name in the roster and the system prompt.
+ */
+const PACKAGE_RUNNERS = new Set([
+  'bun', 'bunx', 'deno', 'dnx', 'node', 'npm', 'npx', 'pipx', 'pnpm', 'pnpx', 'python', 'python3', 'uv', 'uvx', 'yarn',
+])
+
+/** Host labels that name a role rather than a product, so a URL's own name skips them. */
+const GENERIC_HOST_LABELS = new Set(['mcp', 'www', 'api', 'server', 'sse', 'http', 'https'])
+
+/**
+ * The name a spec implies when the document it came from declared none.
+ *
+ * A stdio row is named after the package it launches (`npx -y
+ * @upstash/context7-mcp` → `context7`), an HTTP row after the most specific label
+ * of the host it calls (`https://mcp.yunxiao.com/mcp` → `yunxiao`). Nothing is
+ * derived where nothing names a server: an address is not a name, and neither is
+ * a launcher waiting for its package.
+ * @param spec - the parsed transport spec.
+ * @returns a namespace candidate, or an empty string when nothing usable is left.
+ */
+export function serverNameFromSpec(spec: McpSpec): string {
+  if (spec.type === 'stdio') {
+    // The package argument rather than the launcher: `npx -y <pkg>` names the
+    // server after `pkg`, and flags carry no identity.
+    const pkg = (spec.args ?? []).find(argument => !argument.startsWith('-'))
+    if (pkg !== undefined) return serverNameFromCommand(pkg)
+    return PACKAGE_RUNNERS.has(programName(spec.command)) ? '' : serverNameFromCommand(spec.command)
+  }
+  let host: string
+  try {
+    host = new URL(spec.url).hostname
+  } catch {
+    // A url that does not parse names nothing; the field stays for the user.
+    return ''
+  }
+  if (host === '' || /^[\d.]+$/.test(host)) return ''
+  const labels = host.split('.').filter(label => label !== '')
+  const label = labels.find(part => !GENERIC_HOST_LABELS.has(part)) ?? labels[0] ?? ''
+  return serverNameFromCommand(label)
 }

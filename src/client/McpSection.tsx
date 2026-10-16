@@ -11,9 +11,8 @@
  * target from the row the user last edited left the global plane unreachable in
  * a composition with no global row yet.
  *
- * A row is edited by clicking the card itself; the row's own buttons open one
- * named pane of that same dialog, so a row carrying credentials has a direct
- * way to them.
+ * A row is edited by clicking the card itself, which opens the pane the row
+ * needs: credentials for a row that carries them, its configuration otherwise.
  *
  * The two faces are in-page tabs rather than two `settings.section`
  * registrations: the shell's nav is a flat, order-sorted list, so a second
@@ -22,7 +21,7 @@
  */
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
-import { Button, SegmentedControl, SegmentedTabs, StateDot, Switch, Tag, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, SegmentedControl, SegmentedTabs, StateDot, Switch, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AddMcpRequest, DescribeMcpRequest, DescribeMcpResult, EditMcpRequest } from '../types.ts'
@@ -30,7 +29,6 @@ import { MAX_DESCRIPTION_CHARS } from '../mcp-inventory.ts'
 import { toolRuleEntries } from '../mcp-tool-filter.ts'
 import { formatMcpConfigIssues } from './config-issues.ts'
 import { McpEditor, type McpEditorMode, type McpEditorRequest, type McpEditorTab } from './McpEditor.tsx'
-import { ClaudeImportDialog } from './ClaudeImportDialog.tsx'
 import { McpOptimizeSection, saveFailureMessage } from './McpOptimizeSection.tsx'
 import {
   MCP_LOADING_OPTIONS,
@@ -413,7 +411,7 @@ function McpRow({ server, description, suppressed, action, onEditDescription, on
   readonly action: RowAction | null
   readonly onEditDescription: (value: string) => Promise<void>
   /** Open this row's editor on one of its panes. */
-  readonly onEdit: (tab?: McpEditorTab) => void
+  readonly onEdit: (tab: McpEditorTab) => void
   readonly onToggleDisabled: (enabled: boolean) => void
   /** Retry the enablement change this row last failed at. */
   readonly onRetry: (enabled: boolean) => void
@@ -452,7 +450,9 @@ function McpRow({ server, description, suppressed, action, onEditDescription, on
   // opens on the configuration it has, which is where a row without credentials
   // has anything to change at all.
   const editorTab: McpEditorTab = server.secretKeys.length > 0 ? 'credentials' : 'config'
-  const openEditor = (tab: McpEditorTab = editorTab): void => { onEdit(tab) }
+  /** The plane marker's text: the global plane's own name, or the preset's id. */
+  const planeLabel = server.scope === 'global' ? t('mcp.scopeGlobal') : server.presetId ?? ''
+  const openEditor = (): void => { onEdit(editorTab) }
   // The card itself is the edit affordance. A closed row has nothing to open,
   // so it is not given the pointer, and the controls inside keep working on
   // their own without the row opening behind them.
@@ -482,7 +482,7 @@ function McpRow({ server, description, suppressed, action, onEditDescription, on
     : {}
   // The tooltip states what the control would do next, like its label does: a
   // row that is on is offered the switch back off. A closed row states why
-  // instead, so the switch and the edit button explain the same refusal. An
+  // instead, so the switch and the card's own hint explain the same refusal. An
   // unconfigured row names its issues through this section's own dictionary —
   // the Host's English sentence is the fallback, not the user-facing text.
   const switchTitle = actionsReason !== undefined
@@ -518,40 +518,27 @@ function McpRow({ server, description, suppressed, action, onEditDescription, on
         )}
       </div>
       <div className={css.mcpRight}>
-        {/* Which plane the row lives in: a global row is tagged, because the
-            list also shows the rows of the agent preset the filter selected. */}
-        {server.scope === 'global' ? <Tag tone="neutral">{t('mcp.scopeGlobal')}</Tag> : null}
-        {/* The preset a row belongs to is only reported here; the list itself is
-            already narrowed to it by the picker above. */}
-        {server.scope === 'preset'
-          ? <span className={css.rowScope}>{server.presetId ?? ''}</span>
-          : null}
+        {/* The status is the one element that comes and goes, so it goes first:
+            behind it the plane marker and the switch keep the same column in
+            every row that renders them. */}
         {status === undefined ? null : <span className={css.status}>
           <StateDot state={status.dot} />
           {status.label}
         </span>}
-        <span className={css.mcpActions}>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={actionsDisabled}
-            title={actionsDisabled && actionsReason !== undefined
-              ? actionsReason
-              : server.secretKeys.length > 0 ? t('mcp.credential.buttonHint') : undefined}
-            onClick={() => { openEditor() }}
-          >
-            {server.secretKeys.length > 0 ? t('mcp.credential.button') : t('mcp.edit')}
-          </Button>
-          {hasSwitch ? (
-            <Switch
-              checked={checked}
-              onChange={onToggleDisabled}
-              label={disabledNow ? t('mcp.enable') : t('mcp.disable')}
-              disabled={actionsDisabled || pending !== null || cannotEnable}
-              title={switchTitle}
-            />
-          ) : null}
-        </span>
+        {/* Which plane the row lives in, as the chip both planes share: a global
+            row is named because the list also carries the rows of the preset the
+            filter selected, and a preset row is named because the list is already
+            narrowed to it. */}
+        {planeLabel === '' ? null : <span className={css.rowScope}>{planeLabel}</span>}
+        {hasSwitch ? (
+          <Switch
+            checked={checked}
+            onChange={onToggleDisabled}
+            label={disabledNow ? t('mcp.enable') : t('mcp.disable')}
+            disabled={actionsDisabled || pending !== null || cannotEnable}
+            title={switchTitle}
+          />
+        ) : null}
       </div>
     </div>
   )
@@ -580,15 +567,14 @@ function McpRosterSkeleton({ label }: { readonly label: string }): ReactNode {
 /** The MCP management section body: the roster tab and the context-budget tab. */
 export function McpSection(props: McpSectionProps): ReactNode {
   const {
-    useMcpSettings, t, setMcpLoading, addMcp, addMcps, editMcp, disableMcp, describeMcp, listMcpTools,
-    suppressedMcps, mcps, presets, updateMcpDescription, updateMcpTools, scanClaudeMcp,
+    useMcpSettings, t, setMcpLoading, addMcp, editMcp, disableMcp, describeMcp, listMcpTools,
+    suppressedMcps, mcps, presets, updateMcpDescription, updateMcpTools,
   } = props
   const state = useMcpSettings(snapshot => snapshot)
   const [tab, setTab] = useState<McpTab>('servers')
   const tabsId = useId()
   const [mcpView, setMcpView] = useState<McpView>({ status: 'loading' })
   const [mcpRequest, setMcpRequest] = useState(0)
-  const [importerOpen, setImporterOpen] = useState(false)
   const [editor, setEditor] = useState<{ mode: McpEditorMode; server: McpServer | undefined; open: boolean }>({
     mode: 'add', server: undefined, open: false,
   })
@@ -765,15 +751,6 @@ export function McpSection(props: McpSectionProps): ReactNode {
     setMcpActionError(null)
   }
 
-  const openImport = (plane: McpPlane = 'agent'): void => {
-    setOpenedPlane(plane)
-    setOpenedTab('config')
-    setImporterOpen(true)
-    setEditorError(null)
-    setNotice(null)
-    setMcpActionError(null)
-  }
-
   const closeEditor = (): void => {
     if (editorBusy) return
     setEditor(previous => ({ ...previous, open: false }))
@@ -903,7 +880,6 @@ export function McpSection(props: McpSectionProps): ReactNode {
     <section className={css.block}>
       <div className={css.blockHead}>
         <h3 className={css.blockTitle}>{t('mcp.mode.title')}</h3>
-        <span className={css.when}>{t('mcp.mode.when')}</span>
       </div>
       {!state.available ? <p className={css.unavailable}>{t('unavailable')}</p> : null}
       <McpLoadingPicker
@@ -936,15 +912,6 @@ export function McpSection(props: McpSectionProps): ReactNode {
             ) : null}
           </div>
           <span className={css.listActions}>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => { openImport() }}
-              disabled={disabled || editorBusy}
-              title={disabled ? t('unavailable') : undefined}
-            >
-              {t('mcp.import')}
-            </Button>
             <Button
               variant="primary"
               size="sm"
@@ -1077,28 +1044,6 @@ export function McpSection(props: McpSectionProps): ReactNode {
         t={t}
         onClose={closeEditor}
         onSubmit={(request) => { void submitEditor(request) }}
-      />
-      <ClaudeImportDialog
-        open={importerOpen}
-        // The batch reports its own progress and the mask blocks this section
-        // while it runs, so it must not toggle the shared busy flag per entry:
-        // each toggle re-rendered this section, and the page behind the modal is
-        // what the mask's backdrop filter has to re-compose.
-        busy={false}
-        error={editorError}
-        scanClaudeMcp={scanClaudeMcp}
-        addMcps={addMcps}
-        servers={servers}
-        presets={presets}
-        plane={openedPlane}
-        globalWritable={mcpView.status === 'ready' && mcpView.globalWritable}
-        {...activePreset === MCP_ALL_PRESETS ? {} : { preset: activePreset }}
-        t={t}
-        onClose={() => { setImporterOpen(false) }}
-        onImported={() => {
-          reportNotice(t('mcp.notice.added'))
-          refreshMcps()
-        }}
       />
     </div>
   )
