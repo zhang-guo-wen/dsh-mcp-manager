@@ -94,14 +94,17 @@ describe('carrierFor narrowing', () => {
     expect(carrierFor('lazy', rules, true)).toBe('proxy')
   })
 
-  it('mounts whole servers when nothing narrows them', () => {
-    expect(carrierFor('dynamic', NO_TOOL_FILTER)).toBe('mount')
-    expect(carrierFor('dynamic', NO_TOOL_FILTER, false)).toBe('mount')
+  it('builds definitions itself under dynamic, whether or not anything narrows', () => {
+    // The harness mount is gone: it connects once per scope, so a per-session
+    // mount means a per-session process, which the host-level pool rules out.
+    // `dynamic` therefore builds individual definitions either way.
+    expect(carrierFor('dynamic', NO_TOOL_FILTER)).toBe('native')
+    expect(carrierFor('dynamic', NO_TOOL_FILTER, false)).toBe('native')
   })
 
   it('registers individual tools when a rule or the load narrows them', () => {
-    // A narrowed load cannot use mcp-client's mount: it registers every
-    // discovered tool and cannot hold the rest back.
+    // Narrowing no longer changes the carrier — it only decides which of a
+    // native row's tools are built — but it must still land on `native`.
     expect(carrierFor('dynamic', rules)).toBe('native')
     expect(carrierFor('dynamic', NO_TOOL_FILTER, true)).toBe('native')
   })

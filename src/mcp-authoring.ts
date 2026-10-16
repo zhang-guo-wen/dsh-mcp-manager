@@ -1,5 +1,6 @@
 /** File-backed MCP row mutations for the global composition. */
 
+import { readFileSync } from 'node:fs'
 import { lstat, readFile } from 'node:fs/promises'
 import { dirname, extname, resolve } from 'node:path'
 import { dump, load } from 'js-yaml'
@@ -9,8 +10,98 @@ import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import type { McpTarget } from './types.ts'
 
-/** Module specifier of the MCP client bridge these helpers author. */
-export const MCP_CLIENT_MODULE = '@deepseek-ai/dsh-mcp-client'
+export { MCP_CLIENT_MODULE } from './mcp-modules.ts'
+
+/**
+ * Loader id the host pins its own root anchor Include to.
+ *
+ * `mountRootInclude` creates it as a direct Loader entry with this id, so a
+ * nested Include — and every other row — carries a qualified id instead.
+ */
+export const ROOT_ANCHOR_INCLUDE_ID = 'include'
+
+/** Whether one row names the Include plugin, by builtin name or package name. */
+export function isIncludeRow(options: { readonly name?: unknown }): boolean {
+  return options.name === 'cordis:include' || options.name === '@deepseek-ai/cordis-plugin-include'
+}
+
+/**
+ * Whether one mounted Include is the host's own root anchor.
+ *
+ * The anchor points at `$DSH_HOME/profiles/<profile>/cordis.yml`, which
+ * `prepareProfile` rewrites from the composed layers on every start, so a write
+ * there is discarded at the next boot: it is never a settings-page target. The
+ * pinned id identifies it structurally, without depending on the host's profile
+ * layout. Only a root-level entry carries an unqualified Loader id, so a nested
+ * Include named `include` still reads as the user's.
+ * @param entry - one mounted Loader row.
+ * @returns whether that row is the host's root anchor Include.
+ */
+export function isRootAnchorInclude(entry: { readonly id: string; readonly options: { readonly name?: unknown } }): boolean {
+  return entry.id === ROOT_ANCHOR_INCLUDE_ID && isIncludeRow(entry.options)
+}
+
+/** One row the composition mounts, as far as the writable-Include scan reads it. */
+export interface ComposedIncludeRow {
+  readonly id: string
+  readonly options: { readonly name?: unknown }
+  readonly subtree?: object | undefined
+}
+
+/** A file-backed Include a global write may target, with the file it owns. */
+export interface WritableInclude<T> {
+  readonly entry: T
+  readonly filename: string
+}
+
+/** The file one mounted Include tree owns, when it exposes a usable path. */
+function includeFilename(tree: object): string | undefined {
+  const filename = (tree as { readonly filename?: unknown }).filename
+  return typeof filename === 'string' && filename !== '' ? filename : undefined
+}
+
+/**
+ * Collect the file-backed Includes a settings-page global write may target.
+ *
+ * The host's root anchor is excluded: its file is regenerated on every start.
+ * Every other file-backed Include is the user's own, wherever the composition
+ * put it — a nested one is how a profile declares its own composition file.
+ * @param entries - the Loader's entries, in composition order.
+ * @returns each addressable Include with its filename, in composition order.
+ */
+export function writableGlobalIncludes<T extends ComposedIncludeRow>(entries: Iterable<T>): WritableInclude<T>[] {
+  const found: WritableInclude<T>[] = []
+  for (const entry of entries) {
+    if (!isIncludeRow(entry.options) || entry.subtree === undefined) continue
+    if (isRootAnchorInclude(entry)) continue
+    const filename = includeFilename(entry.subtree)
+    if (filename === undefined) continue
+    found.push({ entry, filename })
+  }
+  return found
+}
+
+/**
+ * Read one entry-list file's own rows for a read-only decision.
+ *
+ * This reads the file, not the mounted tree: a row a patch layer or a nested
+ * composition contributes is live but absent here, and only the rows this file
+ * declares can be patched back into it.
+ * @param filename - YAML or JSON entry-list path.
+ * @returns the file's rows, or undefined when it cannot be read or parsed.
+ */
+export function readEntryListRowsSync(filename: string): EntryOptions[] | undefined {
+  let parsed: unknown
+  try {
+    parsed = load(readFileSync(filename, 'utf8'), { schema: entryListSchema })
+  } catch {
+    // A missing or unreadable file declares no rows; the caller reports that
+    // absence as "not writable from here" rather than throwing out of a read.
+    return undefined
+  }
+  if (entryListProblem(parsed) !== undefined) return undefined
+  return parsed as EntryOptions[]
+}
 
 /** Callback used for diagnostics emitted by the Loader patch dialect. */
 export type PatchWarning = (message: string, ...args: unknown[]) => void

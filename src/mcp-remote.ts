@@ -8,9 +8,12 @@ import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typer
 import {
   entryIds,
   findEntryRows,
+  isIncludeRow,
+  isRootAnchorInclude,
   MCP_CLIENT_MODULE,
   presetLeafId,
   writeEntryListFile,
+  writableGlobalIncludes,
 } from './mcp-authoring.ts'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import { findPresetDeclaration, writePresetRows, type PresetDeclaration } from './preset-source.ts'
@@ -163,7 +166,7 @@ export class McpManager extends TypertRemoteService {
   @Remote('listMcps')
   async listMcps(request: ListMcpsRequest): Promise<ListMcpsResult> {
     void request
-    return readMcpRoster(this.ctx, this.mountReader)
+    return readMcpRoster(this.ctx, this.mountReader, this.gate.suppressedEntryIds(), this.gate.globalRows?.() ?? [])
   }
 
   /**
@@ -285,18 +288,21 @@ export class McpManager extends TypertRemoteService {
     const target = validateTarget(request.target)
     validateEntryId(request.entryId, target, false)
     if (target.scope === 'global') {
-      const include = await this.globalInclude(target)
-      const entry = this.globalMcpEntry(request.entryId, target, include.tree)
+      // Reading a global row is a lookup, not an edit: it must not require the
+      // single file-backed Include that authoring does. A composition can mount
+      // a user-owned Include beside the host's own root, and a patch layer can
+      // insert a global row with no composition file at all.
+      const entry = this.liveGlobalEntry(request.entryId, target)
       const serverName = serverNameOf(entry.options)
       if (serverName === undefined) {
         throw invalid(target, 'the MCP row has no valid serverName')
       }
       return {
         target,
-        entryId: entry.id,
+        entryId: presetLeafId(entry.options.id),
         serverName,
         spec: specFromEntryConfig(entry.options.config as McpEntryConfig),
-        disabled: entry.disabled ?? false,
+        disabled: entry.options.disabled === true,
       }
     }
 
@@ -405,7 +411,7 @@ export class McpManager extends TypertRemoteService {
           throw conflict(target, entryId, request.serverName, 'the serverName is already in use')
         }
       }, entryId)
-      return { target, entryId: created.id, serverName: request.serverName, disabled: created.disabled }
+      return { target, entryId: created.id, serverName: request.serverName, disabled: this.declaredDisabled(created) }
     }
 
     const preset = await this.resolvePreset(target)
@@ -559,13 +565,29 @@ export class McpManager extends TypertRemoteService {
     return refused
   }
 
+  /**
+   * Whether one global row's declaration disables it.
+   *
+   * The live instance property is the preload gate's own shadow, so it answers
+   * "is the gate holding this row" rather than "did the user disable it". Every
+   * answer this service reports about a global row comes from the declaration.
+   * @param entry - the live global row.
+   * @returns whether the row's own declaration disables it.
+   */
+  private declaredDisabled(entry: Entry): boolean {
+    return entry.options.disabled === true
+  }
+
   private async edit(request: EditMcpRequest): Promise<McpMutationResult> {
     const target = validateTarget(request.target)
     const config = configFromSpec(request.spec, request.serverName, target)
     validateEntryId(request.entryId, target, false)
     if (target.scope === 'global') {
       const include = await this.globalInclude(target)
-      const entry = this.globalMcpEntry(request.entryId, target, include.tree)
+      // Look the row up where the composition put it, not only inside the
+      // addressable file: a patch-declared row is live and listed, and the
+      // preflight below is what refuses it with the plane-accurate reason.
+      const entry = this.liveGlobalEntry(request.entryId, target)
       this.assertServerNameAvailable(
         [...include.tree.entries()], request.entryId, request.serverName, target,
       )
@@ -573,10 +595,10 @@ export class McpManager extends TypertRemoteService {
       const written = await this.writeGlobalOne(include, target, {
         id: rowId, name: MCP_CLIENT_MODULE, config,
       }, (fileRows) => {
-        this.presetMcpRow(fileRows, rowId, target)
+        this.globalFileRow(fileRows, rowId, target, include.tree.filename)
         this.assertServerNameAvailable(fileRows, rowId, request.serverName, target)
       }, rowId)
-      return { target, entryId: written.id, serverName: request.serverName, disabled: written.disabled }
+      return { target, entryId: written.id, serverName: request.serverName, disabled: this.declaredDisabled(written) }
     }
 
     const preset = await this.resolvePreset(target)
@@ -596,7 +618,7 @@ export class McpManager extends TypertRemoteService {
     validateEntryId(request.entryId, target, false)
     if (target.scope === 'global') {
       const include = await this.globalInclude(target)
-      const entry = this.globalMcpEntry(request.entryId, target, include.tree)
+      const entry = this.liveGlobalEntry(request.entryId, target)
       const serverName = serverNameOf(entry.options)
       if (serverName === undefined) {
         throw invalid(target, 'the MCP row has no valid serverName')
@@ -606,9 +628,9 @@ export class McpManager extends TypertRemoteService {
       const written = await this.writeGlobalOne(include, target, {
         id: rowId, name: MCP_CLIENT_MODULE, disabled: request.disabled,
       }, (fileRows) => {
-        this.presetMcpRow(fileRows, rowId, target)
+        this.globalFileRow(fileRows, rowId, target, include.tree.filename)
       }, rowId)
-      return { target, entryId: written.id, serverName, disabled: written.disabled }
+      return { target, entryId: written.id, serverName, disabled: this.declaredDisabled(written) }
     }
 
     const preset = await this.resolvePreset(target)
@@ -657,13 +679,21 @@ export class McpManager extends TypertRemoteService {
   }
 
   private async globalInclude(target: Extract<McpTarget, { scope: 'global' }>): Promise<{ entry: Entry; tree: WritableIncludeTree }> {
-    const includes = [...this.loader().entries()].filter(entry => entry.options.name === 'cordis:include' && entry.subtree)
+    const entries = [...this.loader().entries()]
+    const mounted = entries.filter(entry => isIncludeRow(entry.options) && entry.subtree !== undefined)
+    // The host's own root anchor is never a write target: `prepareProfile`
+    // regenerates its file on every start. Only a user Include can be patched.
+    const includes = writableGlobalIncludes(entries)
     if (includes.length !== 1) {
-      throw new RemoteError('mcp/unavailable', 'global MCP authoring requires exactly one file-backed Include', {
-        reason: includes.length === 0 ? 'no root Include is mounted' : `${includes.length} Includes are mounted`,
-      })
+      const reason = includes.length === 0
+        ? mounted.some(entry => isRootAnchorInclude(entry))
+          ? 'the composition mounts only the host profile Include, whose file the host regenerates'
+          : 'no file-backed Include of your own is mounted'
+        : `${includes.length} writable Includes are mounted`
+      throw new RemoteError(mounted.length === 0 ? 'mcp/unavailable' : 'mcp/read-only',
+        'global MCP rows are written through a file-backed Include of your own', { target, reason })
     }
-    const entry = includes[0] as Entry
+    const entry = includes[0]!.entry as Entry
     const tree = entry.subtree as IncludeTree
     const filename = tree.filename
     if (filename === undefined) {
@@ -758,18 +788,81 @@ export class McpManager extends TypertRemoteService {
    * @returns the row's live entry.
    * @throws an MCP Remote error when the row is absent, ambiguous, or not an MCP row.
    */
-  private globalMcpEntry(entryId: string, target: McpTarget, tree: IncludeTree): Entry {
+  /**
+   * Locate one live global row without addressing its composition file.
+   *
+   * The row is found wherever the composition put it: inside a file-backed
+   * Include's subtree, in a nested group there, or directly in the root tree
+   * when a patch layer inserted it. Reading must not depend on which of those
+   * shapes the profile used.
+   * @param entryId - qualified or leaf row id.
+   * @param target - the Remote target used in actionable failure details.
+   * @returns the row's live entry.
+   * @throws an MCP Remote error when the row is absent, ambiguous, or not an MCP row.
+   */
+  private liveGlobalEntry(entryId: string, target: McpTarget): Entry {
     const leafId = presetLeafId(entryId)
-    const found = [...tree.entries()].filter(entry => entry.options.id === leafId || entry.id === entryId)
-    if (found.length === 0) {
+    // One row is enumerated more than once: a file-backed include's store keys
+    // it by its qualified id, and the root list names the same entry by its leaf
+    // id. The row is the same either way, so collect by leaf and answer once.
+    const found = new Map<string, Entry>()
+    const visit = (tree: { entries(): Iterable<Entry> }): void => {
+      for (const entry of tree.entries()) {
+        const id = entry.options.id
+        if (id !== leafId && entry.id !== entryId) {
+          const nested = (entry as { readonly subtree?: { entries(): Iterable<Entry> } }).subtree
+          if (nested?.entries !== undefined) visit(nested)
+          continue
+        }
+        found.set(presetLeafId(id), entry)
+      }
+    }
+    for (const entry of this.loader().entries()) {
+      if (entry.subtree === undefined) continue
+      // A preset's tree carries its own rows; only the composition's own trees
+      // answer a global lookup.
+      visit(entry.subtree as { entries(): Iterable<Entry> })
+    }
+    if (found.size === 0) {
       throw new RemoteError('mcp/not-found', `MCP loader row "${entryId}" was not found`, { target, entryId })
     }
-    if (found.length > 1) throw conflict(target, entryId, undefined, 'the row id occurs more than once')
-    const entry = found[0] as Entry
+    if (found.size > 1) throw conflict(target, entryId, undefined, 'the row id occurs more than once')
+    const entry = [...found.values()][0]!
     if (entry.options.name !== MCP_CLIENT_MODULE || entry.options.group) {
       throw invalid(target, `loader row "${entryId}" is not an MCP client row`)
     }
     return entry
+  }
+
+  /**
+   * The row one global patch updates inside the addressed Include's own file.
+   *
+   * The file holds the user's rows only. A global row can also be live because
+   * the composition or a patch layer declares it, and then the file has nothing
+   * to patch: the write would either duplicate the row or fail late with a
+   * message about a missing row. Refusing here states which plane owns it.
+   * @param rows - the Include file's own rows, read under the write lock.
+   * @param rowId - the live row's local id.
+   * @param target - the global plane.
+   * @param filename - the file the patch would edit.
+   * @returns the file row the patch updates.
+   * @throws an MCP Remote error when the file does not declare exactly this row.
+   */
+  private globalFileRow(rows: EntryOptions[], rowId: string, target: McpTarget, filename: string): EntryOptions {
+    const found = findEntryRows(rows, rowId)
+    if (found.length === 0) {
+      throw new RemoteError('mcp/read-only', `global MCP row "${rowId}" is not declared by ${filename}`, {
+        target,
+        reason: `the composition or a patch layer declares "${rowId}", so it cannot be switched from the settings `
+          + `page: only the rows inside ${filename} are editable there`,
+      })
+    }
+    if (found.length > 1) throw conflict(target, rowId, undefined, 'the row id occurs more than once')
+    const row = found[0] as EntryOptions
+    if (row.name !== MCP_CLIENT_MODULE || row.group) {
+      throw invalid(target, `global row "${rowId}" is not an MCP client row`)
+    }
+    return row
   }
 
   private presetMcpRow(rows: EntryOptions[], entryId: string, target: McpTarget): EntryOptions {

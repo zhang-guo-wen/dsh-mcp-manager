@@ -328,15 +328,22 @@ export function annotationSummary(tool: PolicyTool, flags: McpOptimizeFlags): re
  *
  * The cursor is opaque to the model (it is only ever echoed back), and a cursor
  * this build did not issue is a caller error rather than a silently wrong page.
+ * A blank cursor is the one exception: the MCP spec hands an empty `nextCursor`
+ * back to the caller to mean "start here", so a caller that echoes it is asking
+ * for the first page, exactly like a caller that omitted the cursor.
  * @param items - the whole listing, in its stable order.
  * @param cursor - the previous page's `nextCursor`, or undefined for the first page.
  * @param limit - requested page size; the caller clamps it to the policy range.
  * @returns the page, the offset it started at, the listing size, and the cursor
  *   for the page after it.
- * @throws when `cursor` is not a cursor this build issued.
+ * @throws when `cursor` is a non-blank cursor this build did not issue.
  */
 export function paginateTools<T>(items: readonly T[], cursor: string | undefined, limit: number): McpToolPage<T> {
-  const offset = cursor === undefined ? 0 : decodeToolCursor(cursor)
+  // Only a *string* is inspected for blankness: a caller that sends `0` or
+  // `null` gets the same rejection a wrong cursor gets, not a type error.
+  const offset = cursor === undefined || (typeof cursor === 'string' && cursor.trim() === '')
+    ? 0
+    : decodeToolCursor(cursor)
   const page = items.slice(offset, offset + limit)
   const next = offset + page.length
   return {
@@ -358,7 +365,8 @@ export function encodeToolCursor(offset: number): string {
 
 /**
  * Read one page cursor back.
- * @param cursor - the cursor the model echoed.
+ * @param cursor - the cursor the model echoed; a blank one never reaches here,
+ *   because `paginateTools` reads it as "first page".
  * @returns the offset it carries.
  * @throws when the value is not a cursor this build issued.
  */

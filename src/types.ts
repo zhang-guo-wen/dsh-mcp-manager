@@ -244,8 +244,32 @@ export interface ClearMcpCatalogResult {
   readonly cleared: number
 }
 
-/** Root-fiber lifecycle phase of one MCP row, or null when it owns no fiber. */
-export type McpFiberPhase = 'pending' | 'loading' | 'active' | 'failed' | 'unloading' | null
+/**
+ * Root-fiber lifecycle phase of one MCP row, or null when it owns no fiber.
+ *
+ * `held` is the state the loading mode produces: the row may be used, but the
+ * preload gate kept it from ever starting, so its disposed fiber must not read
+ * as "stopped".
+ */
+export type McpFiberPhase = 'pending' | 'loading' | 'active' | 'failed' | 'unloading' | 'held' | null
+
+/**
+ * Why one roster row has no writable home in the settings page.
+ *
+ * A global row is written by patching the entry list of the user's own
+ * file-backed Include, so a row that file does not declare cannot be switched
+ * from the page at all. The per-row flag exists so the surface closes those
+ * controls instead of letting a click fail at the Host.
+ */
+export type McpRowReadOnly =
+  /** The row is live but the addressable Include's own file does not declare it. */
+  | 'composed-row'
+  /** No file-backed Include of the user's own is mounted. */
+  | 'no-writable-include'
+  /** Several are mounted, so the target file is ambiguous. */
+  | 'several-writable-includes'
+  /** The one addressable file could not be read, so its rows are unknown. */
+  | 'unreadable-include'
 
 /** One MCP client row a composition declares, read without waiting for its activation. */
 export interface McpRosterRow {
@@ -255,6 +279,16 @@ export interface McpRosterRow {
   readonly moduleName: string
   /** Effective enablement; `conditional` marks a `!!js` gate only a mount can resolve. */
   readonly enabled: boolean | 'conditional'
+  /**
+   * Whether the settings page may write this row.
+   *
+   * False closes the row's switch and editor, and {@link readOnly} says why. A
+   * preset row is always writable: the profile patch that declares its preset
+   * owns every row nested in it.
+   */
+  readonly writable: boolean
+  /** Why the row cannot be written, present exactly when `writable` is false. */
+  readonly readOnly?: McpRowReadOnly
   /** Root-fiber phase, null when the row currently owns no fiber. */
   readonly fiberPhase: McpFiberPhase
   /**
@@ -295,9 +329,11 @@ export interface ListMcpsResult {
   /** Every declared preset, with its MCP rows. */
   readonly presets: readonly McpRosterPreset[]
   /**
-   * Whether the global plane accepts writes, which needs exactly one file-backed
-   * root Include to address. Its patch layers are not a bar: a global write edits
-   * that file and reloads the Include, so the layers stay in place.
+   * Whether the global plane accepts writes, which needs exactly one
+   * file-backed Include of the user's own to address. Its patch layers are not
+   * a bar: a global write edits that file and reloads the Include, so the layers
+   * stay in place. The host's root anchor Include is excluded — `prepareProfile`
+   * rewrites its file on every start.
    */
   readonly globalWritable: boolean
 }

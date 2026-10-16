@@ -3,6 +3,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { LazyTool } from '../src/mcp-carrier.ts'
 import { McpCatalog } from '../src/mcp-catalog.ts'
 import { MCP_CLIENT_MODULE } from '../src/mcp-authoring.ts'
+import { createMcpConnectionPool, type PooledConnection } from '../src/mcp-pool.ts'
+import { connectLazy } from '../src/lazy-mcp.ts'
 import { NO_TOOL_FILTER, parseMcpToolFilter } from '../src/mcp-tool-filter.ts'
 import { parseMcpOptimizeFlags } from '../src/mcp-optimize.ts'
 
@@ -131,13 +133,26 @@ function harness(options: {
     logger: { warn: () => {} },
   }
   const catalog = new McpCatalog<LazyTool>()
+  /** Set once the registration exists: the pool's change reports reach it here. */
+  let changed: (connection: PooledConnection) => void = () => {}
   const gate = {
     reconcile: async () => {},
     stateFor: () => undefined,
     suppressedKeys: () => [] as string[],
     dispose: () => {},
   }
-  registerMcpTools(
+  // The connection belongs to the host-level pool, so a load goes through it
+  // rather than opening its own client: that is what lets a second session
+  // reuse the process, and what the specs below exercise. The pool reports a
+  // `tools/list_changed` to the registration that owns the current mode — the
+  // same holder `index.ts` uses, because the registration is created after the
+  // pool it drives.
+  const pool = createMcpConnectionPool({
+    open: config => connectLazy(config, { maxTools: parseMcpOptimizeFlags(options.policy ?? {}).maxTools }),
+    onToolsChanged: connection => { changed(connection) },
+    warn: () => {},
+  })
+  const registration = registerMcpTools(
     rootCtx,
     options.mode ?? 'lazy',
     gate as never,
@@ -149,9 +164,11 @@ function harness(options: {
       descriptionFor: () => undefined,
       optimize: () => parseMcpOptimizeFlags(options.policy ?? {}),
     },
+    pool,
     undefined,
     catalog,
   )
+  changed = connection => { registration.toolsChanged(connection) }
   const exec = { agent: { id: 'agent-1', ctx: agentCtx } }
   const run = async (name: string, args: Record<string, unknown>): Promise<any> => {
     const definition = definitions.get(name)
@@ -238,6 +255,32 @@ describe('mcp_load listing shape', () => {
     const h = harness({})
     await expect(h.run('mcp_load', { server: 'alpha', cursor: 'nope' })).rejects.toThrow(/invalid cursor/)
   })
+
+  it('reads a blank cursor as the first page instead of refusing it', async () => {
+    setToolPages([tools('a', 'b', 'c')])
+    const h = harness({ policy: { pageSize: 2 } })
+    const first = await h.run('mcp_load', { server: 'alpha' })
+    // The MCP spec allows an empty string as a cursor, so a caller echoing one
+    // is asking for the start of the listing, not making a mistake.
+    const blank = await h.run('mcp_load', { server: 'alpha', cursor: '' })
+    expect(blank.tools.map(tool => tool.name)).toEqual(['a', 'b'])
+    expect(blank.shown).toBe(2)
+    expect(blank.total).toBe(3)
+    expect(blank.loaded).toBe(3)
+    expect(blank.nextCursor).toBe(first.nextCursor)
+  })
+
+  it('still refuses a falsy cursor that is neither blank nor one this build issued', async () => {
+    setToolPages([tools('a')])
+    const h = harness({})
+    // Widening the blank case must not become "any falsy value is page one":
+    // a non-string fails the declared parameter type, and a bogus string still
+    // fails the paginator.
+    for (const cursor of [0, null, false]) {
+      await expect(h.run('mcp_load', { server: 'alpha', cursor })).rejects.toThrow(/must be a string/)
+    }
+    await expect(h.run('mcp_load', { server: 'alpha', cursor: 'o' })).rejects.toThrow(/invalid cursor/)
+  })
 })
 
 describe('mcp_load narrowing', () => {
@@ -291,6 +334,52 @@ describe('mcp_load narrowing', () => {
     const second = await h.run('mcp_load', { server: 'alpha', query: 'list' })
     expect(second.loaded).toBe(2)
     expect(second.tools.map(tool => tool.name)).toEqual(['list_projects'])
+  })
+
+  it('widens a narrowed server back to everything when the call names no subset', async () => {
+    setToolPages([[
+      { name: 'create_issue', description: 'open a work item' },
+      { name: 'list_projects', description: 'all projects' },
+      { name: 'delete_issue', description: 'remove a work item' },
+    ]])
+    const h = harness({ mode: 'dynamic' })
+    const native = () => h.registered().filter(name => name.startsWith('mcp__alpha__')).sort()
+    const narrowed = await h.run('mcp_load', { server: 'alpha', query: 'issue' })
+    expect(narrowed.tools.map(tool => tool.name)).toEqual(['mcp__alpha__create_issue', 'mcp__alpha__delete_issue'])
+    expect(narrowed.loaded).toBe(2)
+    expect(narrowed.widened).toBeUndefined()
+    expect(native()).toEqual(['mcp__alpha__create_issue', 'mcp__alpha__delete_issue'])
+    // A load with neither `query` nor `tool` means the whole server, which is
+    // wider than the subset the first call asked for.
+    const whole = await h.run('mcp_load', { server: 'alpha' })
+    expect(whole.widened).toBe(true)
+    expect(whole.loaded).toBe(3)
+    expect(whole.total).toBe(3)
+    expect(whole.tools.map(tool => tool.name)).toEqual([
+      'mcp__alpha__create_issue', 'mcp__alpha__list_projects', 'mcp__alpha__delete_issue',
+    ])
+    // The tool the query had left out is really registered, not merely listed.
+    expect(native()).toEqual([
+      'mcp__alpha__create_issue', 'mcp__alpha__delete_issue', 'mcp__alpha__list_projects',
+    ])
+    // And the widened view does not shrink back: a later query only adds.
+    const later = await h.run('mcp_load', { server: 'alpha', query: 'list' })
+    expect(later.loaded).toBe(3)
+    expect(later.widened).toBeUndefined()
+    expect(native()).toHaveLength(3)
+  })
+
+  it('widens a narrowed proxy view back to everything when the call names no subset', async () => {
+    setToolPages([tools('create_issue', 'list_projects')])
+    const h = harness({ mode: 'lazy' })
+    const narrowed = await h.run('mcp_load', { server: 'alpha', query: 'create' })
+    expect(narrowed.loaded).toBe(1)
+    expect(narrowed.tools.map(tool => tool.name)).toEqual(['create_issue'])
+    const whole = await h.run('mcp_load', { server: 'alpha' })
+    expect(whole.widened).toBe(true)
+    expect(whole.loaded).toBe(2)
+    expect(whole.total).toBe(2)
+    expect(whole.tools.map(tool => tool.name)).toEqual(['create_issue', 'list_projects'])
   })
 })
 
@@ -382,6 +471,17 @@ describe('mcp_search', () => {
     expect(first.total).toBe(3)
     const second = await h.run('mcp_search', { query: 'issue', cursor: first.nextCursor })
     expect(second.hits.map(hit => hit.tool)).toEqual(['issue_three'])
+  })
+
+  it('reads a blank cursor as its first page too', async () => {
+    setToolPages([tools('issue_one', 'issue_two', 'issue_three')])
+    const h = harness({ policy: { pageSize: 2 } })
+    await h.run('mcp_load', { server: 'alpha' })
+    const first = await h.run('mcp_search', { query: 'issue' })
+    const blank = await h.run('mcp_search', { query: 'issue', cursor: '' })
+    expect(blank.hits.map(hit => hit.tool)).toEqual(first.hits.map(hit => hit.tool))
+    expect(blank.total).toBe(3)
+    expect(blank.nextCursor).toBe(first.nextCursor)
   })
 
   it('can be narrowed to one server', async () => {

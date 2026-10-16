@@ -5,10 +5,12 @@
  * The loading mode owns the carrier. `dynamic` gives the model real tool
  * schemas — and pays a prefix invalidation per load — while `lazy` keeps every
  * tool out of the request and serves it through the proxy. A row's filter only
- * narrows the visible set inside that decision, which is why a filtered
- * `dynamic` row registers its VISIBLE tools natively here instead of falling
- * back to the proxy: the harness mount cannot hold individual tools back, but
- * the plugin can hold them back by never building them.
+ * narrows the visible set inside that decision, which is why a `dynamic` row
+ * registers its VISIBLE tools natively here instead of handing the whole server
+ * to the harness: the harness mount cannot hold individual tools back, and it
+ * also connects once per mounting scope, so a per-session mount would mean a
+ * per-session process. Registering the definitions against a shared connection
+ * (`mcp-pool.ts`) is what lets one server serve every session.
  *
  * This module is pure policy plus registration primitives; the connect,
  * lifetime, and re-sync machinery lives in `lazy-mcp.ts`, which imports from
@@ -21,12 +23,12 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { McpToolDefinitionOptions } from '@deepseek-ai/dsh-mcp-client'
 import type { McpLoadingMode } from './lazy-mcp.ts'
-import { filterHidesAnything, type McpToolFilter } from './mcp-tool-filter.ts'
+import type { McpToolFilter } from './mcp-tool-filter.ts'
 import { mcpToolPublicName } from './mcp-tool-name.ts'
 import type { McpToolAnnotations } from './mcp-optimize.ts'
 
 /** How one loaded row's tools reach the model once a session loads it. */
-export type McpCarrier = 'mount' | 'native' | 'proxy'
+export type McpCarrier = 'native' | 'proxy'
 
 /** One MCP tool as the SDK client reports it. */
 export interface LazyTool {
@@ -97,32 +99,23 @@ export type McpToolAdapter = (ctx: Context, options: McpToolDefinitionOptions) =
  * The mode owns this decision: it is what decides whether the model argues from
  * real tool schemas — and pays a prefix invalidation per load — or calls
  * through the proxy and pays arguments copied out of a result. A row's filter
- * and a load-time query only narrow the visible set inside that decision; a
- * narrowed load therefore takes the `native` carrier even without a row filter,
- * because the harness mount registers every discovered tool and has no way to
- * hold the rest back.
+ * and a load-time query only narrow the visible set inside that decision: under
+ * `dynamic` the plugin builds exactly the visible tools natively, so a narrowed
+ * load needs no separate carrier.
  * @param mode - the loading mode a session committed to.
  * @param filter - the row's resolved rules.
- * @param narrowed - whether the load itself asks for a subset of the server's
- *   tools (`query`/`tool` on `mcp_load`).
- * @returns `proxy` under `lazy`; under `dynamic`, `native` when the rules or the
- *   load narrow anything, and `mount` when nothing does; `undefined` under
- *   `eager`, which mounts every allowed row and registers no on-demand tool.
+ * @param _narrowed - whether the load itself asks for a subset of the server's
+ *   tools (`query`/`tool` on `mcp_load`). Accepted for call-site compatibility;
+ *   it cannot change the carrier, because `dynamic` builds individual
+ *   definitions whether or not the load narrows anything.
+ * @returns `proxy` under `lazy` and `native` under `dynamic`; `undefined` under
+ *   `eager`, which mounts every allowed row and registers no on-demand tool at
+ *   all. The filter does not change the carrier: it only decides which of a
+ *   `native` row's tools are built.
  */
-export function carrierFor(mode: McpLoadingMode, filter: McpToolFilter, narrowed = false): McpCarrier | undefined {
+export function carrierFor(mode: McpLoadingMode, _filter: McpToolFilter, _narrowed = false): McpCarrier | undefined {
   if (mode === 'eager') return undefined
-  if (mode === 'lazy') return 'proxy'
-  return narrowsTools(filter, narrowed) ? 'native' : 'mount'
-}
-
-/**
- * Whether a load's visible set is narrower than everything the server publishes.
- * @param filter - the row's resolved rules.
- * @param narrowed - whether the load asked for a subset by query or tool name.
- * @returns true when the carrier must build individual definitions.
- */
-function narrowsTools(filter: McpToolFilter, narrowed: boolean): boolean {
-  return narrowed || filterHidesAnything(filter)
+  return mode === 'lazy' ? 'proxy' : 'native'
 }
 
 /**

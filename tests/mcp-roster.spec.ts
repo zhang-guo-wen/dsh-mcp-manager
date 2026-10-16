@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { readMcpRoster } from '../src/mcp-roster.ts'
@@ -79,7 +82,7 @@ describe('readMcpRoster', () => {
     expect(roster.presets).toEqual([{
       id: 'standard',
       name: 'Standard',
-      rows: [{ entryId: 'slow-server', moduleName: MCP_CLIENT, enabled: true, fiberPhase: 'loading' }],
+      rows: [{ entryId: 'slow-server', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: 'loading' }],
     }])
     expect(activating.wasAwaited()).toBe(false)
   })
@@ -88,13 +91,20 @@ describe('readMcpRoster', () => {
     const ctx = contextWith([
       loaderEntry({ id: 'include', name: 'cordis:include' }, { subtree: { filename: '/tmp/cordis.yml', config: {} } }),
       loaderEntry({ id: 'include:context7', name: MCP_CLIENT }, { disabled: false, fiber: { state: 2 } }),
-      loaderEntry({ id: 'include:kingdee', name: MCP_CLIENT }, { disabled: true }),
+      // A global row's enablement is the declaration's, which the Loader keeps
+      // in the entry's own options; the gate shadows the instance property.
+      loaderEntry({ id: 'include:kingdee', name: MCP_CLIENT, disabled: true }, { fiber: { state: 4 } }),
       loaderEntry({ id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' }, { disabled: false, fiber: { state: 2 } }),
     ])
 
+    // The leaf id is the row's public name: it is what `mcp_load` accepts and
+    // what the composed global projection reports, so a row the loader lists
+    // under its qualified id is the same row and must not be listed twice.
+    // These rows live in the host's own root Include, which is never a write
+    // target, so the global plane reports them read-only.
     expect(readMcpRoster(ctx, () => []).entries).toEqual([
-      { entryId: 'include:context7', moduleName: MCP_CLIENT, enabled: true, fiberPhase: 'active' },
-      { entryId: 'include:kingdee', moduleName: MCP_CLIENT, enabled: false, fiberPhase: null },
+      { entryId: 'context7', moduleName: MCP_CLIENT, enabled: true, writable: false, readOnly: 'no-writable-include', fiberPhase: 'active' },
+      { entryId: 'kingdee', moduleName: MCP_CLIENT, enabled: false, writable: false, readOnly: 'no-writable-include', fiberPhase: null },
     ])
   })
 
@@ -117,9 +127,9 @@ describe('readMcpRoster', () => {
       rows: [
         // A group's enablement is inherited, and a `!!js` node stays conditional
         // because only a mount can evaluate it.
-        { entryId: 'grouped', moduleName: MCP_CLIENT, enabled: true, fiberPhase: null },
-        { entryId: 'gated', moduleName: MCP_CLIENT, enabled: 'conditional', fiberPhase: null },
-        { entryId: 'plain', moduleName: MCP_CLIENT, enabled: true, fiberPhase: null },
+        { entryId: 'grouped', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: null },
+        { entryId: 'gated', moduleName: MCP_CLIENT, enabled: 'conditional', writable: true, fiberPhase: null },
+        { entryId: 'plain', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: null },
       ],
     }])
   })
@@ -142,8 +152,31 @@ describe('readMcpRoster', () => {
 
     expect(readMcpRoster(ctx, () => [mountOf(held)]).presets).toEqual([{
       id: 'standard',
-      rows: [{ entryId: 'held', moduleName: MCP_CLIENT, enabled: true, fiberPhase: null }],
+      rows: [{ entryId: 'held', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: null }],
     }])
+  })
+
+  it('reports a row the preload gate held at publication as held, not stopped', () => {
+    // A held row's fiber is disposed before its plugin ever runs, which is
+    // otherwise the same reading as a row that started and stopped. The gate's
+    // held set is what tells them apart.
+    const ctx = contextWith([], [{
+      id: 'preset-standard',
+      name: AGENT_PRESET,
+      config: { id: 'standard', plugins: [{ id: 'held', name: MCP_CLIENT }] },
+    }])
+    const held = {
+      options: { id: 'held', name: MCP_CLIENT, config: { transport: 'stdio', serverName: 'held', command: 'node' } },
+      disabled: true,
+      fiber: { state: 4 },
+    }
+    const mount = () => [mountOf(held)]
+
+    expect(readMcpRoster(ctx, mount, ['held']).presets[0]?.rows).toEqual([
+      { entryId: 'held', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: 'held' },
+    ])
+    // A row that is not held keeps reporting its real fiber state.
+    expect(readMcpRoster(ctx, mount, []).presets[0]?.rows[0]?.fiberPhase).toBeNull()
   })
 
   it('still reports a row the declaration disables', () => {
@@ -158,36 +191,86 @@ describe('readMcpRoster', () => {
     }
 
     expect(readMcpRoster(ctx, () => [mountOf(off)]).presets[0]?.rows).toEqual([
-      { entryId: 'off', moduleName: MCP_CLIENT, enabled: false, fiberPhase: null },
+      { entryId: 'off', moduleName: MCP_CLIENT, enabled: false, writable: true, fiberPhase: null },
     ])
   })
 
-  it('reports the global plane writable wherever one file-backed Include is mounted', () => {
-    // A patched Include is writable: the value is written to that file and the
-    // Include is reloaded, so its patch layers stay where they are.
+  it('reports the global plane writable only for the user\'s own Include file', () => {
+    // The value is written into that file and the Include is reloaded, so its
+    // patch layers stay where they are — a patched Include stays writable.
     const patched = contextWith([
-      loaderEntry({ id: 'include', name: 'cordis:include' }, {
-        subtree: { filename: '/tmp/cordis.yml', config: { patches: [{ id: 'ui-theme' }] } },
+      loaderEntry({ id: 'mcps', name: 'cordis:include' }, {
+        subtree: { filename: '/tmp/mcps.yml', config: { patches: [{ id: 'ui-theme' }] } },
       }),
     ])
     expect(readMcpRoster(patched, () => [])).toMatchObject({ globalWritable: true })
 
     const plain = contextWith([
-      loaderEntry({ id: 'include', name: 'cordis:include' }, {
-        subtree: { filename: '/tmp/cordis.yml', config: { patches: [] } },
+      loaderEntry({ id: 'mcps', name: 'cordis:include' }, {
+        subtree: { filename: '/tmp/mcps.yml', config: { patches: [] } },
       }),
     ])
     expect(readMcpRoster(plain, () => [])).toMatchObject({ globalWritable: true })
 
+    // The host's own root anchor is not a write target: `prepareProfile`
+    // rewrites its file on every start. Counting it made a profile that
+    // declares its own Include look like a two-Include composition and closed
+    // the whole plane.
+    const anchorOnly = contextWith([
+      loaderEntry({ id: 'include', name: 'cordis:include' }, { subtree: { filename: '/tmp/cordis.yml' } }),
+    ])
+    expect(readMcpRoster(anchorOnly, () => [])).toMatchObject({ globalWritable: false })
+
+    // Shape A: the host anchor plus the Include the user declared inside it.
+    // Exactly one file is addressable, so the plane is writable.
+    const shapeA = contextWith([
+      loaderEntry({ id: 'include', name: 'cordis:include' }, { subtree: { filename: '/tmp/cordis.yml' } }),
+      loaderEntry({ id: 'include:mcps', name: 'cordis:include' }, { subtree: { filename: '/tmp/mcps.yml' } }),
+    ])
+    expect(readMcpRoster(shapeA, () => [])).toMatchObject({ globalWritable: true })
+
     // No file-backed Include at all: nothing to write into.
     expect(readMcpRoster(contextWith([]), () => [])).toMatchObject({ globalWritable: false })
 
-    // Two Includes name no single file to address.
+    // Two user Includes name no single file to address.
     const both = contextWith([
-      loaderEntry({ id: 'include', name: 'cordis:include' }, { subtree: { filename: '/tmp/a.yml' } }),
-      loaderEntry({ id: 'include2', name: 'cordis:include' }, { subtree: { filename: '/tmp/b.yml' } }),
+      loaderEntry({ id: 'mcps-a', name: 'cordis:include' }, { subtree: { filename: '/tmp/a.yml' } }),
+      loaderEntry({ id: 'mcps-b', name: 'cordis:include' }, { subtree: { filename: '/tmp/b.yml' } }),
     ])
     expect(readMcpRoster(both, () => [])).toMatchObject({ globalWritable: false })
+  })
+
+  it('marks a global row writable exactly when the user Include file declares it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-roster-'))
+    try {
+      const file = join(dir, 'mcps.yml')
+      writeFileSync(file, [
+        '- id: declared',
+        `  name: '${MCP_CLIENT}'`,
+        '  config:',
+        '    transport: stdio',
+        '    serverName: declared',
+        '    command: node',
+        '',
+      ].join('\n'))
+      const ctx = contextWith(
+        [loaderEntry({ id: 'include', name: 'cordis:include' }, { subtree: { filename: join(dir, 'cordis.yml') } }),
+          loaderEntry({ id: 'include:mcps', name: 'cordis:include' }, { subtree: { filename: file } }),
+          loaderEntry({ id: 'include:mcps:declared', name: MCP_CLIENT }, { disabled: false, fiber: { state: 4 } }),
+          // A patch layer inserted this row into the composition, so the user's
+          // file has nothing to patch for it.
+          loaderEntry({ id: 'include:patched', name: MCP_CLIENT }, { disabled: false, fiber: { state: 4 } }),
+        ],
+      )
+      const roster = readMcpRoster(ctx, () => [])
+      expect(roster.globalWritable).toBe(true)
+      expect(roster.entries).toMatchObject([
+        { entryId: 'declared', writable: true },
+        { entryId: 'patched', writable: false, readOnly: 'composed-row' },
+      ])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('reports presets without a mounted profile editor as none', () => {

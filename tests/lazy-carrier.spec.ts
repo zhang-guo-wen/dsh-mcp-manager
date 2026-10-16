@@ -58,14 +58,13 @@ describe('carrierFor', () => {
     expect(carrierFor('lazy', rules)).toBe('proxy')
   })
 
-  it('mounts an unfiltered dynamic row', () => {
-    expect(carrierFor('dynamic', NO_TOOL_FILTER)).toBe('mount')
-    expect(carrierFor('dynamic', parseMcpToolFilter([]))).toBe('mount')
+  it('registers a dynamic row natively, filtered or not', () => {
+    // The server connection is pooled host-wide, so the carrier cannot be the
+    // per-scope harness mount: that would open one process per session.
+    expect(carrierFor('dynamic', NO_TOOL_FILTER)).toBe('native')
+    expect(carrierFor('dynamic', parseMcpToolFilter([]))).toBe('native')
     // A malformed stored value hides nothing, so it must not change the carrier.
-    expect(carrierFor('dynamic', parseMcpToolFilter({ nope: true }))).toBe('mount')
-  })
-
-  it('registers a filtered dynamic row natively instead of proxying it', () => {
+    expect(carrierFor('dynamic', parseMcpToolFilter({ nope: true }))).toBe('native')
     expect(carrierFor('dynamic', rules)).toBe('native')
     expect(carrierFor('dynamic', parseMcpToolFilter(['get_workitem']))).toBe('native')
   })
@@ -77,7 +76,6 @@ describe('visibleToolName', () => {
   })
 
   it('reports the registered public name for every native carrier', () => {
-    expect(visibleToolName('mount', 'srv', 'get_item')).toBe('mcp__srv__get_item')
     expect(visibleToolName('native', 'srv', 'get_item')).toBe('mcp__srv__get_item')
     expect(visibleToolName('native', 'srv', 'admin.reset')).toMatch(/^mcp__srv__admin_reset_[0-9a-f]{12}$/)
   })

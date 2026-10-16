@@ -18,10 +18,10 @@ import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 // Type-only: pulls the config editor's Context merge (ctx.configEditor).
 import type {} from '@deepseek-ai/dsh-config-editor'
 import { entryListProblem, type PatchWarning } from './mcp-authoring.ts'
+import { AGENT_PRESET_MODULE } from './mcp-modules.ts'
 import type { McpTarget } from './types.ts'
 
-/** Module specifier of the plugin every preset declaration names. */
-export const AGENT_PRESET_MODULE = '@deepseek-ai/dsh-agent-preset'
+export { AGENT_PRESET_MODULE } from './mcp-modules.ts'
 
 /** One declared preset beside the Loader entry that carries it. */
 export interface PresetDeclaration {

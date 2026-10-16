@@ -3,6 +3,8 @@
  * @module @guowenzhang/dsh-mcp-manager/client/locales
  */
 
+import type { McpRowReadOnly } from '../types.ts'
+
 /** Locale namespace owned by this plugin's settings section. */
 export const NS = 'settings.mcpManager'
 
@@ -12,19 +14,20 @@ const zh = {
   'mcp.filter.label': '按 Agent 预设过滤',
   'mcp.filter.all': '全部 Agent 预设（{n}）',
   'mcp.filter.option': '{name}（{n}）',
-  'mcp.plane.label': 'MCP 行来源',
-  'mcp.plane.tab': '{label}（{n}）',
-  'mcp.plane.global': '全局',
-  'mcp.plane.agent': 'Agent',
-  'mcp.plane.global.eager': '全局行全部加载：它们由组合直接挂载，不受「动态插入」「延迟加载」影响，工具过滤对它们也不生效。',
+  'mcp.plane.global.eager': '全局行同样按上面的加载方式启动：选「全部加载」时由组合直接挂载；选「动态插入」「延迟加载」时启动不拉起，可用 mcp_load 按需加载（与其他会话共用同一条连接）。工具过滤对全局行不生效。',
+  'mcp.group.global': '全局（{n}）',
+  'mcp.group.agentAll': '全部 Agent 预设（{n}）',
+  'mcp.group.agent': 'Agent 预设 · {name}（{n}）',
   'mcp.empty.global': '还没有全局行',
-  'mcp.empty.agent': '还没有 Agent 预设里的 MCP 行',  'mcp.mode.title': 'MCP 加载方式',
+  'mcp.empty.agent': '还没有 Agent 预设里的 MCP 行',
+  'mcp.mode.title': 'MCP 加载方式',
   'mcp.mode.eager': '全部加载',
   'mcp.mode.eager.desc': '原始方式，会话开始时加载全部启动的MCP和工具进系统工具列表，不支持过滤某些工具',
   'mcp.mode.dynamic': '动态插入',
   'mcp.mode.dynamic.desc': '会话开始时不加载MCP，用到后插入到系统工具列表，会打断一次缓存前缀，参数调用更加稳定',
   'mcp.mode.lazy': '延迟加载',
   'mcp.mode.lazy.desc': '会话开始时不加载MCP，用到后插入到上下文，不会中断缓存前缀，消耗更少token',
+  'mcp.actionNeedsPreset': '先在右侧选一个 Agent 预设，新增的行才知道写到哪里。',
   'mcp.add': '新增 MCP',
   'mcp.import': '导入 Claude 配置',
   'mcp.import.title': '导入 Claude MCP 配置',
@@ -67,10 +70,15 @@ const zh = {
   'mcp.enable': '启用',
   'mcp.disable': '禁用',
   'mcp.loading': '正在读取……',
+  'mcp.error.unaddressable': '这一行没有可写入的 Loader id，请刷新设置页后重试。',
   'mcp.error': '读取失败',
   'mcp.retry': '重试',
   'mcp.scopeGlobal': '全局',
   'mcp.global.unavailable': '这个组合没有唯一的文件型 Include，全局平面没有可写入的文件。',
+  'mcp.readonly.composedRow': '这一行由组合或补丁层声明，不在你可写的 Include 文件里，所以设置页不能开关或编辑它。把这一行移动到你自己的 Include 文件后即可操作。',
+  'mcp.readonly.noInclude': '这个组合没有你自己可写的文件型 Include，全局行无法从设置页开关或编辑。请在自己的组合文件里用一个 Include 行声明这些全局行。',
+  'mcp.readonly.severalIncludes': '组合里有多个可写的文件型 Include，定不出这一行属于哪个文件，所以不能从设置页开关或编辑。',
+  'mcp.readonly.unreadableInclude': '唯一可写的 Include 文件读不出来，无法确认这一行由它声明，所以不能从设置页开关或编辑。',
   'mcp.scopePreset': '预设',
   'mcp.descriptionPlaceholder': '描述（模型可见）',
   'mcp.descriptionLabel': 'MCP 描述',
@@ -177,11 +185,10 @@ const en: Record<McpSectionKey, string> = {
   'mcp.filter.label': 'Filter by agent preset',
   'mcp.filter.all': 'All agent presets ({n})',
   'mcp.filter.option': '{name} ({n})',
-  'mcp.plane.label': 'MCP row source',
-  'mcp.plane.tab': '{label} ({n})',
-  'mcp.plane.global': 'Global',
-  'mcp.plane.agent': 'Agent',
-  'mcp.plane.global.eager': 'Global rows are always loaded: the composition mounts them directly, so "Dynamic insert" and "Lazy" do not apply to them and tool filters never take effect there.',
+  'mcp.plane.global.eager': 'Global rows follow the same loading mode: "Load all" mounts them from the composition; "Dynamic insert" and "Lazy" leave them unstarted at boot, and mcp_load starts one on demand on a connection shared with other sessions. Tool filters never take effect on a global row.',
+  'mcp.group.global': 'Global ({n})',
+  'mcp.group.agentAll': 'All agent presets ({n})',
+  'mcp.group.agent': 'Agent preset · {name} ({n})',
   'mcp.empty.global': 'No global rows yet',
   'mcp.empty.agent': 'No MCP rows in an agent preset yet',
   'mcp.mode.title': 'MCP loading',
@@ -191,6 +198,7 @@ const en: Record<McpSectionKey, string> = {
   'mcp.mode.dynamic.desc': 'MCP is not loaded at session start; it is inserted into the system tool list once needed. That breaks the cache prefix once, and argument calls stay more stable.',
   'mcp.mode.lazy': 'Lazy',
   'mcp.mode.lazy.desc': 'MCP is not loaded at session start; it is inserted into context once needed. The cache prefix survives, and it costs fewer tokens.',
+  'mcp.actionNeedsPreset': 'Pick one agent preset first, so the new row has a composition to go into.',
   'mcp.add': 'Add MCP',
   'mcp.import': 'Import Claude config',
   'mcp.import.title': 'Import Claude MCP configuration',
@@ -233,10 +241,15 @@ const en: Record<McpSectionKey, string> = {
   'mcp.enable': 'Enable',
   'mcp.disable': 'Disable',
   'mcp.loading': 'Loading…',
+  'mcp.error.unaddressable': 'This row has no Loader id to write; refresh the settings page and try again.',
   'mcp.error': 'Failed to read',
   'mcp.retry': 'Retry',
   'mcp.scopeGlobal': 'Global',
   'mcp.global.unavailable': 'This composition mounts no single file-backed Include, so the global plane has no file to write.',
+  'mcp.readonly.composedRow': 'The composition or a patch layer declares this row, not your own Include file, so the settings page cannot switch or edit it. Move the row into your own Include file to change it here.',
+  'mcp.readonly.noInclude': 'This composition mounts no file-backed Include of your own, so global rows cannot be switched or edited from the settings page. Declare them in an Include row inside your own composition file.',
+  'mcp.readonly.severalIncludes': 'Several writable file-backed Includes are mounted, so it is unclear which file owns this row; the settings page cannot switch or edit it.',
+  'mcp.readonly.unreadableInclude': 'The one writable Include file could not be read, so this row cannot be confirmed as one of its rows; the settings page cannot switch or edit it.',
   'mcp.scopePreset': 'Preset',
   'mcp.descriptionPlaceholder': 'Description (model-visible)',
   'mcp.descriptionLabel': 'MCP description',
@@ -336,3 +349,16 @@ const en: Record<McpSectionKey, string> = {
 }
 
 export { zh, en }
+
+/**
+ * The reason one read-only row reports, as a locale key.
+ *
+ * Both the row's tooltip and its editor's notice read this one map, so the two
+ * surfaces cannot explain the same refusal differently.
+ */
+export const MCP_READ_ONLY_REASON: Record<McpRowReadOnly, McpSectionKey> = {
+  'composed-row': 'mcp.readonly.composedRow',
+  'no-writable-include': 'mcp.readonly.noInclude',
+  'several-writable-includes': 'mcp.readonly.severalIncludes',
+  'unreadable-include': 'mcp.readonly.unreadableInclude',
+}

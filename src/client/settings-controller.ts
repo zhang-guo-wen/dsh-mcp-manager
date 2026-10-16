@@ -31,6 +31,7 @@ import type {
   McpConfigIssue,
   McpFiberPhase,
   McpMutationResult,
+  McpRowReadOnly,
   ScanClaudeMcpRequest,
   ScanClaudeMcpResult,
 } from '../types.ts'
@@ -82,6 +83,16 @@ export interface McpServer {
   presetId: string | undefined
   /** Effective enablement; `'conditional'` marks a `!!js` gate only a mount can resolve. */
   enabled: boolean | 'conditional'
+  /**
+   * Whether the settings page may write this row.
+   *
+   * False closes the row's switch and editor: a global row is written by
+   * patching the user's own Include file, so a row that file does not declare
+   * has nowhere to be written. {@link readOnly} names the reason to show.
+   */
+  writable: boolean
+  /** Why the row cannot be written, present exactly when {@link writable} is false. */
+  readOnly?: McpRowReadOnly
   /** Root-fiber phase when live, otherwise null. */
   fiberPhase: McpPhase
   /**
@@ -251,6 +262,10 @@ export function mapMcpServers(roster: ListMcpsResult): readonly McpServer[] {
       scope: 'global',
       presetId: undefined,
       enabled: entry.enabled,
+      // A page can outlive the Host it talks to: an older Host reports no
+      // per-row flag, and then the plane-level answer still governs.
+      writable: entry.writable !== false,
+      ...entry.readOnly === undefined ? {} : { readOnly: entry.readOnly },
       fiberPhase: entry.fiberPhase,
       ...entry.configIssue === undefined ? {} : { configIssue: entry.configIssue },
     })
@@ -263,6 +278,8 @@ export function mapMcpServers(roster: ListMcpsResult): readonly McpServer[] {
         scope: 'preset',
         presetId: preset.id,
         enabled: row.enabled,
+        writable: row.writable !== false,
+        ...row.readOnly === undefined ? {} : { readOnly: row.readOnly },
         fiberPhase: row.fiberPhase,
         ...row.configIssue === undefined ? {} : { configIssue: row.configIssue },
       })
