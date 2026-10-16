@@ -343,20 +343,45 @@ export function createMcpPreloadGate(
     // an unnamed entry is not yet a row this gate can identify.
     if (entry === undefined || entry.options.name !== MCP_CLIENT_MODULE) return
     if (entry.options.group === true) return
+    if (entry.options.id === undefined) return
     // The reader resolves the row's tree from whichever handle this caller has:
     // the published pair when the composition published one, the owning entry's
     // parent group otherwise.
-    if (mountReader.ownsTree?.(published.tree ?? entry.parent?.tree ?? entry.parent) !== true) return
+    const tree = (published.tree ?? entry.parent?.tree ?? entry.parent) as
+      | { filename?: unknown; write?: unknown }
+      | undefined
+    if (mountReader.ownsTree?.(tree) !== true) return
     const entryId = presetLeafId(entry.options.id)
     held.add(entryId)
     heldRowIds.add(entryId)
+    if (typeof tree?.filename === 'string' && typeof tree.write === 'function') {
+      // The row's tree persists to a file — a nested Include under a preset is
+      // still a preset tree to the ownership test — so the fiber must not
+      // self-dispose first: the Loader's self-dispose branch writes `disabled`
+      // back into the user's own file unless the entry already reads as
+      // disabled. Hold it the late-hold way instead: shadow first, dispose
+      // second (pitfall 42), declaration untouched, undo registered.
+      const row = entry as unknown as { disabled?: boolean | undefined }
+      const previousDisabled = Object.getOwnPropertyDescriptor(row, 'disabled')
+      Object.defineProperty(row, 'disabled', { configurable: true, enumerable: false, value: true })
+      preHeld.set(entryId, {
+        entry,
+        global: true,
+        undo: () => {
+          if (previousDisabled === undefined) delete row.disabled
+          else Object.defineProperty(row, 'disabled', previousDisabled)
+        },
+      })
+    }
     try {
       void (published.fiber as { dispose(): Promise<void> }).dispose()
     } catch (error) {
       warn(`mcp-manager: cannot hold MCP row "${entryId}": ${String(error)}`)
     }
     // Keep the declaration in step with the runtime hold, so a later update of
-    // this entry returns before importing the plugin again.
+    // this entry returns before importing the plugin again. A shadowed row is
+    // exempt: its options must stay exactly as the user wrote them.
+    if (preHeld.has(entryId)) return
     if (entry.options.disabled !== true) {
       void Promise.resolve(entry.update({ disabled: true })).catch(error => {
         warn(`mcp-manager: cannot mark MCP row "${entryId}" as held: ${String(error)}`)

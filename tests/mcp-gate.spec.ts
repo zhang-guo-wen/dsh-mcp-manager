@@ -132,6 +132,50 @@ describe('publication-point hold', () => {
     gate.dispose()
   })
 
+  it('shadows a file-backed row before disposal, so the hold cannot write to the user file', () => {
+    let publish!: (published: { fiber: unknown; entry?: GateEntry; tree?: unknown }) => void
+    const gate = createMcpPreloadGate(
+      ctx,
+      () => 'dynamic',
+      Object.assign(() => [], { ownsTree: (tree: unknown) => tree !== undefined }),
+      vi.fn(),
+      onPublish => { publish = onPublish; return () => {} },
+    )
+    const { fiber, entry, dispose, update, tree } = publication({})
+    // A file-backed Include: the Loader's self-dispose branch persists
+    // `disabled` into this very file unless the entry reads as disabled
+    // already, so the shadow must be in place before the fiber is disposed.
+    const fileTree = Object.assign(tree, { filename: 'mcps.yml', write: vi.fn() })
+    let disabledAtDispose: boolean | undefined
+    dispose.mockImplementation(async () => {
+      disabledAtDispose = (entry as unknown as { disabled: boolean }).disabled
+    })
+    publish({ fiber, entry, tree: fileTree })
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(disabledAtDispose).toBe(true)
+    // The declaration itself is never touched, so there is nothing to write.
+    expect(update).not.toHaveBeenCalled()
+    expect(fileTree.write).not.toHaveBeenCalled()
+    expect(gate.suppressedEntryIds()).toEqual(['row'])
+    gate.dispose()
+  })
+
+  it('leaves an entry the Loader has not identified yet alone', () => {
+    let publish!: (published: { fiber: unknown; entry?: GateEntry; tree?: unknown }) => void
+    const gate = createMcpPreloadGate(
+      ctx,
+      () => 'dynamic',
+      Object.assign(() => [], { ownsTree: (tree: unknown) => tree !== undefined }),
+      vi.fn(),
+      onPublish => { publish = onPublish; return () => {} },
+    )
+    const { fiber, entry, dispose, tree } = publication({ id: undefined })
+    publish({ fiber, entry, tree })
+    expect(dispose).not.toHaveBeenCalled()
+    expect(gate.suppressedEntryIds()).toEqual([])
+    gate.dispose()
+  })
+
   it('leaves eager mode, other plugins, and foreign trees alone', () => {
     for (const [mode, name, ownsTree] of [
       ['eager', MCP, true],
