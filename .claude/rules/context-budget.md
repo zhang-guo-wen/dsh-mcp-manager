@@ -1,3 +1,11 @@
+---
+paths:
+  - "src/mcp-inventory.ts"
+  - "src/mcp-optimize.ts"
+  - "src/mcp-catalog.ts"
+  - "src/client/McpOptimizeSection.tsx"
+---
+
 > 覆盖：系统提示里的按需清单(快照语义、预算与截断、模型可见原文)、`optimize` 的三层粒度(选择/列表/形态)、游标分页语义、目录缓存失效与 `mcp_search` 的连接纪律。何时读：改按需清单、`mcp_load`/`mcp_search` 的参数与返回，或改优化策略与目录缓存时。
 
 # 上下文预算：按需清单与优化策略

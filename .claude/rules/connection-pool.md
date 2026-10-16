@@ -1,3 +1,10 @@
+---
+paths:
+  - "src/mcp-pool.ts"
+  - "src/index.ts"
+  - "src/mcp-carrier.ts"
+---
+
 > 覆盖：宿主级常驻池的去重键、claim 引用计数、`mcp_unload` 三分支返回值、存活语义与凭据纪律，以及「按需工具注册不要放 preset 作用域」的实测坑。何时读：改池、常驻/释放语义、模式切换时的连接回收，或排查「重复起子进程 / 连接不释放」时。
 
 # 按需连接池(src/mcp-pool.ts)

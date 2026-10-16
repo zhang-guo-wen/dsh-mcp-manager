@@ -1,3 +1,9 @@
+---
+paths:
+  - "src/mcp-tool-filter.ts"
+  - "src/client/McpEditor.tsx"
+---
+
 > 覆盖：`tools` 规则的语法(allow/deny/通配)、过滤点、`global:` 规则为何不生效、`hidden` 计数，以及编辑弹窗「工具列表」tab 的可视化规则与它的连接时机。何时读：改工具过滤规则、过滤点，或改编辑弹窗的工具列表时。
 
 # 工具过滤与工具选择 UI

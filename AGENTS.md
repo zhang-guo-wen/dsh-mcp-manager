@@ -4,8 +4,12 @@
 (全局平面 + 各 agent preset)、决定允许的服务器何时进上下文、按行过滤工具，并提供设置页的「MCP 管理」区块。
 它不打包 `@deepseek-ai/*`，运行时从宿主 harness 解析这些包。
 
-**本文是导航页，不是全文。** 只放定位、命令、红线与索引；明细按主题放在包根 `rules/`（`package.json` 的
-`files` 不含 `rules`，所以它不进 npm 包），做到对应的事时再读那一份。原文每条规范性要求都落在本文或 `rules/` 里。
+**本文是导航页，不是全文。** 只放定位、命令、红线与索引；明细按主题放在包根 `.claude/rules/<topic>.md`，做到
+对应的事时再读那一份。机制：每个规则文件带非空 `paths:` frontmatter（项目根相对、正斜杠、gitignore 风格 glob），
+`dsh-claude-compat` 在 agent **读到匹配 glob 的文件之后**、于下一次请求把它注入（每会话至多一次）；也可以直接
+`read .claude/rules/<topic>.md` 主动加载。一次 `read` 会把命中的**所有**规则一起注入，所以大文件各挂窄 glob、
+不共用宽 glob。`.claude/` 不在 `package.json` 的 `files` 里，不进 npm 包。原文每条规范性要求都落在本文或
+`.claude/rules/` 里。
 
 ## 目录
 
@@ -47,7 +51,7 @@ npm run test:harness   # 先重建分发产物，再跑真实 Loader/registry/sc
   **`HANDOFF_ID` 必须始终等于 `package.json` 的包名**，不要通过修改它做缓存失效。
 - 本仓是 harness checkout 的**兄弟目录**而不是它的 workspace：裸 `vitest run` 会继承 harness 根配置，
   一个 spec 都收不到（`No test files found`）。
-- 构建细节、测试快照与隔离实例读数见 [rules/engineering-and-history.md](rules/engineering-and-history.md)。
+- 构建细节、测试快照与隔离实例读数见 [.claude/rules/testing-and-measurements.md](.claude/rules/testing-and-measurements.md)。
 
 ## 关键硬约束
 
@@ -72,27 +76,19 @@ npm run test:harness   # 先重建分发产物，再跑真实 Loader/registry/sc
 8. **凭据纪律**：不要把 spec / `env` / `headers` 的值打进日志、错误消息或诊断。
 9. **活设置不要靠重建注册**：除加载模式与 `search` 开关外，策略字段一律在调用点读活值。
 10. **没跑过的项不要写成已通过**；改加载、池或闸门行为后按 `docs/testing.md` 复跑并把新结果写回去。
-11. **44 条易崩清单**在 [rules/engineering-and-history.md](rules/engineering-and-history.md)，动相关代码前先扫一遍。
+11. **44 条易崩清单**在 [.claude/rules/pitfalls-and-decisions.md](.claude/rules/pitfalls-and-decisions.md)，动相关代码前先扫一遍。
 
 ## 详细规则
 
-- [rules/loading-and-gate.md](rules/loading-and-gate.md)：`loading` 三种模式、`carrierFor` 载体选择、
-  `native` 载体的注册契约与作用域语义（preset 行 vs `mcp_load`）、预加载闸门的三条抑制路径与归属判据、
-  模式切换的生效语义。改加载模式、挂载时机、闸门或载体，或排查「行不挂载 / 子进程被拉起 / 切回
-  `eager` 不恢复」时读。
-- [rules/connection-pool.md](rules/connection-pool.md)：宿主级常驻池的去重键、claim 引用计数、
-  `mcp_unload` 的三分支返回值、存活语义、凭据纪律，以及「注册不要放 preset 作用域」的实测坑。
-  改池、常驻/释放语义或模式切换时的连接回收时读。
-- [rules/tool-filtering.md](rules/tool-filtering.md)：`tools` 规则语法（allow/deny/通配）、四个实现约束、
-  `global:` 规则为何不生效、`hidden` 计数，以及编辑弹窗「工具列表」tab 的可视化规则与连接时机。
-  改过滤规则或工具选择 UI 时读。
-- [rules/context-budget.md](rules/context-budget.md)：系统提示里的按需清单（快照语义、预算与截断、
-  模型可见原文）、`optimize` 的三层粒度（选择/列表/形态）、游标分页语义、目录缓存失效、
-  `mcp_search` 的连接纪律。改清单、`mcp_load`/`mcp_search` 参数或优化策略时读。
-- [rules/settings-and-roster.md](rules/settings-and-roster.md)：设置命名空间与畸形值收敛、配置诊断、
-  名册读取（声明 vs live）、全局平面与行级可写判据、MCP 行编写的两条写入路径、设置页分区、
-  MCP JSON 推断规则、Claude 配置导入。改设置页、名册、写入路径或导入时读。
-- [rules/engineering-and-history.md](rules/engineering-and-history.md)：目录与文档分工、构建细节、
-  Cordis 插件契约、Typert Remote、类型检查、部署/安装/组合接线、发版流程、测试与隔离实例的测量数据
-  （含未覆盖项）、44 条易崩清单、D1–D17 决策表。动构建/打包/manifest/前后端通信契约/发版，
-  或需要历史读数与踩坑台账时读。
+明细在 `.claude/rules/`，每条自带 `paths:`（触发 glob）；编辑对应文件时会自动注入，也可直接 `read` 主动加载。
+
+- [loading-modes-and-carrier.md](.claude/rules/loading-modes-and-carrier.md)：`loading` 三模式、载体选择、`native` 注册契约与作用域语义、模式切换生效；改加载模式/载体/工具面时读。
+- [preload-gate.md](.claude/rules/preload-gate.md)：三条抑制路径、归属判据、`reconcile` 与「不写声明」红线；改闸门或排查「启动被拉起 / 切回 `eager` 不恢复」时读。
+- [connection-pool.md](.claude/rules/connection-pool.md)：常驻池去重键、claim 引用计数、`mcp_unload` 三分支、存活语义与凭据纪律；改池或释放语义时读。
+- [tool-filtering.md](.claude/rules/tool-filtering.md)：`tools` 规则语法、四个实现约束、`global:` 为何不生效、`hidden` 计数与编辑弹窗工具列表；改过滤或工具选择 UI 时读。
+- [context-budget.md](.claude/rules/context-budget.md)：按需清单（预算/截断/原文）、`optimize` 三层粒度、游标分页、目录缓存、`mcp_search` 纪律；改清单或优化策略时读。
+- [settings-and-roster.md](.claude/rules/settings-and-roster.md)：设置命名空间与收敛、两条行写入路径、配置诊断、名册读取与可写判据；改设置/写入/名册时读。
+- [settings-ui-and-import.md](.claude/rules/settings-ui-and-import.md)：设置页分区与行级只读、MCP JSON 推断、Claude 配置导入；改设置页交互或导入时读。
+- [build-and-contract.md](.claude/rules/build-and-contract.md)：目录与文档分工、构建细节、Cordis 契约、Typert Remote、部署/安装/接线、发版；动构建或通信契约时读。
+- [testing-and-measurements.md](.claude/rules/testing-and-measurements.md)：测试命令与覆盖矩阵、隔离实例测量数据与未覆盖项；跑测试或更新验证记录时读。
+- [pitfalls-and-decisions.md](.claude/rules/pitfalls-and-decisions.md)：44 条易崩清单与 D1–D17 决策表；动相关代码前扫一遍或查决策理由时读。
