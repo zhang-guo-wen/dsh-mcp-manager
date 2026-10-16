@@ -29,6 +29,7 @@ kind: "package-reference"
 | D13 | 资源仓库 MCP 经内存接口交给管理器 | 保留资源管理器的数据所有权，同时让加载模式统一生效 |
 | D14 | 预设读取经公开 Loader/scope 接口，按代次保存声明 | 不依赖已移除导出，不等待激活，不把旧会话改成新声明 |
 | D15 | 配置不完整是独立状态，与加载模式分开 | 「按需可用」是模式的结果，不是用户要处理的状态 |
+| D16 | 优化策略是独立设置页，粒度分三层 | 规范只给分页与缓存提示，检索/分页/只带名称都得宿主侧做 |
 
 ### D1 允许与进上下文分离
 
@@ -216,6 +217,25 @@ kind: "package-reference"
   - 完全放开保存不做检查，或反过来把未解析变量也挡在保存前。前者让配错的行静默存在，后者让用户在浏览器里永远存不下一行等着 Host 填变量的配置。
 - **实现**：[`src/mcp-diagnostics.ts`](../src/mcp-diagnostics.ts)（纯函数，环境由参数传入）、[`src/mcp-variable-refs.ts`](../src/mcp-variable-refs.ts)（不引用环境的扫描规则，可进浏览器包）、[`src/mcp-gate.ts`](../src/mcp-gate.ts)、[`src/mcp-remote.ts`](../src/mcp-remote.ts) 的 `assertRunnableConfig`、[`src/client/McpSection.tsx`](../src/client/McpSection.tsx) 的 `statusOf`。
 - **测试**：`tests/mcp-diagnostics.spec.ts` 覆盖三类判定与两种输入形状（Claude spec / 归一化 config）；`tests/mcp-gate.spec.ts` 断言 `eager` 下配置不完整的行仍被摘掉。
+
+### D16 优化策略独立成页，粒度分三层（2026-10-15）
+
+- **结论**：上下文预算由一个独立的用户设置页（设置 → MCP 优化）控制，字段全部存在 `mcp-manager` 命名空间的 `optimize` 开映射里，由 `parseMcpOptimizeFlags` 在读点收敛。粒度分三层，互不替代：
+  1. **选择**：`mcp_load` 的 `query`（词法匹配，无 embedding）与 `tool`（按名取一个）收窄本次会话**能调用**的集合；载体随之从 `mount` 变 `native`（harness 挂载无法只注册一部分）。
+  2. **列表**：`cursor` / `limit` 只分页**结果**，不改变会话能调用的工具（分页是上下文预算，不是能力开关）。默认 `pageSize` 10。
+  3. **形态**：`namesOnly` 默认让 `mcp_load` 只带名称与描述；按名字要一个工具（`tool`）时默认 `full`，因为那正是要参数的时机。
+  另有 `mcp_search`（规范称之为 Layer 1 目录）、目录缓存（`catalogTtlMs`，同时尊重服务器自己给的 `ttlMs`、`tools/list_changed` 立即失效）、`maxTools` 采集上限，以及注解策略（`annotations` / `hideDestructive`）。
+- **理由**：规范侧能用的只有 `tools/list` 的游标分页（**必须**把游标当不透明字符串、空串是合法游标、只有缺 `nextCursor` 才是结束）和 2026-07-28 新增的 `ttlMs` / `cacheScope`（`CacheableResult`，收到通知即失效）；**没有** `query` 参数，也没有「只列名称」的线上形态（`inputSchema` 必填）。官方《Client Best Practices》明确把渐进式发现放在宿主侧（`search_tools` → `get_tool_details` → 执行），并把「提供多档详情」列为实现建议。本插件因此在这一层实现，而不是发明协议字段。
+- **命名的对应关系**：`mcp_search` 即 Layer 1（目录：名称 + 一行描述），`mcp_load` 带 `tool` 即 Layer 2（Inspect：单个工具的完整 schema），`mcp_call` / 原生工具即 Layer 3。插件不用单独注册 `get_tool_details`，省一个常驻工具定义。
+- **被否决**：
+  - **给 `tools/list` 加 `query` 参数**：规范没有这个字段，写了也只有自己的客户端认。
+  - **磁盘持久化目录**：冷启动就能检索很诱人，但需要一个本插件并不拥有的数据目录，而且过期目录比空目录更难解释。当前只做进程内缓存。
+  - **检索默认允许连接未缓存服务器**：20 台服务器的部署会因为模型问一句就 spawn 20 个子进程。默认关闭，用 `searchIndex` 显式打开（并发 3、单台 8 秒）。
+  - **把分页做成能力开关**（只加载当前页的工具）：模型的下一句可能就要第 11 个工具，而它不知道要翻页；用 `query` 精确选择才是根治，分页只用来省上下文。
+  - **让 `hideDestructive` 追溯已加载的服务器**：加载后换一套注册会让模型手上有名字、实际不可调；策略在下一次加载生效，与工具过滤同一条契约。
+- **代价**：`mcp_load` 的结果多了 `total` / `shown` / `loaded` / `truncated` / `nextCursor` 五个字段，渲染文本变长；检索只覆盖「曾经列出过」的服务器，未索引的服务器只能列出名字让模型先加载。
+- **实现**：[`src/mcp-optimize.ts`](../src/mcp-optimize.ts)（纯策略：收敛、匹配、分页、注解）、[`src/mcp-catalog.ts`](../src/mcp-catalog.ts)（有界 TTL 目录）、[`src/lazy-mcp.ts`](../src/lazy-mcp.ts)（`listAllTools` 游标遍历、`mcp_load` / `mcp_search`）、[`src/client/McpOptimizeSection.tsx`](../src/client/McpOptimizeSection.tsx)（设置页）。
+- **测试**：`tests/mcp-optimize.spec.ts`、`tests/mcp-catalog.spec.ts`、`tests/mcp-discovery.spec.ts`；`tests/mcp-load.spec.ts` 用被 mock 的 MCP SDK 驱动真实的 `registerMcpTools`，覆盖分页、收窄、names-only、注解策略、检索与 `tools/list_changed` 失效。
 
 ## 先例：Claude 的 MCP 延迟加载
 

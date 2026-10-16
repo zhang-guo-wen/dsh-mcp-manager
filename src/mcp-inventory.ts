@@ -33,15 +33,25 @@ export const MAX_DESCRIPTION_CHARS = 80
 
 /**
  * The usage line for one on-demand mode.
+ *
+ * It has to name the tools that actually exist in that mode: `mcp_search` is
+ * only registered while the search setting is on, and `mcp_call` only exists
+ * under `lazy`, so the model is never sent after a tool it cannot call.
  * @param mode - the on-demand loading mode the instruction must match.
+ * @param search - whether this deployment also registers `mcp_search`.
  * @returns one line naming the tools that actually exist in that mode.
  */
-function instruction(mode: 'dynamic' | 'lazy'): string {
+function instruction(mode: 'dynamic' | 'lazy', search: boolean): string {
+  const find = search
+    ? 'Use `mcp_search` to find tools by what they do without loading a server, and '
+    : ''
   return mode === 'lazy'
-    ? 'MCP servers available on demand: call `mcp_load` with one of these names to list that server\'s '
-      + 'tools, `mcp_call` to invoke one, and `mcp_unload` with the same name to release it again.'
-    : 'MCP servers available on demand: call `mcp_load` with one of these names to add that server\'s '
-      + 'tools to this session, and `mcp_unload` with the same name to release it again.'
+    ? `MCP servers available on demand: ${find}call \`mcp_load\` with one of these names to list that server's `
+      + 'tools — pass `query` to load only what matches, or `tool` for one tool and its argument schema — then '
+      + '`mcp_call` to invoke one, and `mcp_unload` with the same name to release it again.'
+    : `MCP servers available on demand: ${find}call \`mcp_load\` with one of these names to add that server's `
+      + 'tools to this session — pass `query` to add only what matches, or `tool` for one tool and its argument '
+      + 'schema — and `mcp_unload` with the same name to release it again.'
 }
 
 /**
@@ -64,12 +74,17 @@ function clipDescription(text: string): string {
  * would offer the model a choice it cannot make.
  * @param rows - every server this deployment allows a session to load.
  * @param mode - the on-demand mode whose tools the instruction names.
+ * @param search - whether the deployment also registers `mcp_search`.
  * @returns the section text, or an empty string when nothing may be loaded,
  *   which contributes no section at all.
  */
-export function renderMcpInventory(rows: readonly McpInventoryRow[], mode: 'dynamic' | 'lazy'): string {
+export function renderMcpInventory(
+  rows: readonly McpInventoryRow[],
+  mode: 'dynamic' | 'lazy',
+  search = false,
+): string {
   if (rows.length === 0) return ''
-  const head = instruction(mode)
+  const head = instruction(mode, search)
   const lines: string[] = [head]
   const seen = new Set<string>()
   let used = head.length

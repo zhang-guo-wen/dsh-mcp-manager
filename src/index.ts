@@ -14,6 +14,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { McpManager } from './mcp-remote.ts'
 import { parseMcpLoadingMode, registerMcpTools, resolveMcpClient } from './lazy-mcp.ts'
+import type { LazyTool } from './mcp-carrier.ts'
+import { McpCatalog } from './mcp-catalog.ts'
+import {
+  mcpRegistrationKey,
+  parseMcpOptimizeFlags,
+  type McpOptimizeFlags,
+} from './mcp-optimize.ts'
 import { ExternalMcpRegistry, type ScopeLookup } from './external-mcp.ts'
 import { createMcpPreloadGate, MCP_ROW_EVENTS } from './mcp-gate.ts'
 import { createPresetMountReader, type PresetScopeLookup } from './preset-mounts.ts'
@@ -39,7 +46,33 @@ export { scanClaudeMcp } from './claude-import.ts'
 export { carrierFor } from './mcp-carrier.ts'
 export type { McpCarrier } from './mcp-carrier.ts'
 export { MCP_LOADING_MODES, parseMcpLoadingMode, registerMcpTools } from './lazy-mcp.ts'
-export type { McpLoadingMode } from './lazy-mcp.ts'
+export type { McpLoadingMode, McpRowReaders, McpToolRegistration } from './lazy-mcp.ts'
+export { connectLazy, listAllTools } from './lazy-mcp.ts'
+export type { McpDiscovery } from './lazy-mcp.ts'
+export { McpCatalog } from './mcp-catalog.ts'
+export type { McpCatalogEntry, McpCatalogRecord, McpCatalogStat, CatalogTool } from './mcp-catalog.ts'
+export {
+  annotationSummary,
+  applyAnnotationPolicy,
+  decodeToolCursor,
+  encodeToolCursor,
+  matchTools,
+  mcpRegistrationKey,
+  MCP_CATALOG_TTL_RANGE,
+  MCP_MAX_TOOLS_RANGE,
+  MCP_OPTIMIZE_DEFAULTS,
+  MCP_PAGE_SIZE_RANGE,
+  paginateTools,
+  parseMcpOptimizeFlags,
+  toolMatchesQuery,
+} from './mcp-optimize.ts'
+export type {
+  McpOptimizeFlags,
+  McpPolicySelection,
+  McpToolAnnotations,
+  McpToolPage,
+  PolicyTool,
+} from './mcp-optimize.ts'
 export type { ExternalMcpDefinition } from './external-mcp.ts'
 export { admits, filterHidesAnything, filterMcpTools, parseMcpToolFilter, toolRuleEntries } from './mcp-tool-filter.ts'
 export type { McpToolFilter, McpToolSelection } from './mcp-tool-filter.ts'
@@ -78,6 +111,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // every request. The gate holds the composed rows to that second answer, and
   // the tool set is re-registered with the new mode on every commit.
   let mcpLoading = parseMcpLoadingMode(readSettings().loading)
+  // What each server published last time it was listed. It is what lets a
+  // search answer without starting a process, and what a `tools/list_changed`
+  // invalidates; one catalogue serves every registration generation, so a mode
+  // change does not throw away what was already discovered.
+  const catalog = new McpCatalog<LazyTool>()
   const loader = ctx.get('loader') as { internal?: { import(spec: string, base: string, options: object): Promise<unknown> } }
   if (!loader.internal) throw new Error('mcp-manager: Harness module loader is unavailable')
   const scopes = await loader.internal.import('@deepseek-ai/dsh-scope', ctx.baseUrl ?? import.meta.url, {}) as ScopeLookup & PresetScopeLookup
@@ -95,6 +133,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const readers = {
     filterFor: (key: string): McpToolFilter => readToolFilter(key),
     descriptionFor: (key: string): string | undefined => readSettings().descriptions[key],
+    // Read at every load, every search, and every `tools/list_changed` re-sync,
+    // so a committed switch applies from the next call on.
+    optimize: (): McpOptimizeFlags => parseMcpOptimizeFlags(readSettings().optimize),
   }
   const external = new ExternalMcpRegistry(
     () => mcpLoading,
@@ -108,15 +149,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     },
     async () => {
       await mcpTools.dispose()
-      mcpTools = registerMcpTools(ctx, mcpLoading, gate, readers, external)
+      mcpTools = registerMcpTools(ctx, mcpLoading, gate, readers, external, catalog)
       await mcpTools.refresh()
     },
     scopes,
   )
   // Register the Remote service before any inventory refresh. Preset rows may
   // depend on it, and activation-sensitive registry diagnostics are never read.
-  new McpManager(ctx, gate, mountReader, external, () => mcpLoading)
-  let mcpTools = registerMcpTools(ctx, mcpLoading, gate, readers, external)
+  new McpManager(ctx, gate, mountReader, external, () => mcpLoading, catalog)
+  let mcpTools = registerMcpTools(ctx, mcpLoading, gate, readers, external, catalog)
+  /** The registered tool set's identity: what a re-registration is keyed on. */
+  let registrationKey = `${mcpLoading}|${mcpRegistrationKey(readers.optimize())}`
   ctx.effect(() => async () => { await external.dispose(async () => { await mcpTools.dispose(); gate.dispose() }) }, 'mcp-manager: mcp tools')
   // The gate's answer is what the inventory lists, so every reconcile is
   // followed by a refresh: the prompt section is served from a snapshot and
@@ -196,20 +239,28 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       + 'author the row inside an agent preset to filter it.',
     )
   }
-  // A committed live field is the only way the mode or a filter changes at
-  // runtime; the Loader commits every volatile reference before it fires.
+  // A committed live field is the only way the mode, a filter, or an
+  // optimization switch changes at runtime; the Loader commits every volatile
+  // reference before it fires.
   const commit = async (): Promise<void> => {
     const next = readSettings()
     const mode = parseMcpLoadingMode(next.loading)
-    if (mode !== mcpLoading) {
+    const policy = parseMcpOptimizeFlags(next.optimize)
+    // Most of the policy is read live by the running registration. The one part
+    // that cannot be is whether `mcp_search` exists at all — a registered tool
+    // set is what the request prefix carries — so the whole registration is
+    // rebuilt when that answer changes, exactly as it is for the loading mode.
+    const nextKey = `${mode}|${mcpRegistrationKey(policy)}`
+    if (nextKey !== registrationKey) {
       await external.transition(
         async () => { await mcpTools.dispose(); mcpLoading = mode },
         async () => {
-          mcpTools = registerMcpTools(ctx, mode, gate, readers, external)
+          mcpTools = registerMcpTools(ctx, mode, gate, readers, external, catalog)
           await gate.reconcile()
           await mcpTools.refresh()
         },
       )
+      registrationKey = nextKey
     }
     warnFiltersWithoutEffect(next)
   }

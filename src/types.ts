@@ -206,6 +206,44 @@ export interface McpGateStateResult {
   readonly suppressed: readonly string[]
 }
 
+/** Request for the discovery catalogue's current state; the catalogue is host-wide. */
+export interface McpCatalogStateRequest {
+  /** Placeholder field: the catalogue is host-wide, so the request carries none. */
+  readonly unused?: boolean
+}
+
+/** One server the discovery catalogue remembers. */
+export interface McpCatalogEntryView {
+  /** The settings-page row key the tools were recorded under. */
+  readonly key: string
+  /** How many tools were recorded for it. */
+  readonly tools: number
+  /** How long ago the record was made. */
+  readonly ageMs: number
+  /** Whether the collection cap cut the server's listing short. */
+  readonly truncated: boolean
+}
+
+/** What the discovery catalogue currently remembers. */
+export interface McpCatalogStateResult {
+  /** One row per remembered server, oldest first. */
+  readonly entries: readonly McpCatalogEntryView[]
+  /** How many entries the whole catalogue holds. */
+  readonly total: number
+}
+
+/** Request to forget every recorded discovery result. */
+export interface ClearMcpCatalogRequest {
+  /** Placeholder field: the catalogue is host-wide, so the request carries none. */
+  readonly unused?: boolean
+}
+
+/** What clearing the discovery catalogue dropped. */
+export interface ClearMcpCatalogResult {
+  /** How many server records were dropped. */
+  readonly cleared: number
+}
+
 /** Root-fiber lifecycle phase of one MCP row, or null when it owns no fiber. */
 export type McpFiberPhase = 'pending' | 'loading' | 'active' | 'failed' | 'unloading' | null
 

@@ -12,7 +12,8 @@ describe('renderMcpInventory', () => {
   it('lists every allowed server', () => {
     expect(renderMcpInventory(rows('github', 'yunxiao'), 'dynamic')).toBe(
       'MCP servers available on demand: call `mcp_load` with one of these names to add that server\'s tools to '
-      + 'this session, and `mcp_unload` with the same name to release it again.\n'
+      + 'this session — pass `query` to add only what matches, or `tool` for one tool and its argument schema — '
+      + 'and `mcp_unload` with the same name to release it again.\n'
       + '- github\n- yunxiao',
     )
   })
@@ -27,14 +28,27 @@ describe('renderMcpInventory', () => {
     expect(lazy).toContain('`mcp_unload`')
   })
 
+  it('advertises mcp_search only when the deployment registers it', () => {
+    expect(renderMcpInventory(rows('a'), 'dynamic')).not.toContain('`mcp_search`')
+    expect(renderMcpInventory(rows('a'), 'dynamic', true)).toContain('`mcp_search`')
+    expect(renderMcpInventory(rows('a'), 'lazy', true)).toContain('`mcp_search`')
+  })
+
+  it('tells the model how to narrow a load in both modes', () => {
+    expect(renderMcpInventory(rows('a'), 'dynamic')).toContain('`query`')
+    expect(renderMcpInventory(rows('a'), 'lazy')).toContain('`tool`')
+  })
+
   it('appends the row description after an em dash', () => {
     expect(renderMcpInventory([{ name: 'yunxiao', description: '云效：任务与流水线' }], 'dynamic'))
       .toContain('- yunxiao — 云效：任务与流水线')
   })
 
   it('leaves out an empty description instead of a dangling dash', () => {
-    expect(renderMcpInventory([{ name: 'bare', description: '   ' }], 'dynamic')).toContain('\n- bare')
-    expect(renderMcpInventory([{ name: 'bare', description: '   ' }], 'dynamic')).not.toContain('—')
+    const text = renderMcpInventory([{ name: 'bare', description: '   ' }], 'dynamic')
+    expect(text).toContain('\n- bare')
+    // The row line itself carries no dash; the instruction line above it may.
+    expect(text.split('\n').filter(line => line.startsWith('- '))).toEqual(['- bare'])
   })
 
   it('collapses a multi-line description to one line', () => {
@@ -72,8 +86,9 @@ describe('renderMcpInventory', () => {
       { name: 'playwright', description: 'playwright' },
       { name: 'context7', description: 'context7' },
     ], 'lazy')).toBe(
-      'MCP servers available on demand: call `mcp_load` with one of these names to list that server\'s tools, '
-      + '`mcp_call` to invoke one, and `mcp_unload` with the same name to release it again.\n'
+      'MCP servers available on demand: call `mcp_load` with one of these names to list that server\'s tools — '
+      + 'pass `query` to load only what matches, or `tool` for one tool and its argument schema — then `mcp_call` '
+      + 'to invoke one, and `mcp_unload` with the same name to release it again.\n'
       + '- alibaba-devops-mcp — 云效MCP，任务管理工具，可以操作\n'
       + '- kingdee — kingdee\n'
       + '- playwright — playwright\n'

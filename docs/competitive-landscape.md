@@ -119,11 +119,8 @@ lilyblessing 记录过一次事故：**运行期写 preset 文件会触发 stand
 
 ### P1 —— 核心赛道（1–2 周）
 
-4. **检索式 `mcp_load`（最高优先级）。**
-   证据：hyqhyq3 的三工具 broker（BM25 + NFKC + CJK + 别名 + 编辑距离，默认 10 / 上限 50）、
-   labmimors 的两工具固定 1,114 B、ben7am1n 纯关键词、leaforbook 的路由工具——四家都证明"按查询只给出命中的工具"可行且有效。
-   落点：给 `mcp_load` 加可选 `query`，复用 [`src/mcp-tool-filter.ts`](../src/mcp-tool-filter.ts) 的白名单机制与
-   [`src/lazy-mcp.ts`](../src/lazy-mcp.ts) 的结果渲染，只返回命中的 top-N 工具及其 schema。检索保持离网、无 embedding。
+4. ~~检索式 `mcp_load`~~ —— **已完成（2026-10-15）**：注册 `mcp_search`（Layer 1 目录：关键词匹配名称/标题/描述，离网、无 embedding，命中按相关性排序），`mcp_load` 加 `query`（只加载命中）与 `tool`（按名取一个工具及其 schema），`cursor` / `limit` 分页，`namesOnly` 默认只带名称与描述。落点：[`src/mcp-optimize.ts`](../src/mcp-optimize.ts)、[`src/lazy-mcp.ts`](../src/lazy-mcp.ts)、设置页 [`src/client/McpOptimizeSection.tsx`](../src/client/McpOptimizeSection.tsx)，决策见 [design-decisions.md](design-decisions.md) D16。
+   仍需做：检索默认只看已缓存服务器（`searchIndex` 才连接），未做 10,000 工具规模的上限调优。
 5. **回合末 schema 回收 + 连接保温。**
    证据：leaforbook `releaseOnTurnEnd` + `warmIdleMs`（默认 5 分钟）是当前最完整的形态；
    ben7am1n 与 lilyblessing 也各有 5 分钟 / 30 秒的回收。我们的 `lazy` 一旦加载，schema 就留在会话历史里收不回。
@@ -136,6 +133,8 @@ lilyblessing 记录过一次事故：**运行期写 preset 文件会触发 stand
 7. **目录磁盘缓存 + 闲置回收。**
    证据：wings1848 与 ben7am1n 的元数据落盘让搜索不必启动进程；labmimors 的 `catalogTtl` / `idleDisconnect` 是现成参数表。
    落点：缓存 `listTools` 结果（含 schema），供编辑弹窗复用；给已加载连接加空闲超时。
+   **部分完成（2026-10-15）**：进程内目录缓存（TTL + 服务器 `ttlMs` + `tools/list_changed` 失效）已落地，检索命中缓存时确实不启动进程；
+   仍未做：落盘（冷启动即可检索）与已加载连接的空闲回收。
 8. **量化并公布 token 收益，同时测出 `dynamic` 的前缀代价。**
    证据：leaforbook 给出 95.6% / 94.4% / 88.8%（合计 9,727 → 581）；wings1848 给出 5,313 → 381；
    labmimors 给出 1,114 B vs 647,962 B；lilyblessing 量化了缓存 miss 的 5–12.5 倍费率；

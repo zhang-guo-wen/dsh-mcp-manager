@@ -24,6 +24,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import { McpSection } from './McpSection.tsx'
+import { McpOptimizeSection } from './McpOptimizeSection.tsx'
 import { en, NS, zh, type McpSectionKey } from './locales.ts'
 import {
   MCP_SETTINGS_NS,
@@ -39,6 +40,8 @@ import type {
   AddMcpRequest,
   AddMcpsRequest,
   AddMcpsResult,
+  ClearMcpCatalogRequest,
+  ClearMcpCatalogResult,
   DescribeMcpRequest,
   DescribeMcpResult,
   DisableMcpRequest,
@@ -47,6 +50,8 @@ import type {
   ListMcpToolsResult,
   ListMcpsRequest,
   ListMcpsResult,
+  McpCatalogStateRequest,
+  McpCatalogStateResult,
   McpGateStateRequest,
   McpGateStateResult,
   McpMutationResult,
@@ -55,6 +60,7 @@ import type {
 } from '../types.ts'
 
 export type { McpSectionProps } from './McpSection.tsx'
+export type { McpOptimizeSectionProps } from './McpOptimizeSection.tsx'
 export type { McpSectionFace, McpSectionState, McpServer } from './settings-controller.ts'
 export { NS } from './locales.ts'
 
@@ -78,6 +84,8 @@ interface McpManagerNamespace {
   listMcps(request: ListMcpsRequest): Promise<RemoteResult<ListMcpsResult>>
   listMcpTools(request: ListMcpToolsRequest): Promise<RemoteResult<ListMcpToolsResult>>
   gateState(request: McpGateStateRequest): Promise<RemoteResult<McpGateStateResult>>
+  catalogState(request: McpCatalogStateRequest): Promise<RemoteResult<McpCatalogStateResult>>
+  clearCatalog(request: ClearMcpCatalogRequest): Promise<RemoteResult<ClearMcpCatalogResult>>
   scanClaudeMcp(request: ScanClaudeMcpRequest): Promise<RemoteResult<ScanClaudeMcpResult>>
 }
 
@@ -127,6 +135,8 @@ export async function apply(ctx: Context): Promise<void> {
     describeMcp: request => unwrapRemote(() => mcpMgr().describeMcp(request)),
     listMcpTools: request => unwrapRemote(() => mcpMgr().listMcpTools(request)),
     scanClaudeMcp: request => unwrapRemote(() => mcpMgr().scanClaudeMcp(request)),
+    catalogState: request => unwrapRemote(() => mcpMgr().catalogState(request)),
+    clearCatalog: request => unwrapRemote(() => mcpMgr().clearCatalog(request)),
   }
   const presets = async (): Promise<readonly McpPresetOption[]> => {
     const roster = await readRoster()
@@ -152,4 +162,15 @@ export async function apply(ctx: Context): Promise<void> {
     locale: NS,
     inject: () => controller.inject(),
   }, McpSection))
+  // The optimization policy gets its own page rather than a tab on the roster:
+  // it is a different question (how much of a tool list enters context) from
+  // which servers exist, and it applies to every plane at once.
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'mcp-manager-optimize',
+    order: 15,
+    label: () => t('opt.nav'),
+    locale: NS,
+    inject: () => controller.inject(),
+  }, McpOptimizeSection))
 }

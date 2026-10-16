@@ -23,6 +23,7 @@ import type { McpToolDefinitionOptions } from '@deepseek-ai/dsh-mcp-client'
 import type { McpLoadingMode } from './lazy-mcp.ts'
 import { filterHidesAnything, type McpToolFilter } from './mcp-tool-filter.ts'
 import { mcpToolPublicName } from './mcp-tool-name.ts'
+import type { McpToolAnnotations } from './mcp-optimize.ts'
 
 /** How one loaded row's tools reach the model once a session loads it. */
 export type McpCarrier = 'mount' | 'native' | 'proxy'
@@ -30,17 +31,36 @@ export type McpCarrier = 'mount' | 'native' | 'proxy'
 /** One MCP tool as the SDK client reports it. */
 export interface LazyTool {
   readonly name: string
+  /** Display name the spec added in 2025-06-18; a listing prefers it over the raw name. */
+  readonly title?: string
   readonly description?: string
   readonly inputSchema?: unknown
   /** Advertised structured-output schema, forwarded to the definition adapter. */
   readonly outputSchema?: unknown
+  /** Spec annotations; policy input for the destructive-tool setting. */
+  readonly annotations?: McpToolAnnotations
   /** Upstream execution metadata; a `required` task support is unsupported here. */
   readonly execution?: { readonly taskSupport?: string }
 }
 
 /** The subset of the MCP SDK client the carriers use. */
 export interface LazyClient {
-  listTools(): Promise<{ tools?: readonly LazyTool[] }>
+  /**
+   * List one page of the server's tools.
+   *
+   * The spec makes `cursor` opaque, allows the empty string as a valid cursor,
+   * and defines end-of-list as "no `nextCursor`" — never as a falsey cursor. The
+   * optional `ttlMs` is the server's own freshness hint for the page
+   * (`CacheableResult`, spec 2026-07-28), which the catalogue honours when it is
+   * present.
+   * @param params - the page cursor, or undefined for the first page.
+   * @returns that page's tools and the cursor of the page after it.
+   */
+  listTools(params?: { cursor?: string }): Promise<{
+    tools?: readonly LazyTool[]
+    nextCursor?: string
+    ttlMs?: number
+  }>
   /**
    * Call one upstream tool.
    * @param request - upstream tool name and arguments.
@@ -77,17 +97,32 @@ export type McpToolAdapter = (ctx: Context, options: McpToolDefinitionOptions) =
  * The mode owns this decision: it is what decides whether the model argues from
  * real tool schemas — and pays a prefix invalidation per load — or calls
  * through the proxy and pays arguments copied out of a result. A row's filter
- * only narrows the visible set inside that decision.
+ * and a load-time query only narrow the visible set inside that decision; a
+ * narrowed load therefore takes the `native` carrier even without a row filter,
+ * because the harness mount registers every discovered tool and has no way to
+ * hold the rest back.
  * @param mode - the loading mode a session committed to.
  * @param filter - the row's resolved rules.
- * @returns `proxy` under `lazy`; under `dynamic`, `native` when the rules hide
- *   anything and `mount` when they hide nothing; `undefined` under `eager`,
- *   which mounts every allowed row and registers no on-demand tool at all.
+ * @param narrowed - whether the load itself asks for a subset of the server's
+ *   tools (`query`/`tool` on `mcp_load`).
+ * @returns `proxy` under `lazy`; under `dynamic`, `native` when the rules or the
+ *   load narrow anything, and `mount` when nothing does; `undefined` under
+ *   `eager`, which mounts every allowed row and registers no on-demand tool.
  */
-export function carrierFor(mode: McpLoadingMode, filter: McpToolFilter): McpCarrier | undefined {
+export function carrierFor(mode: McpLoadingMode, filter: McpToolFilter, narrowed = false): McpCarrier | undefined {
   if (mode === 'eager') return undefined
   if (mode === 'lazy') return 'proxy'
-  return filterHidesAnything(filter) ? 'native' : 'mount'
+  return narrowsTools(filter, narrowed) ? 'native' : 'mount'
+}
+
+/**
+ * Whether a load's visible set is narrower than everything the server publishes.
+ * @param filter - the row's resolved rules.
+ * @param narrowed - whether the load asked for a subset by query or tool name.
+ * @returns true when the carrier must build individual definitions.
+ */
+function narrowsTools(filter: McpToolFilter, narrowed: boolean): boolean {
+  return narrowed || filterHidesAnything(filter)
 }
 
 /**

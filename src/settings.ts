@@ -39,6 +39,13 @@ export interface McpSettingsFlags {
    * callable.
    */
   tools: Record<string, unknown>
+  /**
+   * The context-budget policy: search, paging, names-only listings, catalogue
+   * TTL, the collection cap, and the annotation policy. Kept as one open map so
+   * a malformed entry converges at read time (`parseMcpOptimizeFlags`) instead
+   * of rejecting the namespace; see `src/mcp-optimize.ts` for every field.
+   */
+  optimize: Record<string, unknown>
 }
 
 /** The same fields as live configuration. */
@@ -49,6 +56,8 @@ export interface Config {
   descriptions: Volatile<Record<string, string>>
   /** Per-row tool filters, keyed by row. */
   tools: Volatile<Record<string, unknown>>
+  /** Optimization policy, read fresh at every load and search. */
+  optimize: Volatile<Record<string, unknown>>
 }
 
 /** Schema served to settings clients for this namespace.
@@ -64,6 +73,11 @@ export const Config = z.object({
   // malformed entry must fail that one row's filter at read time rather than
   // rejecting the whole namespace.
   tools: z.dict(z.any()).default({}).volatile(),
+  // Same reason again: the optimization policy is a hand-editable map whose
+  // every field converges to its default at read time (`parseMcpOptimizeFlags`),
+  // so a typo in one switch cannot roll the whole namespace back and silently
+  // drop the user's loading mode, descriptions, and rules with it.
+  optimize: z.dict(z.any()).default({}).volatile(),
 })
 
 /** Composition-layer defaults accepted under the row's `config:`. */
@@ -88,5 +102,6 @@ export function readMcpSettings(config: Config): McpSettingsSource {
     loading: config.loading.get(),
     descriptions: { ...config.descriptions.get() },
     tools: { ...config.tools.get() },
+    optimize: { ...config.optimize.get() },
   })
 }

@@ -39,12 +39,29 @@ npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager@^1.1.
 
 其他安装方式与开发说明见 [AGENTS.md](https://github.com/zhang-guo-wen/dsh-mcp-manager/blob/master/AGENTS.md)。
 
+## 进一步省上下文：检索、分页、只带名称
+
+设置 → **MCP 优化** 控制一次调用有多少工具内容进入上下文。MCP 规范本身没有给 `tools/list` 查询参数，也没有「只列名称」的形态；官方[客户端最佳实践](https://modelcontextprotocol.io/docs/2026-07-28/develop/clients/client-best-practices)把渐进式发现放在宿主侧，这一页做的就是这件事：
+
+| 设置 | 作用 |
+|---|---|
+| **工具检索**（`search`） | 注册 `mcp_search`：模型用关键词在所有已发现的服务器里找工具，只拿到工具名和一行描述。 |
+| **检索时索引未缓存的服务器**（`searchIndex`） | 允许检索为还没有工具目录的服务器临时连一次（最多同时 3 台、单台 8 秒）。默认关闭，保证检索是一次廉价读取。 |
+| **每次列出条数**（`pageSize`） | `mcp_load` / `mcp_search` 一次最多列出这么多条，其余用 `nextCursor` 翻页。 |
+| **只列名称与描述**（`namesOnly`） | `mcp_load` 默认不带参数 schema；按名字要某一个工具时仍会返回它的完整参数。 |
+| **单台服务器最多拉取**（`maxTools`） | 给 `tools/list` 翻页设上限，超大服务器不会一次灌满请求。 |
+| **缓存有效期**（`catalogTtlMs`） | 发现结果能在多久内直接回答检索而不重新连接。服务器给出的 `ttlMs` 更短时以服务器为准，`notifications/tools/list_changed` 立即让该服务器缓存失效。 |
+| **列出工具注解**（`annotations`） | 把服务器声明的 `readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint` 带进列表。 |
+| **隐藏破坏性工具**（`hideDestructive`） | 把 `destructiveHint` 明确为 true 的工具从会话可见集合中完全去掉。 |
+
+同一页还会显示工具目录缓存（服务器数、工具数、缓存时间），并提供清空按钮。所有开关都是活设置：保存后对下一次加载、检索或重建索引生效，不需要重启。
+
 ## 注意事项
 
 - **对于 profile 组合声明行，按需加载与工具过滤适用于 Agent 预设中的 MCP**。全局组合声明行始终加载；「全部加载」（`eager`）也不支持过滤。需要节省上下文时，请添加或导入到 Agent 预设。资源管理器交接的仓库 MCP 也支持按需加载，包括全局资源。
 - **Agent 预设里的行很多时按预设收窄列表**：Agent 标签下「已加载的 MCP 服务器」旁的下拉按 Agent 预设过滤，默认显示全部；标签上的数字始终是该平面的总行数。
-- **动态插入（`dynamic`，默认）**在需要时将工具加入当前会话；**延迟加载（`lazy`）**通过固定代理调用工具，不改变工具列表。模型使用 `mcp_load` / `mcp_unload` 按需加载和卸载。
-- 工具过滤在下一次加载时生效，已加载的 MCP 不会自动更新。加载或读取工具列表需要连接服务器，可能等待子进程启动；预设首次激活时也可能短暂启动再停止 MCP。
+- **动态插入（`dynamic`，默认）**在需要时将工具加入当前会话；**延迟加载（`lazy`）**通过固定代理调用工具，不改变工具列表。模型使用 `mcp_load` / `mcp_unload` 按需加载和卸载，`mcp_load` 支持 `query`（只加载命中的工具）、`tool`（只加载一个工具并取回它的参数）和 `cursor` / `limit`（长列表翻页）。
+- 工具过滤与优化开关在下一次加载时生效，已加载的 MCP 不会自动更新。加载或读取工具列表需要连接服务器，可能等待子进程启动；预设首次激活时也可能短暂启动再停止 MCP。
 - 导入只读取 Claude Code 和项目 MCP 配置，不修改来源文件。`dynamic` 模式启用工具过滤后，不提供服务器 instructions 与资源工具。
 - 宿主更新可能带来兼容性变化；当前版本已在 DSH `0.2.1-alpha.1` 上验证。遇到不兼容的 MCP 客户端需单独更新；详细限制见 [设计说明](<docs/design-decisions.md>)。
 

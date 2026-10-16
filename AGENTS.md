@@ -70,12 +70,14 @@ host 侧:`class McpManager extends TypertRemoteService`,构造里 `super(ctx, 'm
 
 ## 设置命名空间(src/settings.ts)
 
-`mcp-manager` 命名空间属于本插件,字段三个:`loading`(加载模式)、`descriptions`(行描述)、
-`tools`(每行工具过滤规则)。键统一是 `mcpRowKey(target, serverName)`(`preset:<id>:<name>` / `global:<name>`)。
+`mcp-manager` 命名空间属于本插件,字段四个:`loading`(加载模式)、`descriptions`(行描述)、
+`tools`(每行工具过滤规则)、`optimize`(上下文预算策略,见「优化策略」)。键统一是
+`mcpRowKey(target, serverName)`(`preset:<id>:<name>` / `global:<name>`),`optimize` 例外——它是全局策略,不分行。
 
 **schema 用 `z.dict(z.any())`,不要在设置 schema 里校验规则。** 设置由用户手写在 active profile 的 `cordis.patch.yml` 里,
 schema 拒绝一个字段会让**整个 `mcp-manager` 命名空间**回退到上一次好的值(warn 后静默失效),
-所以畸形值必须在读取时收敛:`parseMcpToolFilter` 跳过无法解析的条目,空规则不过滤任何东西。
+所以畸形值必须在读取时收敛:`parseMcpToolFilter` 跳过无法解析的条目,空规则不过滤任何东西,
+`parseMcpOptimizeFlags` 把每个 `optimize` 字段收敛到默认值(越界数字夹到区间,类型不对取默认)。
 
 ## MCP 行编写(src/mcp-authoring.ts)
 
@@ -129,13 +131,15 @@ HMR/关闭再启用把旧 suppression 当成用户禁用；树销毁后不强持
 
 ### 载体选择(src/mcp-carrier.ts)
 
-**载体由模式决定,规则只决定可见集合**(决策 D8)。`carrierFor(mode, filter)`:
+**载体由模式决定,规则与「本次加载要哪些工具」只决定可见集合**(决策 D8、D16)。`carrierFor(mode, filter, narrowed)`:
 
-| 模式 | 无规则 | 有规则 |
+| 模式 | 无规则、无收窄 | 有规则或有收窄(`query`/`tool`) |
 |---|---|---|
 | `lazy` | `proxy` | `proxy` |
 | `dynamic` | `mount`(整台交给 mcp-client) | `native`(插件只注册可见工具) |
 | `eager` | `undefined`(不注册按需工具) | `undefined`(规则不生效并 warn) |
+
+`narrowed=true` 时 `dynamic` 也必须走 `native`:mcp-client 的挂载会注册它发现的每一个工具,没有「只注册一部分」的入口。
 
 **`native` 载体怎么工作:** SDK 直连 → `listTools` → `filterMcpTools` 只留可见的 → `nativeDefinitions` 用
 harness 自己的 `createMcpToolDefinition`(`@deepseek-ai/dsh-mcp-client` 的公开根导出,经 loader 取同一实例)造定义 →
@@ -168,12 +172,14 @@ harness 自己的 `createMcpToolDefinition`(`@deepseek-ai/dsh-mcp-client` 的公
 要"绑到 agent 且它的子代理也能用",用 preset 行;要"只给这一个会话",用 `mcp_load`。
 同类插件的做法对比见 [docs/competitive-landscape.md](docs/competitive-landscape.md) 的「作用域分层」。
 
-`mcp_load` / `mcp_unload`(+ `lazy` 下的 `mcp_call`)让一个会话**按需启动**某台 MCP,省掉工具 schema 的 token。
-**服务器清单不做成工具,而是进系统提示**(见下面的「按需清单」),所以工具面只有三个:
+`mcp_load` / `mcp_unload`(+ `lazy` 下的 `mcp_call`、优化页开启时的 `mcp_search`)让一个会话**按需启动**某台 MCP,
+省掉工具 schema 的 token。**服务器清单不做成工具,而是进系统提示**(见下面的「按需清单」),所以工具面最多四个:
 
-- `mcp_load` / `mcp_unload`:两种按需模式下都注册;
+- `mcp_load` / `mcp_unload`:两种按需模式下都注册;`mcp_load` 还收 `query` / `tool` / `detail` / `cursor` / `limit`(见「优化策略」);
 - `mcp_call`:**只在 `lazy` 下注册** —— 那个模式不注册任何工具,它是唯一的调用通道;`dynamic` 下加载进来的工具
   按 `mcp__<server>__<tool>` 名字直接调;
+- `mcp_search`:**只在优化设置的 `search` 打开时注册**。它是否注册会改变请求前缀,所以 `index.ts` 用
+  `mcpRegistrationKey(policy)` 判断,值变了才重建整个注册(和加载模式同一条路径);
 - `eager`:一个按需工具都不注册,也没有清单段(那时工具本来就在请求里)。
 
 - 被**禁用**的 composition 行完全不参与:工具不进目录,也不能 `mcp_load`。
@@ -208,7 +214,7 @@ standing 作用域里 `ctx.tools.register`),结果 **preset 每 ~5 秒被重挂�
 `systemPrompt.section` 上注册 `mcp-manager:on-demand`,位置用 harness 预留的 `MCP_SERVERS`(与 mcp-client 放
 server instructions 同一个位置)。四条契约:
 
-1. **渲染是纯函数。** `renderMcpInventory(rows, mode)` 只吃「名字 + 描述」,不碰 Loader/preset,所以 vitest 能直接跑。
+1. **渲染是纯函数。** `renderMcpInventory(rows, mode, search)` 只吃「名字 + 描述」与两个开关,不碰 Loader/preset,所以 vitest 能直接跑。
 2. **段文本是快照,装配时不能 await。** 系统提示装配是同步的,所以注册句柄持有 `inventory` 字符串,由返回的
    `refresh()` 重读 allowed rows 再渲染;`index.ts` 在 `gate.reconcile()` 之后、以及模式提交后各调一次。
    漏调的表现是模型看到上一版名单 —— 新增的行它永远加载不了。
@@ -216,19 +222,26 @@ server instructions 同一个位置)。四条契约:
    比工具列表变化贵得多。加载状态本来就在会话历史里。
 4. **预算只削描述,不删名字。** 单条 80 字符、整段描述预算 900 字符;超预算先丢描述,**服务器名永远列全**
    (模型看不到名字的服务器就加载不了)。`interpolate: false` —— 描述是用户文本,`{{...}}` 必须原样保留。
+5. **只提这次真的注册了的工具。** 那句导语按模式点名 `mcp_load` / `mcp_unload` / `mcp_call`,并在
+   `searchEnabled` 为真时才提 `mcp_search`。`searchEnabled` 在注册时取一次(不是每次装配读活设置),
+   否则设置刚提交、注册还没重建的那一瞬间,模型会被指向一个不存在的工具。
 
-`registerMcpTools` 因此返回 `{ dispose, refresh }` 而不是一个 disposer,第四参数也从单个 `filterFor` 变成
-`{ filterFor, descriptionFor }` 两个活闭包。
+`registerMcpTools` 因此返回 `{ dispose, refresh }` 而不是一个 disposer;第四参数从单个 `filterFor` 长成
+`{ filterFor, descriptionFor, optimize? }` 三个活闭包(第三、五、六个参数是 `external` 与 `catalog`)。
 
 清单段的原文(每行 `名字 — 描述`,描述取自该行的设置;这段是模型可见文本,改动要同步快照):
 
 ```
 MCP servers available on demand: call `mcp_load` with one of these names to add that server's
-tools to this session, and `mcp_unload` with the same name to release it again.
+tools to this session — pass `query` to add only what matches, or `tool` for one tool and its
+argument schema — and `mcp_unload` with the same name to release it again.
 
 - alibaba-devops-mcp — 云效MCP，任务管理工具，可以操作
 - playwright
 ```
+
+`search` 打开时导语多一句前置说明:`MCP servers available on demand: Use \`mcp_search\` to find tools by
+what they do without loading a server, and call \`mcp_load\` …`。
 
 ### 预加载闸门(src/mcp-gate.ts)
 
@@ -351,6 +364,41 @@ mcp-manager:
     "preset:standard-yunxiao:alibaba-devops-mcp":
       - "!delete_workitem"
 ```
+
+### 优化策略(src/mcp-optimize.ts、src/mcp-catalog.ts、src/client/McpOptimizeSection.tsx)
+
+规范侧能用的只有两件:游标分页,以及 2026-07-28 的 `CacheableResult`(`ttlMs` / `cacheScope`)。`tools/list`
+**没有** `query` 参数,也**没有**「只列名称」的线上形态(`inputSchema` 必填),所以检索、只带名称、目录缓存
+都只能做在宿主侧 —— 官方《Client Best Practices》正是这么要求的(`search_tools` → `get_tool_details` → 执行)。
+三条粒度互不替代,写在 `optimize` 字段里,由 `parseMcpOptimizeFlags` 收敛:
+
+1. **选择**:`mcp_load` 的 `query`(词法匹配,离线、无 embedding)与 `tool`(按名取一个)收窄**能调用**的集合,
+   载体随之变成 `native`;已经加载过的服务器再给新 `query` 只会**加宽**(`widen`),永不收窄。
+2. **列表**:`cursor` / `limit` 只分页结果(默认 `pageSize`),`loaded` 仍是全部被选中的工具 —— 分页是上下文预算,
+   不是能力开关。模型要知道"还有工具",靠 `nextCursor`,不靠少注册几个工具。
+3. **形态**:`namesOnly` 默认让 `mcp_load` 只带名称与描述;`tool`(按名要一个)默认升到 `full`,因为那正是要参数的时机。
+
+其余开关与实现约束:
+
+- **`mcp_search` 只在 `search` 打开时注册**,所以 `index.ts` 用 `mcpRegistrationKey(policy)` 参与"是否重建注册"的
+  判断(与加载模式同一条 `external.transition` 路径)。**其余策略字段一律在调用点读活值**,不要为它们重建注册。
+- **`listAllTools(client, maxTools)` 是唯一的发现入口。** 游标按规范当**不透明字符串**:空串是合法游标,
+  只有 `nextCursor === undefined` 才是结束(写成 `if (!next)` 会静默丢掉第二页);页数封顶 `MAX_TOOL_PAGES=64`,
+  采集量封顶 `maxTools`,被截断时结果带 `truncated: true`。
+- **目录缓存在两个点失效**:服务器自己的 `ttlMs` 比设置更短时以服务器为准;`notifications/tools/list_changed` 一到就
+  `catalog.invalidate(row.key)`(规范要求通知立即作废仍然新鲜的列表)。行被增删改(`mcp-remote.ts` 的四个 mutation)
+  后 `catalog.clear()`,因为改配置等于换了台服务器。
+- **`mcp_search` 默认不连接任何服务器**(`searchIndex` 打开才连,`SEARCH_INDEX_CONCURRENCY=3`、
+  `SEARCH_INDEX_TIMEOUT_MS=8000`),否则二十台服务器的部署会因为模型问一句就 spawn 二十个子进程。查不到的服务器
+  以 `pending` 名单返回,让模型先 `mcp_load`。
+- **收窄到空的加载不建立 mount。** `query` 没命中时返回空结果并关掉连接;`tool` 给的名字不存在时直接报错。
+  否则会话会挂着一个空 mount,之后连"加载整台"都只能看到空列表(要 `mcp_unload` 才能恢复)。
+- **注解是策略输入,不是承诺。** `hideDestructive` 只认显式 `destructiveHint: true`(规范里缺省值是 true,
+  按缺省处理会把没有注解的服务器整台藏掉);`annotations` 只把服务器**真的声明过**的提示带进列表。
+- **设置页是独立的 `settings.section`(id `mcp-manager-optimize`,order 15),复用同一个 controller。** 它按字段
+  merge 写 `optimize` 开映射,每个开关有自己的保存中/已保存状态;目录面板走 `catalogState` / `clearCatalog`
+  两个 Remote(注意:新增 Remote 要三处齐,见「Typert Remote」)。策略解析复用 `src/mcp-optimize.ts`,
+  **不要在浏览器侧再写一份默认值**,否则两侧会漂移。
 
 ### 设置页分区(src/client/McpSection.tsx)
 
@@ -514,6 +562,12 @@ client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏�
 26. **把 preset live 行的 `disabled` 当成"用户禁用"** → gate 在 `dynamic`/`lazy` 下真的会把每个 allowed 行设成
     disabled,于是整个 preset 平面显示成「已禁用」,开关也全灭。名册的 `enabled` 必须取声明(见「名册读取」)。
     实际踩过一次:宿主没重启、浏览器已加载新 client,于是整列 54 行变「已禁用」。
+27. **把 `nextCursor` 当真假值判断**(`if (!next) break`) → 规范允许空串游标,第二页被静默丢掉;只认 `undefined`。
+28. **为策略字段重建整个注册** → 除 `search` 外都在调用点读活值;为 `pageSize` 之类的改动 dispose 再注册,会把
+    每个会话已加载的 MCP 全部杀掉重来。
+29. **收窄结果为空却仍然建 mount** → 会话之后连"加载整台"都只看到空列表,只能 `mcp_unload` 才能恢复。
+30. **`mcp_search` 默认去连接未缓存的服务器** → 模型问一句就 spawn 一批子进程;必须由 `searchIndex` 显式打开并限并发。
+31. **在浏览器侧复制一份策略默认值** → 两侧漂移;设置页必须 `import` `src/mcp-optimize.ts` 的 `parseMcpOptimizeFlags`。
 
 ## 配置
 
@@ -612,6 +666,7 @@ npm run typecheck   # tsc --noEmit -p tsconfig.json
 | D13 | 资源仓库 MCP 经内存接口交给管理器 | 保留资源管理器的数据所有权,同时让加载模式统一生效 |
 | D14 | 预设读取经公开 Loader/scope 接口,按代次保存声明 | 不依赖已移除导出,不等待激活,不把旧会话改成新声明 |
 | D15 | 配置不完整是独立状态,与加载模式分开 | 「按需可用」是模式的结果,不是用户要处理的状态 |
+| D16 | 优化策略独立成页,粒度分选择/列表/形态三层 | 规范只给分页与 `ttlMs`,检索与只带名称只能在宿主侧做 |
 
-实现侧的理由与踩坑在本文各节(「延迟加载」「载体选择」「按需清单」「预加载闸门」「工具过滤」);同类插件对比与
+实现侧的理由与踩坑在本文各节(「延迟加载」「载体选择」「按需清单」「预加载闸门」「工具过滤」「优化策略」);同类插件对比与
 功能路线图归 [docs/competitive-landscape.md](docs/competitive-landscape.md)。

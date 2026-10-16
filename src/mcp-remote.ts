@@ -23,6 +23,8 @@ import type {
   AddMcpRequest,
   AddMcpsRequest,
   AddMcpsResult,
+  ClearMcpCatalogRequest,
+  ClearMcpCatalogResult,
   DescribeMcpRequest,
   DescribeMcpResult,
   DisableMcpRequest,
@@ -31,6 +33,8 @@ import type {
   ListMcpToolsResult,
   ListMcpsRequest,
   ListMcpsResult,
+  McpCatalogStateRequest,
+  McpCatalogStateResult,
   McpGateStateRequest,
   McpGateStateResult,
   McpMutationResult,
@@ -39,6 +43,8 @@ import type {
   ScanClaudeMcpRequest,
   ScanClaudeMcpResult,
 } from './types.ts'
+import { McpCatalog } from './mcp-catalog.ts'
+import type { LazyTool } from './mcp-carrier.ts'
 import type { GateMount, McpPreloadGate } from './mcp-gate.ts'
 import type { ExternalMcpDefinition, ExternalMcpRegistry } from './external-mcp.ts'
 
@@ -115,6 +121,9 @@ export class McpManager extends TypertRemoteService {
    *   current loading mode.
    * @param mountReader - reader of the live agent-preset mounts, used by the
    *   roster read to report each preset row's current fiber phase.
+   * @param external - the registry of resource-plugin rows.
+   * @param loadingMode - live reader of the committed loading mode.
+   * @param catalog - the discovery catalogue the settings page can inspect and clear.
    */
   constructor(
     ctx: Context,
@@ -122,6 +131,7 @@ export class McpManager extends TypertRemoteService {
     private readonly mountReader: (within?: unknown) => readonly GateMount[],
     private readonly external: ExternalMcpRegistry,
     private readonly loadingMode: () => 'eager' | 'dynamic' | 'lazy',
+    private readonly catalog: McpCatalog<LazyTool> = new McpCatalog<LazyTool>(),
   ) {
     super(ctx, 'mcpManager')
   }
@@ -166,6 +176,7 @@ export class McpManager extends TypertRemoteService {
   @Remote('addMcp')
   async addMcp(request: AddMcpRequest): Promise<McpMutationResult> {
     const result = await this.enqueue(() => this.add(request))
+    this.catalog.clear()
     await this.gate.reconcile()
     return result
   }
@@ -183,6 +194,7 @@ export class McpManager extends TypertRemoteService {
   @Remote('addMcps')
   async addMcps(request: AddMcpsRequest): Promise<AddMcpsResult> {
     const result = await this.enqueue(() => this.addMany(request))
+    this.catalog.clear()
     await this.gate.reconcile()
     return result
   }
@@ -197,6 +209,7 @@ export class McpManager extends TypertRemoteService {
   @Remote('editMcp')
   async editMcp(request: EditMcpRequest): Promise<McpMutationResult> {
     const result = await this.enqueue(() => this.edit(request))
+    this.catalog.clear()
     await this.gate.reconcile()
     return result
   }
@@ -211,6 +224,7 @@ export class McpManager extends TypertRemoteService {
   @Remote('disableMcp')
   async disableMcp(request: DisableMcpRequest): Promise<McpMutationResult> {
     const result = await this.enqueue(() => this.disable(request))
+    this.catalog.clear()
     await this.gate.reconcile()
     return result
   }
@@ -227,6 +241,36 @@ export class McpManager extends TypertRemoteService {
     void request
     await this.gate.reconcile()
     return { suppressed: [...this.gate.suppressedKeys()] }
+  }
+
+  /**
+   * Report what the discovery catalogue remembers.
+   *
+   * The catalogue is what lets `mcp_search` answer without starting a server, so
+   * the settings page shows exactly how much is in it and how old it is; the
+   * read touches no MCP row, so it is safe to call on every section render.
+   * @param request - empty placeholder; the catalogue is host-wide.
+   * @returns one row per remembered server, oldest first.
+   */
+  @Remote('catalogState')
+  async catalogState(request: McpCatalogStateRequest): Promise<McpCatalogStateResult> {
+    void request
+    return { entries: this.catalog.stats(), total: this.catalog.size }
+  }
+
+  /**
+   * Forget every recorded discovery result.
+   *
+   * A running session keeps the tools it loaded — the catalogue only feeds
+   * search and the settings page — so clearing is safe at any time and costs at
+   * most one re-listing per server on the next search.
+   * @param request - empty placeholder; the catalogue is host-wide.
+   * @returns how many server records were dropped.
+   */
+  @Remote('clearCatalog')
+  async clearCatalog(request: ClearMcpCatalogRequest): Promise<ClearMcpCatalogResult> {
+    void request
+    return { cleared: this.catalog.clear() }
   }
 
   /**

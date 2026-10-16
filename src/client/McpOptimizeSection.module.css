@@ -1,0 +1,237 @@
+/* MCP optimization settings page.
+   Same reading column as the roster section, and colours only from the
+   `--dsw-alias-*` tokens so both themes are covered by ui-theme. */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  max-width: 720px;
+}
+
+.intro {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.unavailable {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ---- One settings group ---- */
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.groupTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.groupHint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ---- One setting row ---- */
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-elevation-stroke);
+}
+
+.rowText {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.rowLabel {
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.rowDesc {
+  font-size: 11.5px;
+  line-height: 17px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.rowControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+/* The save state replaces itself in place, so the switch never shifts when a
+   write starts: the slot always occupies its width. */
+.rowState {
+  min-width: 42px;
+  font-size: 11px;
+  text-align: right;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.rowState[data-state='saving'] {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.rowState[data-state='saved'] {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.numberInput {
+  width: 88px;
+}
+
+/* A whole-number field is 36px tall in the host's own settings rows. */
+.numberInput input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+  text-align: right;
+}
+
+/* ---- Catalogue panel ---- */
+
+.catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-elevation-stroke);
+}
+
+.catalogHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.catalogSummary {
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.catalogActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.action {
+  appearance: none;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.action:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.action:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
+}
+
+.action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.catalogEmpty {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.catalogList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.catalogRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 2px;
+}
+
+.catalogKey {
+  overflow: hidden;
+  font-family: var(--ds-font-family-code);
+  font-size: 11.5px;
+  color: var(--dsw-alias-label-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalogMeta {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Status lines ---- */
+
+.failure {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.notice {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-state-success-primary);
+}
+
+/* Touch targets: the whole row is the control on a coarse pointer, not the
+   20px switch alone. */
+@media (pointer: coarse) {
+  .row {
+    min-height: 44px;
+  }
+}
