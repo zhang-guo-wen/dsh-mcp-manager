@@ -199,6 +199,31 @@ describe('host-level connection pool', () => {
     expect(io.changes).toBe(1)
   })
 
+  it('re-walks every page through the opener relist, not just the first page', async () => {
+    const pool = createMcpConnectionPool({
+      open: async () => ({
+        client: {
+          listTools: async () => ({ tools: [{ name: 'first-page-only' }] }),
+          callTool: async () => ({}),
+          close: async () => {},
+        },
+        tools: [{ name: 'first-page-only' }],
+        truncated: true,
+      }),
+      relist: async () => ({ tools: [{ name: 'one' }, { name: 'two' }], truncated: false, ttlMs: 1_000 }),
+      onToolsChanged: () => {},
+      warn: () => {},
+    })
+    const identity = key(connectionFingerprint(stdio()))
+    const connection = await pool.acquire(identity, stdio())
+    expect(connection.truncated).toBe(true)
+    await connection.client.fallbackNotificationHandler?.({ method: 'notifications/tools/list_changed' })
+    // The whole listing is replaced, and the cap/freshness answers follow it.
+    expect(connection.tools.map(tool => tool.name)).toEqual(['one', 'two'])
+    expect(connection.truncated).toBe(false)
+    expect(connection.ttlMs).toBe(1_000)
+  })
+
   it('survives a failing re-list and reports it once', async () => {
     const warn = vi.fn()
     const pool = createMcpConnectionPool({

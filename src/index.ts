@@ -13,7 +13,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { McpManager } from './mcp-remote.ts'
-import { parseMcpLoadingMode, registerMcpTools, resolveMcpClient, connectLazy } from './lazy-mcp.ts'
+import { parseMcpLoadingMode, registerMcpTools, resolveMcpClient, connectLazy, listAllTools } from './lazy-mcp.ts'
 import type { LazyTool } from './mcp-carrier.ts'
 import type { McpLoadingMode, McpToolRegistration } from './lazy-mcp.ts'
 import { createMcpConnectionPool } from './mcp-pool.ts'
@@ -238,6 +238,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // The collection cap is the policy's, read when the connection is opened:
     // a connection already serving sessions keeps the listing it walked.
     open: config => connectLazy(config, { maxTools: readers.optimize().maxTools }),
+    // A `tools/list_changed` re-walks every page through the same discovery
+    // path, so a paged server is not silently cut to its first page; the cap
+    // is read live, like every other policy field.
+    relist: client => listAllTools(client, readers.optimize().maxTools),
     // The registration that owns the current mode answers this; it exists before
     // any session can load a server, because a connection is only opened by
     // `mcp_load`.

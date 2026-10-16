@@ -32,9 +32,9 @@ export interface PooledConnection {
   /** The tools the server published, unfiltered: each session filters its own. */
   tools: readonly LazyTool[]
   /** Whether the opening walk stopped at a cap instead of the server's end-of-list. */
-  readonly truncated: boolean
+  truncated: boolean
   /** The server's own freshness hint for its listing, when it published one. */
-  readonly ttlMs?: number
+  ttlMs?: number | undefined
   /** Claim tokens currently holding this connection open. */
   readonly claims: Set<string>
   /** Whether `dispose` already ran: a closed connection must never be reused. */
@@ -81,6 +81,18 @@ export interface ConnectionOpener {
     client: LazyClient
     tools: readonly LazyTool[]
     truncated: boolean
+    ttlMs?: number
+  }>
+  /**
+   * Re-walk one server's tool list after a `tools/list_changed`. Omitted means
+   * a single `listTools()` call; the host passes its paginated walk, so a paged
+   * server is not silently cut to its first page.
+   * @param client - the live client whose listing changed.
+   * @returns the full listing, whether it was cut short, and the freshness hint.
+   */
+  relist?(client: LazyClient): Promise<{
+    tools: readonly LazyTool[]
+    truncated?: boolean
     ttlMs?: number
   }>
   /**
@@ -160,8 +172,15 @@ export function createMcpConnectionPool(opener: ConnectionOpener): McpConnection
     connection.client.fallbackNotificationHandler = async (notification) => {
       if (notification.method !== 'notifications/tools/list_changed') return
       try {
-        const listed = await connection.client.listTools()
-        connection.tools = listed.tools ?? []
+        if (opener.relist !== undefined) {
+          const relisted = await opener.relist(connection.client)
+          connection.tools = relisted.tools ?? []
+          connection.truncated = relisted.truncated ?? false
+          connection.ttlMs = relisted.ttlMs
+        } else {
+          const listed = await connection.client.listTools()
+          connection.tools = listed.tools ?? []
+        }
         opener.onToolsChanged(connection)
       } catch (error) {
         opener.warn(`mcp-manager: could not follow the tool list change of "${connection.serverName}": ${String(error)}`)

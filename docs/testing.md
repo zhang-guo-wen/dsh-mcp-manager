@@ -831,7 +831,7 @@ switch = <button role="switch" aria-checked="true"
 `20-roster-{1440,760,601,390,320}.png`、`30-roster-dark-1440.png`、`31-context-dark-1440.png`。
 README 用的三张图（`docs/images/mcp-settings.png`、`mcp-context.png`、`mcp-editor-import.png`）已用这一轮的产物重拍。
 
-## 七、审查修复轮复跑（2026-10-16，产物 `E3E1C82C…` / `9777E8E9…`）—— **两套测试全绿，隔离实例未复跑**
+## 七、审查修复轮复跑（2026-10-16，产物 `53FD00C5…` / `9777E8E9…`）—— **两套测试全绿，隔离实例未复跑**
 
 代码审查（1.3.0 之后的 7 个提交）定级的问题在本轮修完要紧项，每组修复后都重跑了两套测试：
 
@@ -849,14 +849,19 @@ README 用的三张图（`docs/images/mcp-settings.png`、`mcp-context.png`、`m
    「换个词再搜」；`opt.maxTools.desc` 同步改为如实描述。
 7. **UI 规范小项**：禁用态 `opacity:.5;cursor:default` 补齐 select/textarea/checkbox；`.mcpFilterSelect`
    并入 600px 16px 规则。
+8. **`tools/list_changed` 重列翻页**：池的重列走 opener 的 `relist`（宿主传 `listAllTools` 游标遍历），
+   不再把分页服务器静默缩成第一页，`truncated`/`ttlMs` 随之更新；新增「re-walks every page through the
+   opener relist」。
 
-**读数**：`npm run typecheck` 通过；`npm test` **21 文件 / 236 项**全绿（修复前 21/219）；`npm run test:harness`
-**6 文件 / 25 项**全绿（真实 Loader）。产物 SHA-256 前 8 位：`lib/index.mjs` `E3E1C82C`、`lib/client.js` `9777E8E9`。
+**读数**：`npm run typecheck` 通过；`npm test` **21 文件 / 237 项**全绿（修复前 21/219）；`npm run test:harness`
+**6 文件 / 25 项**全绿（真实 Loader）。产物 SHA-256 前 8 位：`lib/index.mjs` `53FD00C5`、`lib/client.js` `9777E8E9`。
 
 **未覆盖（如实）**：隔离实例协议**没有**对新产物复跑——第五节的实测读数仍属于 `121B8C0A…` / `E1B1051A…`
 那份产物，README 已按此改写；`settings-controller` 写队列无单测（`@deepseek-ai/dsh-client-store` 的 zustand
 依赖在 Node 下解析不到，controller 不能进 Node 测试）；逐行保存三态只做了代码与类型验证，未走浏览器实测；
-并发 `mcp_load` 的收敛用单测固定，多会话真并发的进程计数未在隔离实例复测。
+并发 `mcp_load` 的收敛用单测固定，多会话真并发的进程计数未在隔离实例复测；`mcp_search` 索引仍在 TTL 过期后
+为活着的池连接另起一个短命连接（去重已加，走池复用是后续设计项），search 侧命中数被 `maxTools` 截断时
+也仍不回报 truncated。
 
 ## 维护
 
