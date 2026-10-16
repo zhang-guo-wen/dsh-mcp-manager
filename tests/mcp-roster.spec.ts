@@ -82,7 +82,7 @@ describe('readMcpRoster', () => {
     expect(roster.presets).toEqual([{
       id: 'standard',
       name: 'Standard',
-      rows: [{ entryId: 'slow-server', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: 'loading' }],
+      rows: [{ entryId: 'slow-server', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: 'loading', secretKeys: [] }],
     }])
     expect(activating.wasAwaited()).toBe(false)
   })
@@ -103,8 +103,8 @@ describe('readMcpRoster', () => {
     // These rows live in the host's own root Include, which is never a write
     // target, so the global plane reports them read-only.
     expect(readMcpRoster(ctx, () => []).entries).toEqual([
-      { entryId: 'context7', moduleName: MCP_CLIENT, enabled: true, writable: false, readOnly: 'no-writable-include', fiberPhase: 'active' },
-      { entryId: 'kingdee', moduleName: MCP_CLIENT, enabled: false, writable: false, readOnly: 'no-writable-include', fiberPhase: null },
+      { entryId: 'context7', moduleName: MCP_CLIENT, enabled: true, writable: false, readOnly: 'no-writable-include', fiberPhase: 'active', secretKeys: [] },
+      { entryId: 'kingdee', moduleName: MCP_CLIENT, enabled: false, writable: false, readOnly: 'no-writable-include', fiberPhase: null, secretKeys: [] },
     ])
   })
 
@@ -127,9 +127,9 @@ describe('readMcpRoster', () => {
       rows: [
         // A group's enablement is inherited, and a `!!js` node stays conditional
         // because only a mount can evaluate it.
-        { entryId: 'grouped', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: null },
-        { entryId: 'gated', moduleName: MCP_CLIENT, enabled: 'conditional', writable: true, fiberPhase: null },
-        { entryId: 'plain', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: null },
+        { entryId: 'grouped', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: null, secretKeys: [] },
+        { entryId: 'gated', moduleName: MCP_CLIENT, enabled: 'conditional', writable: true, fiberPhase: null, secretKeys: [] },
+        { entryId: 'plain', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: null, secretKeys: [] },
       ],
     }])
   })
@@ -152,7 +152,7 @@ describe('readMcpRoster', () => {
 
     expect(readMcpRoster(ctx, () => [mountOf(held)]).presets).toEqual([{
       id: 'standard',
-      rows: [{ entryId: 'held', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: null }],
+      rows: [{ entryId: 'held', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: null, secretKeys: [] }],
     }])
   })
 
@@ -173,7 +173,7 @@ describe('readMcpRoster', () => {
     const mount = () => [mountOf(held)]
 
     expect(readMcpRoster(ctx, mount, ['held']).presets[0]?.rows).toEqual([
-      { entryId: 'held', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: 'held' },
+      { entryId: 'held', moduleName: MCP_CLIENT, enabled: true, writable: true, fiberPhase: 'held', secretKeys: [] },
     ])
     // A row that is not held keeps reporting its real fiber state.
     expect(readMcpRoster(ctx, mount, []).presets[0]?.rows[0]?.fiberPhase).toBeNull()
@@ -191,7 +191,7 @@ describe('readMcpRoster', () => {
     }
 
     expect(readMcpRoster(ctx, () => [mountOf(off)]).presets[0]?.rows).toEqual([
-      { entryId: 'off', moduleName: MCP_CLIENT, enabled: false, writable: true, fiberPhase: null },
+      { entryId: 'off', moduleName: MCP_CLIENT, enabled: false, writable: true, fiberPhase: null, secretKeys: [] },
     ])
   })
 
@@ -273,8 +273,71 @@ describe('readMcpRoster', () => {
     }
   })
 
+  it('reports a composed global row\'s credential field names from the gate read', () => {
+    // A global row lives inside the include's tree, so the roster's only read of
+    // it is the gate's own; the config has to travel with that row or the
+    // settings page cannot offer its credential editor.
+    const ctx = contextWith([])
+    const roster = readMcpRoster(ctx, () => [], [], [
+      {
+        entryId: 'gv-headers',
+        enabled: true,
+        held: false,
+        mounted: true,
+        config: { serverName: 'gv-headers', transport: 'streamable-http', url: 'https://x.test/mcp', headers: { Authorization: 'Bearer secret' } },
+      },
+      {
+        entryId: 'gv-plain',
+        enabled: true,
+        held: false,
+        mounted: true,
+        config: { serverName: 'gv-plain', transport: 'streamable-http', url: 'https://x.test/mcp', headers: {} },
+      },
+    ])
+
+    expect(roster.entries).toMatchObject([
+      { entryId: 'gv-headers', secretKeys: ['Authorization'] },
+      { entryId: 'gv-plain', secretKeys: [] },
+    ])
+    expect(JSON.stringify(roster)).not.toContain('Bearer secret')
+  })
+
   it('reports presets without a mounted profile editor as none', () => {
     const ctx = { get: () => undefined, root: { fiber: {} } } as unknown as Context
     expect(readMcpRoster(ctx, () => [])).toMatchObject({ entries: [], presets: [], globalWritable: false })
+  })
+
+  it('reports a row\'s credential key names, and never their values', () => {
+    // The settings page uses this to open a row on its credential editor, so
+    // the answer has to name the fields without carrying the secrets: the value
+    // of an `env` entry is exactly what must not reach the browser as data the
+    // page could log or echo.
+    const secret = 'sk-do-not-ship'
+    const ctx = contextWith([], [{
+      id: 'preset-standard',
+      name: AGENT_PRESET,
+      config: {
+        id: 'standard',
+        plugins: [
+          { id: 'stdio-row', name: MCP_CLIENT },
+          { id: 'http-row', name: MCP_CLIENT },
+          { id: 'plain-row', name: MCP_CLIENT },
+        ],
+      },
+    }])
+    const rows = [
+      { options: { id: 'stdio-row', name: MCP_CLIENT, config: { transport: 'stdio', serverName: 'stdio-row', command: 'node', env: { TOKEN: secret, REGION: 'cn' } } } },
+      { options: { id: 'http-row', name: MCP_CLIENT, config: { transport: 'streamable-http', url: 'https://example.test/mcp', headers: { Authorization: `Bearer ${secret}` } } } },
+      { options: { id: 'plain-row', name: MCP_CLIENT, config: { transport: 'stdio', serverName: 'plain-row', command: 'node' } } },
+    ]
+
+    const roster = readMcpRoster(ctx, () => [mountOf(...rows)])
+
+    expect(roster.presets[0]?.rows.map(row => row.secretKeys)).toEqual([
+      ['TOKEN', 'REGION'],
+      ['Authorization'],
+      [],
+    ])
+    expect(JSON.stringify(roster)).not.toContain(secret)
   })
 })

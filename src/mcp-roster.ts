@@ -25,6 +25,7 @@ import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { MCP_CLIENT_MODULE, findEntryRows, presetLeafId, readEntryListRowsSync, writableGlobalIncludes } from './mcp-authoring.ts'
 import type { GateMount, McpGlobalRow } from './mcp-gate.ts'
 import { declaredMcpRows } from './mcp-allowance.ts'
+import { storedCredentialKeys } from './mcp-config.ts'
 import { diagnoseRowConfig } from './mcp-diagnostics.ts'
 import { listPresetDeclarations } from './preset-source.ts'
 import type { ListMcpsResult, McpFiberPhase, McpRosterPreset, McpRosterRow, McpRowReadOnly } from './types.ts'
@@ -97,6 +98,9 @@ function rosterRow(source: RosterRowSource): McpRosterRow {
     // preset is the file a preset write edits, and it owns every nested row.
     writable: true,
     fiberPhase: source.live ? phaseOf(source.state, source.held) : null,
+    // Key names only: the settings page uses them to decide whether a row has
+    // credentials to edit, and credential values never leave the Host.
+    secretKeys: storedCredentialKeys(source.options.config),
     ...configIssue.length === 0 ? {} : { configIssue },
   }
 }
@@ -165,7 +169,11 @@ export function readMcpRoster(
     composedGlobals.add(row.entryId)
     entries.push(globalRow(rosterRow({
       entryId: row.entryId,
-      options: { id: row.entryId, name: MCP_CLIENT_MODULE } as EntryOptions,
+      // The composed projection carries the row's own config, which is what the
+      // settings page reads for its credential fields and its "not configured"
+      // marker; building an options object without it made every global row
+      // report an empty configuration.
+      options: { id: row.entryId, name: MCP_CLIENT_MODULE, ...row.config === undefined ? {} : { config: row.config } } as EntryOptions,
       live: true,
       enabled: row.enabled,
       state: row.mounted ? FIBER_STATE.ACTIVE : undefined,

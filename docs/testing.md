@@ -863,6 +863,75 @@ README 用的三张图（`docs/images/mcp-settings.png`、`mcp-context.png`、`m
 为活着的池连接另起一个短命连接（去重已加，走池复用是后续设计项），search 侧命中数被 `maxTools` 截断时
 也仍不回报 truncated。
 
+## 名册布局改版：一个平面、按行标注、按卡片编辑（2026-10-16，D22）
+
+本节验证本轮**可见界面**改动：删掉「全局 · N 行」「Agent 预设 · N 行」两个分组标题与预设下拉里的
+「全部 Agent 预设」项；列表恒为平铺列表，全局行在前带「全局」标签、预设行以一行小字报预设名；点卡片
+本身打开编辑器；有 `env`/`headers` 的行按钮是「密钥」并直接落在编辑器新增的「密钥」页。取舍见
+[design-decisions.md](design-decisions.md) 的 D22。
+
+**环境**：npm 发布版宿主 `@deepseek-ai/dsh@0.2.0-rc.2`（当时的 `latest`/`next`），随机高位端口、独立
+`DSH_HOME`（`.scratch/harness-tests/mcp-layout-0.2.0-rc.2-a7f3`），插件以 `plugin add <本地目录>`
+（pnpm 记为 `link:`，改 `lib/` 后重启实例即生效）装进该 profile；浏览器用 Playwright 驱动的
+`chrome-headless-shell` 149.0.7827.55，1440×900 起测，脚本与截图在
+`.scratch/mcp-layout-verify/`（`verify.mjs`、`verify-result.json`、`shots/v-*.png`）。夹具在该 profile 的
+`cordis.patch.yml`：全局行 `gv-headers`（headers）/`gv-plain`（空 headers）/`gv-stdio-env`（env），
+预设 `mcp-verify` 下 `pv-env`（env）/`pv-plain`（空 headers）。验收产物：
+`lib/index.mjs` SHA-256 `DAA6878D…`、`lib/client.js` SHA-256 `39F02038…`（**该 client.js 里还含同分支并发提交的
+Toast 浮层改动**；本轮浏览器读数的截图即取自这一版，见下表）。
+
+**重要说明（并发提交）**：本轮验收跑在一个**同时有另一个会话在写本仓**的工作树上。15:09 起该会话提交了
+`b94cfb5`（目录清理提示）与 `aba3002`（行写入提示，含 `lib/client.js` 重建），期间 `src/client/McpSection.tsx`
+于 15:11 被外部重写一次、`lib/` 重建两次；本节读数因此**绑定到上面那对产物指纹**，而不是任何更早的构建。
+两次核对：`npm test` 22 文件 / 253 项、`npm run typecheck`、`npm run build` 在提交前全部通过，且 `npm run build`
+对当前源码是**幂等**的（重建后 `lib/` 无 diff）。
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| 无分组标题 | ✅ | `01` 断言：以「全局/Agent 预设 · N 行」正则扫全对话框段落/标题，命中 **0** 个 |
+| 下拉无冗余项 | ✅ | `02a`：`options=["standard","ptc","minimal","cordis","mcp-verify"]`，无「全部 Agent 预设」 |
+| 选预设后全局行仍在且被标注 | ✅ | `02b`/`02c`：选 `mcp-verify` 后 5 行 = 3 全局 + 2 预设；3 个全局行含「全局」、2 个预设行不含 |
+| 有密钥的行显示「密钥」 | ✅ | `03a`：`{gv-headers:密钥, gv-plain:编辑, gv-stdio-env:密钥, pv-env:密钥, pv-plain:编辑}` |
+| 点「密钥」直接落在密钥页 | ✅ | `03c`：页签 `[配置, 密钥, 工具列表]`、可见页为「请求头」、字段 `Authorization=Bearer gv-token`、`X-Verify=layout`；`03c2`：stdio 行可见「环境变量」且 `GV_TOKEN=abc` |
+| 点「编辑」落在配置页 | ✅ | `03d`：可见页含「JSON 配置」与 JSON 正文 |
+| 点卡片空白处打开编辑器 | ✅ | `04a`：在行内空白坐标真实点击后 `[role=dialog]` 数 > 1（截图 `v-01…`） |
+| 点描述文字不打开编辑器 | ✅ | `04b`：点描述按钮后对话框数不变（就地编辑） |
+| 点开关不打开编辑器 | ✅ | `04c`：点开关后对话框数不变（该行开关状态随后复位） |
+| 无横向溢出 | ✅ | `05-*`：320/360/430/601/760/1024/1440 七档 `documentElement.scrollWidth == clientWidth`，且对话框 `scrollWidth == clientWidth` |
+| 深色可读 | ✅ | `05-dark`（1280×900，`colorScheme: dark`）：行卡片底色 `rgb(44,44,46)`、文字 `rgb(249,250,251)`，无溢出 |
+| 控制台干净 | ✅ | `06`：无 `console.error` / `pageerror` / `requestfailed` |
+
+**本轮修掉的两个真 bug（都由上面的实测抓到，不是源码推断）**：
+
+1. **全局行的配置没有过到名册**：`McpGlobalRow` 不带 `config`、名册为组合行构造 options 时也只写
+   `{id,name}`，于是有 `env`/`headers` 的**全局行**按钮仍是「编辑」（`secretKeys` 恒空），组合全局行的
+   「未配置」标记也一起失效。修法：`mcp-gate.ts` 的 `readGlobalRows()` 在行里带上 `entry.options.config`
+   （只读、不写不落盘），`mcp-roster.ts` 透传给 `rosterRow`。回归测试：`tests/mcp-roster.spec.ts` 的
+   「reports a composed global row's credential field names…」（含「序列化结果不含密钥值」断言）。
+2. **「密钥」打开后停在「配置」页**：编辑器常驻挂载（关闭时 `open=false`），`useState(openTab)` 只在首次
+   挂载求值，之后点「密钥」不会改页签。修法：在 `open` 的 effect 里 `setTab(openTab)`，并把 `openTab`
+   列入依赖。`03c` 复测通过（修复前该断言 FAIL，可见页是「配置」）。
+
+**已知限制（如实）**：窗口 **≤601px** 时宿主设置壳仍保留左侧 188px 导航，面板内只剩约 224px，本插件的
+section 被压到约 36px 宽、行卡片被裁切（截图 `shots/v-03-width-360.png`，360×900）。实测
+`documentElement.scrollWidth == clientWidth`（无文档级横向溢出），且该压扁来自宿主设置壳自身的窄窗布局
+（导航栏不收起）——**本插件未改动宿主设置壳，也未修复该行为**；≤601px 下的可用性属宿主设置壳的已知
+缺口，修它需要动宿主而不是本插件。
+
+**未覆盖（如实）**：
+- 真机/粗指针（`pointer: coarse`）触摸目标、iOS 软键盘与安全区未测——本轮只跑无头 Chromium 的鼠标事件。
+- `prefers-reduced-motion: reduce` 只做代码层保证（`@media` 块关闭 `.mcpRow` 过渡），未在浏览器里录到差值。
+- 「密钥」页的**保存**未走通端到端：本轮只验证了字段读取与页签落点，没有点「保存」写回 composition 文件
+  （`EditMcpRequest` 的写入路径仍只有单测与类型验证）。
+- 空态未取到实测：该 profile 的每个已声明预设都至少有一行，`extra-empty-state` 因此返回 `null`（未验证，
+  不是通过）；文案改动只做了单测与类型检查。
+- `npm run test:harness` **未在本轮复跑**（本次改动只碰名册/闸门读取与浏览器半边，harness 回归仍以
+  D17 的 6 文件 / 25 项读数为准）。
+- 滚动条外观未做像素剖面复核（无头截图默认 `--hide-scrollbars`；本轮判定的是盒子测量而非滚动条形状）。
+
+**读数（本轮）**：`npm run typecheck` 通过；`npm test` **22 文件 / 253 项**全绿；`npm run build` 通过，
+`lib/index.mjs`、`lib/client.js` 与源码同批提交。
+
 ## 维护
 
 改加载、池或闸门行为后：先跑 `npm test` 与 `npm run test:harness`，再按上面的隔离实例协议复跑，并把**新结果与

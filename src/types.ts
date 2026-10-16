@@ -292,6 +292,12 @@ export interface McpRosterRow {
   /** Root-fiber phase, null when the row currently owns no fiber. */
   readonly fiberPhase: McpFiberPhase
   /**
+   * Names of the `env`/`headers` keys this row's configuration carries, so the
+   * settings page can open its credential editor where there is something to
+   * edit. Key names only: values are credentials and never leave the Host.
+   */
+  readonly secretKeys: readonly string[]
+  /**
    * Why this row's connection configuration cannot start, when it cannot.
    *
    * Omitted for a runnable row, so the common case adds nothing to the wire.

@@ -208,16 +208,10 @@
   gap: 10px;
 }
 
-/* One plane's heading inside the single roster list. The global plane and the
-   agent plane share the list, so each needs a name of its own, and each states
-   what it renders: the count is the only one the group reports. */
-.mcpGroup {
-  margin: 6px 0 0;
-  font: var(--dsw-font-xxs-strong-12);
-  color: var(--dsw-alias-label-tertiary);
-}
+/* One plane's heading is gone: the list is flat, and the only plane that needs
+   naming is the global one, whose rows carry a tag instead. */
 
-/* An empty group carries the way out of itself, so the page's own actions do
+/* An empty view carries the way out of itself, so the page's own actions do
    not have to be hunted for above the list. */
 .emptyBlock {
   display: flex;
@@ -240,7 +234,14 @@
 }
 
 /* Rows are settings cards: R20 with the shared card fill and stroke, and no
-   elevation shadow. */
+   elevation shadow.
+
+   The card itself is the row's edit affordance, so an interactive one answers
+   the pointer: hover lifts its surface one step. The keyboard path stays the
+   row's own button, which is focusable and labelled — the card is not a focus
+   target, so it carries no focus ring of its own. A closed row (a global row
+   with no writable file) keeps the card inert and says why through its
+   controls' tooltips. */
 .mcpRow {
   box-sizing: border-box;
   display: flex;
@@ -251,6 +252,33 @@
   border: 0.5px solid var(--dsw-alias-settings-card-stroke);
   border-radius: var(--dsw-radius-xl);
   background: var(--dsw-alias-settings-card-fill);
+  transition: background-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.mcpRow[data-clickable='true'] {
+  cursor: pointer;
+}
+
+.mcpRow[data-clickable='true']:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.mcpRow[data-clickable='true']:active {
+  background: var(--dsw-alias-interactive-bg-active);
+}
+
+/* The preset a row belongs to is metadata, like the status beside it: the list
+   is already narrowed to it, so it is stated once per row rather than tagged. */
+.rowScope {
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mcpRow {
+    transition: none;
+  }
 }
 
 .mcpMain {
@@ -769,6 +797,31 @@
 .importMeta {
   font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* ---- Credentials pane ----
+   The env/headers of one row, as fields: a name column wide enough for the
+   usual KEY names, and the value beside it. The name is a label rather than an
+   input — the key is what the configuration declares, and renaming it here
+   would be a different edit (the config pane's JSON owns that). */
+.credentialFields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.credentialField {
+  display: grid;
+  grid-template-columns: minmax(96px, 34%) minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.credentialKey {
+  font: 12px/18px var(--ds-font-family-code);
+  color: var(--dsw-alias-label-secondary);
   overflow-wrap: anywhere;
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Button, Input, Modal, SegmentedTabs } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   AddMcpRequest,
@@ -15,6 +15,12 @@ import { admits, parseMcpToolFilter } from '../mcp-tool-filter.ts'
 import { mcpEntryConfig } from '../mcp-config.ts'
 import { isBlockingConfigIssue, diagnoseMcpSpec } from '../mcp-diagnostics.ts'
 import { flattenSpec, parseSpecText } from '../mcp-spec.ts'
+import {
+  credentialText,
+  credentialValues,
+  mergeCredentialEdits,
+  type CredentialKind,
+} from './credential-fields.ts'
 import { formatMcpConfigIssues } from './config-issues.ts'
 import { MCP_READ_ONLY_REASON, type McpSectionKey } from './locales.ts'
 import type { McpPlane, McpPresetOption, McpServer } from './settings-controller.ts'
@@ -26,8 +32,13 @@ type Translate = (key: McpSectionKey) => string
 /** Whether the editor is creating a row or replacing one. */
 export type McpEditorMode = 'add' | 'edit'
 
-/** The editor's two panes: the connection row's own fields, and its tools. */
-type McpEditorTab = 'config' | 'tools'
+/**
+ * The editor's panes: the row's own fields, the credentials it carries, and its
+ * tools. `credentials` edits the `env`/`headers` of the same JSON the config
+ * pane holds — one datum, two views — so a row with credentials can be opened
+ * straight on them.
+ */
+export type McpEditorTab = 'config' | 'credentials' | 'tools'
 
 /** Request emitted by the MCP editor after JSON parsing and validation. */
 export type McpEditorRequest = AddMcpRequest | EditMcpRequest
@@ -52,6 +63,11 @@ interface McpEditorProps {
    * row needs a preset that only this form asks for.
    */
   readonly plane: McpPlane
+  /**
+   * The pane this dialog opens on. The section asks for `credentials` when the
+   * row's own button was clicked, and for `config` everywhere else.
+   */
+  readonly tab: McpEditorTab
   /** Whether the global plane has a file-backed Include to write. */
   readonly globalWritable: boolean
   /**
@@ -113,9 +129,63 @@ function specJson(describe: DescribeMcpResult | undefined): string {
   return JSON.stringify(flattenSpec(spec), null, 2)
 }
 
+/**
+ * The credentials pane: the row's `env` (stdio) or `headers` (HTTP) as fields,
+ * read from and written back to the JSON on the config pane.
+ *
+ * One datum with two views, rather than a second copy of it: a pasted spec, a
+ * fixed command and a credential all end in the same save, so the JSON box has
+ * to stay the thing that is written.
+ * @param props.json - the JSON box's current text.
+ * @param props.kind - the map this transport carries.
+ * @param props.baseline - the values the pane opened with, for the changed-only merge.
+ * @param props.disabled - whether the row's actions are closed.
+ * @param props.onPush - apply one field's edit to the JSON box.
+ * @param props.t - the section's translator.
+ * @returns the credential fields, or why they cannot be shown.
+ */
+function McpCredentialsPane({ json, kind, baseline, disabled, onPush, t }: {
+  readonly json: string
+  readonly kind: CredentialKind
+  readonly baseline: string
+  readonly disabled: boolean
+  readonly onPush: (kind: CredentialKind, key: string, value: string) => void
+  readonly t: Translate
+}): ReactNode {
+  const values = credentialValues(json, kind)
+  if (values === undefined) return <p className={css.fieldHint} role="status">{t('mcp.credential.unreadable')}</p>
+  const label = kind === 'env' ? t('mcp.credential.env') : t('mcp.credential.header')
+  const hint = kind === 'env' ? t('mcp.credential.envHint') : t('mcp.credential.headerHint')
+  return (
+    <div className={css.formField}>
+      <span className={css.formLabel}>{label}</span>
+      <span className={css.fieldHint}>{hint}</span>
+      {values.entries.length === 0
+        ? <span className={css.fieldHint}>{t('mcp.credential.empty')}</span>
+        : (
+          <div className={css.credentialFields}>
+            {values.entries.map(([key, value]) => (
+              <div key={key} className={css.credentialField}>
+                <span className={css.credentialKey}>{key}</span>
+                <Input
+                  value={value}
+                  disabled={disabled || !values.editable}
+                  aria-label={key}
+                  spellCheck={false}
+                  onChange={(event) => { onPush(kind, key, event.currentTarget.value) }}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      {values.editable ? null : <span className={css.descOver}>{t('mcp.credential.unreadable')}</span>}
+    </div>
+  )
+}
+
 /** Modal editor split into a pane for the row's fields and a pane for its tools. */
-export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, plane, globalWritable, preset, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
-  const [tab, setTab] = useState<McpEditorTab>('config')
+export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, plane, tab: openTab, globalWritable, preset, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
+  const [tab, setTab] = useState<McpEditorTab>(openTab)
   const tabId = useId()
   /** Chosen agent preset for a new row; a placeholder while the list loads. */
   const [presetId, setPresetId] = useState(server?.scope === 'preset' ? server.presetId ?? '' : preset ?? '')
@@ -127,6 +197,18 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
   const [title, setTitle] = useState(server?.serverName ?? '')
   const [description, setDescription] = useState(descriptionInitial)
   const [json, setJson] = useState('')
+  /**
+   * The JSON box as it stood when the credentials pane opened, so a save only
+   * writes back the values the user actually changed: a later spec load, or a
+   * value left as the box spelled it, must survive untouched.
+   */
+  const [credentialBase, setCredentialBase] = useState('')
+  /**
+   * The box's current text, for a merge that runs from a click rather than from
+   * a render. A `setJson` is not visible to a handler that started in the same
+   * tick, and the pane's own writes all land here too.
+   */
+  const jsonBox = useRef('')
   const [localError, setLocalError] = useState<string | null>(null)
   const [configNotice, setConfigNotice] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -141,6 +223,36 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
    * to the wrong side by opening its editor after a scope change.
    */
   const targetPlane: McpPlane = mode === 'edit' ? planeOf(server) : planeChoice
+  /** The credential map this row's transport carries; `env` until the transport is known. */
+  const credentialKind: CredentialKind = (() => {
+    try {
+      const parsed = parseSpecText(json, t('mcp.form.jsonInvalid'))
+      return parsed.spec.type === 'stdio' ? 'env' : 'headers'
+    } catch { return 'env' }
+  })()
+
+  /**
+   * Apply one credential field to the JSON box, which is the document the save
+   * reads. A box this pane cannot parse or write leaves the field as it was: the
+   * config pane is where a broken document gets fixed.
+   */
+  const pushCredential = (kind: CredentialKind, key: string, value: string): void => {
+    const next = credentialText(jsonBox.current, kind, key, value)
+    if (next === undefined) return
+    jsonBox.current = next
+    setJson(next)
+  }
+
+  /**
+   * Fold the credential fields the user changed into the form's JSON.
+   *
+   * Only the changed ones: the pane edits the box the user also edits by hand,
+   * and a value it never showed must not be replaced by the version it read
+   * when it opened.
+   * @param text - the JSON box's current text.
+   * @returns the text to save, or the input unchanged when nothing was edited.
+   */
+  const mergeCredentials = (text: string): string => mergeCredentialEdits(text, credentialBase)
 
   /**
    * Connect once and list what the server publishes.
@@ -213,7 +325,11 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
     let current = true
     setLocalError(null)
     setConfigNotice(null)
-    setTab('config')
+    // The pane this dialog opens on: the row's own button asks for its
+    // credentials, and everything else asks for the config. The dialog stays
+    // mounted while it is closed, so the pane cannot come from the state
+    // initializer alone — it has to be applied on every open.
+    setTab(openTab)
     // An edited row keeps its own preset; a new row opens on the preset the list
     // is narrowed to, which is the one the section will write into. Losing that
     // here left the picker on the first preset, so a row landed somewhere the
@@ -251,20 +367,37 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       void describeMcp({ target, entryId: server.entryId }).then(
         (described) => {
           if (!current) return
-          setJson(specJson(described))
+          const text = specJson(described)
+          jsonBox.current = text
+          setJson(text)
+          // The credentials pane records the document it opened with, so a save
+          // writes back only the fields the user changed.
+          setCredentialBase(text)
           setLoading(false)
         },
-        () => { if (current) { setJson(specJson(undefined)); setLoading(false) } },
+        () => {
+          if (!current) return
+          const text = specJson(undefined)
+          jsonBox.current = text
+          setJson(text)
+          setCredentialBase(text)
+          setLoading(false)
+        },
       )
     } else {
-      setJson(specJson(undefined))
+      const text = specJson(undefined)
+      jsonBox.current = text
+      setJson(text)
+      setCredentialBase(text)
     }
     return () => { current = false }
-  }, [editKey, mode, open, server, descriptionInitial, presets, t])
+  }, [editKey, mode, open, openTab, server, descriptionInitial, presets, t])
 
   const submit = async (): Promise<void> => {
     try {
-      const parsed = parseSpecText(json, t('mcp.form.jsonInvalid'))
+      // The credentials pane edits the box through the same merge the config
+      // pane's own typing goes through, so one save writes one document.
+      const parsed = parseSpecText(mergeCredentials(json), t('mcp.form.jsonInvalid'))
       const serverName = (title.trim() !== '' ? title.trim() : parsed.serverName ?? '').trim()
       if (serverName === '') throw new Error(t('mcp.form.required'))
       const spec = parsed.spec
@@ -376,6 +509,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
           onChange={pickTab}
           items={[
             { value: 'config', label: t('mcp.form.tabConfig'), id: `${tabId}-config-tab`, panelId: `${tabId}-config-panel` },
+            { value: 'credentials', label: t('mcp.credential.tab'), id: `${tabId}-credentials-tab`, panelId: `${tabId}-credentials-panel` },
             { value: 'tools', label: t('mcp.form.tabTools'), id: `${tabId}-tools-tab`, panelId: `${tabId}-tools-panel` },
           ]}
         />
@@ -446,10 +580,37 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
               disabled={formDisabled}
               spellCheck={false}
               aria-label={t('mcp.form.json')}
-              onChange={(event) => { setJson(event.currentTarget.value); setLocalError(null) }}
+              onChange={(event) => {
+                jsonBox.current = event.currentTarget.value
+                setJson(event.currentTarget.value)
+                setLocalError(null)
+              }}
             />
           </label>
           {loading ? <p className={css.mcpStatus}>{t('mcp.loading')}</p> : null}
+        </div>
+        <div
+          id={`${tabId}-credentials-panel`}
+          role="tabpanel"
+          aria-labelledby={`${tabId}-credentials-tab`}
+          className={css.editorPanel}
+          hidden={tab !== 'credentials'}
+        >
+          {loading
+            ? <p className={css.mcpStatus}>{t('mcp.credential.busy')}</p>
+            : (
+              <>
+                <McpCredentialsPane
+                  json={json}
+                  kind={credentialKind}
+                  baseline={credentialBase}
+                  disabled={formDisabled}
+                  onPush={pushCredential}
+                  t={t}
+                />
+                <span className={css.fieldHint}>{t('mcp.credential.hint')}</span>
+              </>
+            )}
         </div>
         <div
           id={`${tabId}-tools-panel`}

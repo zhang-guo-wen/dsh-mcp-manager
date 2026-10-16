@@ -96,6 +96,13 @@ export interface McpServer {
   /** Root-fiber phase when live, otherwise null. */
   fiberPhase: McpPhase
   /**
+   * Key names of the `env`/`headers` the row's configuration carries, so the
+   * list can open the credential editor on a row that has credentials and lead
+   * everywhere else with the plain editor. Key names only: values stay on the
+   * Host.
+   */
+  secretKeys: readonly string[]
+  /**
    * Why this row cannot start as configured, when it cannot: a blank
    * `command`/`url`, an unresolved `${env:NAME}`, or an empty credential field.
    *
@@ -268,6 +275,7 @@ export function mapMcpServers(roster: ListMcpsResult): readonly McpServer[] {
       writable: entry.writable !== false,
       ...entry.readOnly === undefined ? {} : { readOnly: entry.readOnly },
       fiberPhase: entry.fiberPhase,
+      secretKeys: entry.secretKeys ?? [],
       ...entry.configIssue === undefined ? {} : { configIssue: entry.configIssue },
     })
   }
@@ -282,6 +290,7 @@ export function mapMcpServers(roster: ListMcpsResult): readonly McpServer[] {
         writable: row.writable !== false,
         ...row.readOnly === undefined ? {} : { readOnly: row.readOnly },
         fiberPhase: row.fiberPhase,
+        secretKeys: row.secretKeys ?? [],
         ...row.configIssue === undefined ? {} : { configIssue: row.configIssue },
       })
     }

@@ -173,6 +173,12 @@ export interface McpGlobalRow {
   readonly held: boolean
   /** Whether the row's plugin is running right now. */
   readonly mounted: boolean
+  /**
+   * The row's existing runtime config, so a reader of the roster can report
+   * what the row declares without re-reading the entry. Never logged, never
+   * persisted by the gate — the include's own file stays the source of truth.
+   */
+  readonly config?: unknown
 }
 
 /** One live preset mount, reduced to what the gate reads. */
@@ -575,6 +581,10 @@ export function createMcpPreloadGate(
           enabled: entry.options.disabled !== true,
           held: preHeld.get(entryId)?.global === true,
           mounted: (entry.fiber?.uid ?? null) !== null && entry.fiber?.state !== 4,
+          // Carried so the roster can report this row's configuration issues and
+          // credential field names (the settings page opens its credential
+          // editor from the latter). Read-only: this is the row's own config.
+          config: entry.options.config,
         })
       }
     }

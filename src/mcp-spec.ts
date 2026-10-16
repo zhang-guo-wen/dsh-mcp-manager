@@ -66,6 +66,24 @@ export function specFromObject(candidate: AnyRecord, invalid: string): McpSpec {
 }
 
 /**
+ * Which transport one decoded server object declares, without asserting that it
+ * is complete: a missing `type` is inferred from `command`/`url`, exactly as
+ * {@link specFromObject} does. Callers use it to decide which field a partial
+ * object is about — the credentials editor edits the object the user typed into
+ * the JSON box, which may be neither valid nor finished yet.
+ * @param candidate - one decoded server entry.
+ * @returns the transport kind, or undefined when the entry names none.
+ */
+export function transportKindOf(candidate: AnyRecord): 'stdio' | 'http' | undefined {
+  const declared = candidate.type
+  if (declared === 'stdio') return 'stdio'
+  if (declared === 'streamable-http' || declared === 'http' || declared === 'sse') return 'http'
+  if (declared !== undefined) return undefined
+  if (typeof candidate.command === 'string') return 'stdio'
+  return typeof candidate.url === 'string' ? 'http' : undefined
+}
+
+/**
  * Parse an MCP connection document. Accepts a flat spec, a single-entry named
  * map (`{ "<name>": { command|url } }`), or a Claude `mcpServers` wrapper; a
  * name carried in the JSON is returned so a caller can fill an empty title.
