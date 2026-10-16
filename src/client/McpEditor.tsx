@@ -60,11 +60,11 @@ interface McpEditorProps {
    */
   readonly preset?: string
   readonly descriptionInitial: string
-  readonly onUpdateDescription: (key: string, value: string) => void
+  readonly onUpdateDescription: (key: string, value: string) => Promise<void>
   /** Tool rules this row currently carries, as stored entries. */
   readonly toolRulesInitial: readonly string[]
   /** Persist the row's tool rules; an empty list clears them. */
-  readonly onUpdateTools: (key: string, patterns: readonly string[]) => void
+  readonly onUpdateTools: (key: string, patterns: readonly string[]) => Promise<void>
   readonly t: Translate
   readonly onClose: () => void
   readonly onSubmit: (request: McpEditorRequest) => void
@@ -262,7 +262,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
     return () => { current = false }
   }, [editKey, mode, open, server, descriptionInitial, presets, t])
 
-  const submit = (): void => {
+  const submit = async (): Promise<void> => {
     try {
       const parsed = parseSpecText(json, t('mcp.form.jsonInvalid'))
       const serverName = (title.trim() !== '' ? title.trim() : parsed.serverName ?? '').trim()
@@ -300,12 +300,12 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
         target.scope === 'global' ? '' : target.agentPreset,
         serverName,
       )
-      if (description.trim() !== '') onUpdateDescription(key, description.trim())
+      if (description.trim() !== '') await onUpdateDescription(key, description.trim())
       // Only a listing the user actually saw may rewrite the rules; a server
       // that never answered leaves the stored rules exactly as they were. A
       // global row never lists one, because its rules cannot take effect.
       if (tools !== null && !toolsReadOnly) {
-        onUpdateTools(key, tools.filter(tool => hiddenTools.has(tool.name)).map(tool => `!${tool.name}`))
+        await onUpdateTools(key, tools.filter(tool => hiddenTools.has(tool.name)).map(tool => `!${tool.name}`))
       }
     } catch (cause) {
       // Everything this catch reports is about the connection spec, so the pane
@@ -361,7 +361,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       footer={(
         <div className={css.formActions}>
           <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>{t('mcp.form.cancel')}</Button>
-          <Button variant="primary" size="sm" onClick={submit} disabled={formDisabled || noTarget}>
+          <Button variant="primary" size="sm" onClick={() => { void submit() }} disabled={formDisabled || noTarget}>
             {busy ? t('mcp.form.saving') : t('mcp.form.save')}
           </Button>
         </div>

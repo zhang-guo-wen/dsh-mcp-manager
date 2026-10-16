@@ -322,6 +322,17 @@
   color: var(--dsw-alias-state-warn-label);
 }
 
+/* One description save's state line: saving, saved, or why it failed. */
+.descState {
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+  margin: 0;
+}
+
+.descState[data-state='failed'] {
+  color: var(--dsw-alias-state-error-primary);
+}
+
 .mcpRight {
   display: inline-flex;
   flex: none;

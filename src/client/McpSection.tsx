@@ -20,7 +20,7 @@
  * @module @guowenzhang/dsh-mcp-manager/client/McpSection
  */
 
-import { useEffect, useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Button, SegmentedControl, SegmentedTabs, StateDot, Switch, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
@@ -30,7 +30,7 @@ import { toolRuleEntries } from '../mcp-tool-filter.ts'
 import { formatMcpConfigIssues } from './config-issues.ts'
 import { McpEditor, type McpEditorMode, type McpEditorRequest } from './McpEditor.tsx'
 import { ClaudeImportDialog } from './ClaudeImportDialog.tsx'
-import { McpOptimizeSection } from './McpOptimizeSection.tsx'
+import { McpOptimizeSection, saveFailureMessage } from './McpOptimizeSection.tsx'
 import {
   MCP_LOADING_OPTIONS,
   mcpRowKey,
@@ -273,29 +273,66 @@ function McpLoadingPicker({ value, disabled, status, onPick, onRetry, t }: {
  * anywhere else.
  * @param props.value - the committed description.
  * @param props.disabled - whether the row's actions are closed.
- * @param props.onCommit - persist the edited text.
+ * @param props.onCommit - persist the edited text; rejects with the save reason.
  * @param props.t - the section's translator.
  * @returns the description control.
  */
 function McpDescription({ value, disabled, onCommit, t }: {
   readonly value: string
   readonly disabled: boolean
-  readonly onCommit: (next: string) => void
+  readonly onCommit: (next: string) => Promise<void>
   readonly t: Translate
 }): ReactNode {
   const [draft, setDraft] = useState<string | null>(null)
+  // One async save runs per commit, and the row says where it stands: saving,
+  // saved, or failed with the reason. A failed write keeps the draft in the
+  // box — the user retries by committing again — instead of reverting to the
+  // last committed text as if the edit never happened.
+  const [save, setSave] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
+  const [failure, setFailure] = useState<string | null>(null)
+  const composing = useRef(false)
+  const savedTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => {
+    if (savedTimer.current !== undefined) clearTimeout(savedTimer.current)
+  }, [])
+  const commit = async (next: string): Promise<void> => {
+    if (next === value) {
+      setDraft(null)
+      return
+    }
+    setSave('saving')
+    setFailure(null)
+    try {
+      await onCommit(next)
+      setDraft(null)
+      setSave('saved')
+      if (savedTimer.current !== undefined) clearTimeout(savedTimer.current)
+      savedTimer.current = window.setTimeout(() => {
+        savedTimer.current = undefined
+        setSave(previous => (previous === 'saved' ? 'idle' : previous))
+      }, 2_500)
+    } catch (cause) {
+      setSave('failed')
+      setFailure(saveFailureMessage(cause, t))
+    }
+  }
   if (draft === null) {
     return (
-      <button
-        type="button"
-        className={css.descText}
-        data-empty={value === ''}
-        disabled={disabled}
-        title={value === '' ? t('mcp.descriptionPlaceholder') : value}
-        onClick={() => { setDraft(value) }}
-      >
-        {value === '' ? t('mcp.description.add') : value}
-      </button>
+      <>
+        <button
+          type="button"
+          className={css.descText}
+          data-empty={value === ''}
+          disabled={disabled}
+          title={value === '' ? t('mcp.descriptionPlaceholder') : value}
+          onClick={() => { setDraft(value); setSave('idle'); setFailure(null) }}
+        >
+          {value === '' ? t('mcp.description.add') : value}
+        </button>
+        {save === 'saved' ? (
+          <span className={css.descState} role="status">{t('opt.state.saved')}</span>
+        ) : null}
+      </>
     )
   }
   return (
@@ -308,15 +345,38 @@ function McpDescription({ value, disabled, onCommit, t }: {
         aria-label={t('mcp.descriptionLabel')}
         aria-invalid={draft.length > MAX_DESCRIPTION_CHARS}
         onChange={(event) => { setDraft(event.currentTarget.value) }}
-        onBlur={() => { onCommit(draft); setDraft(null) }}
+        onCompositionStart={() => { composing.current = true }}
+        onCompositionEnd={() => { composing.current = false }}
+        onBlur={() => {
+          // A blur that arrives mid-composition (an IME candidate window
+          // closing) must not commit half-conformed text.
+          if (composing.current) return
+          void commit(draft)
+        }}
         onKeyDown={(event) => {
-          if (event.key === 'Enter') event.currentTarget.blur()
-          if (event.key === 'Escape') setDraft(null)
+          // Enter confirms an IME candidate as often as it submits; only a
+          // real Enter may leave the field (keyCode 229 is composition too).
+          if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+            event.currentTarget.blur()
+          }
+          if (event.key === 'Escape') {
+            setDraft(null)
+            setSave('idle')
+            setFailure(null)
+          }
         }}
       />
       {draft.length > MAX_DESCRIPTION_CHARS ? (
         <span className={css.descOver} role="status">
           {t('mcp.description.budget').replace('{n}', String(MAX_DESCRIPTION_CHARS))}
+        </span>
+      ) : null}
+      {save === 'saving' ? (
+        <span className={css.descState} role="status">{t('opt.state.saving')}</span>
+      ) : null}
+      {save === 'failed' ? (
+        <span className={css.descState} data-state="failed" role="alert">
+          {failure ?? t('opt.state.failed')}
         </span>
       ) : null}
     </>
@@ -339,7 +399,7 @@ function McpRow({ server, description, suppressed, action, onEditDescription, on
   readonly suppressed: boolean
   /** This row's in-flight enablement change, or the failure it ended in. */
   readonly action: RowAction | null
-  readonly onEditDescription: (value: string) => void
+  readonly onEditDescription: (value: string) => Promise<void>
   readonly onEdit: () => void
   readonly onToggleDisabled: (enabled: boolean) => void
   /** Retry the enablement change this row last failed at. */
@@ -700,7 +760,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
         description={descriptionOf(server)}
         suppressed={mcpView.status === 'ready' && mcpView.suppressed.has(key)}
         action={rowAction[key] ?? null}
-        onEditDescription={(value) => { updateMcpDescription(key, value) }}
+        onEditDescription={(value) => updateMcpDescription(key, value)}
         onEdit={() => { openEdit(server) }}
         onToggleDisabled={(enabled) => { toggleDisabled(server, enabled) }}
         onRetry={(enabled) => { toggleDisabled(server, enabled) }}

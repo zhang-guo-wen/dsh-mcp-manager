@@ -204,6 +204,9 @@ const zh = {
   'opt.hideDestructive.desc': '把 annotations.destructiveHint 为 true 的工具从本次会话的可见集合里去掉：既不注册也不能调用。只认显式声明，没有注解的工具不受影响；对已经加载的服务器不追溯，下一次加载生效。',
   'opt.state.saving': '保存中',
   'opt.state.saved': '已保存',
+  'opt.state.failed': '保存失败',
+  'opt.save.notWritable': 'MCP 设置文档当前不可写，未能保存。',
+  'opt.save.failed': '保存失败：',
   'unavailable': '设置当前不可用',
 }
 /** Key union, sourced from the Chinese dictionary. */
@@ -405,6 +408,9 @@ const en: Record<McpSectionKey, string> = {
   'opt.hideDestructive.desc': 'Removes tools whose annotations.destructiveHint is true from the session\'s visible set: neither registered nor callable. Only an explicit declaration counts, tools without annotations are unaffected, and an already-loaded server is not changed retroactively — the next load applies it.',
   'opt.state.saving': 'Saving',
   'opt.state.saved': 'Saved',
+  'opt.state.failed': 'Save failed',
+  'opt.save.notWritable': 'The MCP settings document is not writable; nothing was saved.',
+  'opt.save.failed': 'Save failed:',
   'unavailable': 'Setting currently unavailable',
 }
 

@@ -202,13 +202,14 @@ export interface McpSectionFace {
   }
   /** Persist the MCP loading mode the user picked. */
   setMcpLoading: (mode: McpLoadingOption) => Promise<void>
-  /** Persist one MCP row's description. */
-  updateMcpDescription: (key: string, description: string) => void
+  /** Persist one MCP row's description; resolves once the Host accepted the write. */
+  updateMcpDescription: (key: string, description: string) => Promise<void>
   /**
    * Persist one MCP row's tool rules. An empty list removes the row's rules, so
-   * every tool it publishes becomes visible again.
+   * every tool it publishes becomes visible again. Resolves once the Host
+   * accepted the write and rejects with the reason it did not.
    */
-  updateMcpTools: (key: string, patterns: readonly string[]) => void
+  updateMcpTools: (key: string, patterns: readonly string[]) => Promise<void>
   /**
    * Persist one optimization field, merging it into the stored policy map.
    * Resolves once the Host accepted the write and rejects with the reason it did
@@ -288,10 +289,25 @@ export function mapMcpServers(roster: ListMcpsResult): readonly McpServer[] {
   return rows
 }
 
+/**
+ * A save failure carrying a stable code, so the page can show a localized
+ * headline instead of raw Host text.
+ */
+export class McpSaveError extends Error {
+  constructor(readonly code: 'not-writable', message: string) {
+    super(message)
+    this.name = 'McpSaveError'
+  }
+}
+
 /** Owner handle over the `mcp-manager` namespace. */
 export class McpSettingsController {
   private readonly store: SnapshotStore<McpSectionState>
   private readonly unsubscribe: () => void
+  /** One namespace write at a time: each queued write reads after the last landed. */
+  private writeQueue: Promise<void> = Promise.resolve()
+  /** Optimization fields this controller wrote, ahead of a possibly stale snapshot. */
+  private optimizeWritten: Record<string, unknown> = {}
 
   /**
    * @param scope - the `mcp-manager` configuration form.
@@ -321,8 +337,8 @@ export class McpSettingsController {
     return {
       hooks: { mcpSettings: this.store },
       setMcpLoading: (mode) => this.setMcpLoading(mode),
-      updateMcpDescription: (key, description) => { this.updateMcpDescription(key, description) },
-      updateMcpTools: (key, patterns) => { this.updateMcpTools(key, patterns) },
+      updateMcpDescription: (key, description) => this.updateMcpDescription(key, description),
+      updateMcpTools: (key, patterns) => this.updateMcpTools(key, patterns),
       setOptimize: (field, value) => this.setOptimize(field, value),
       addMcp: this.authoring.addMcp,
       addMcps: this.authoring.addMcps,
@@ -339,43 +355,68 @@ export class McpSettingsController {
     }
   }
 
+  /** Run one write after every write queued before it, failures not poisoning the chain. */
+  private enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.writeQueue.then(task, task)
+    this.writeQueue = run.then(() => undefined, () => undefined)
+    return run
+  }
+
+  /**
+   * The current value of one settings map, for a read-modify-write.
+   * @param field - the namespace field holding the map.
+   * @returns the map as the snapshot currently reports it.
+   * @throws {@link McpSaveError} when the document cannot be written.
+   */
+  private async readWritable(field: 'optimize' | 'descriptions' | 'tools'): Promise<Record<string, unknown>> {
+    const snapshot = this.scope.getSnapshot()
+    if (snapshot.status !== 'ready' || !snapshot.writable) {
+      throw new McpSaveError('not-writable', 'the MCP settings document is not writable')
+    }
+    return (snapshot.value?.[field] ?? {}) as Record<string, unknown>
+  }
+
   /**
    * Write one optimization field.
    *
    * The stored policy is one open map, so a field write is a read-modify-write
    * of that map rather than a separate namespace field. The Host converges every
    * field at read time, which is why nothing here validates the value: a bad one
-   * falls back to its default instead of failing the namespace commit.
+   * falls back to its default instead of failing the namespace commit. Writes
+   * are serialized and fold in every field this controller already wrote, so
+   * two rows saving at once cannot drop each other's value through a stale
+   * snapshot.
    * @param field - the policy field name.
    * @param value - the value to store.
-   * @throws when the document is not writable, or when the Host rejects the write.
+   * @throws {@link McpSaveError} when the document is not writable, or when the
+   *   Host rejects the write.
    */
-  private async setOptimize(field: string, value: unknown): Promise<void> {
-    const snapshot = this.scope.getSnapshot()
-    if (snapshot.status !== 'ready' || !snapshot.writable) {
-      throw new Error('the MCP settings document is not writable')
-    }
-    const next = { ...snapshot.value?.optimize, [field]: value }
-    await this.scope.set('optimize', next)
+  private setOptimize(field: string, value: unknown): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const next = { ...await this.readWritable('optimize'), ...this.optimizeWritten, [field]: value }
+      await this.scope.set('optimize', next)
+      this.optimizeWritten = { ...this.optimizeWritten, [field]: value }
+    })
   }
 
-  private updateMcpDescription(key: string, description: string): void {
-    const snapshot = this.scope.getSnapshot()
-    if (snapshot.status !== 'ready' || !snapshot.writable) return
-    const map = snapshot.value?.descriptions ?? {}
-    const next = { ...map }
-    if (description === '') Reflect.deleteProperty(next, key)
-    else next[key] = description
-    void this.scope.set('descriptions', next)
+  private async updateMcpDescription(key: string, description: string): Promise<void> {
+    await this.enqueueWrite(async () => {
+      const map = (await this.readWritable('descriptions')) as Record<string, string>
+      const next = { ...map }
+      if (description === '') Reflect.deleteProperty(next, key)
+      else next[key] = description
+      await this.scope.set('descriptions', next)
+    })
   }
 
-  private updateMcpTools(key: string, patterns: readonly string[]): void {
-    const snapshot = this.scope.getSnapshot()
-    if (snapshot.status !== 'ready' || !snapshot.writable) return
-    const next = { ...snapshot.value?.tools }
-    if (patterns.length === 0) Reflect.deleteProperty(next, key)
-    else next[key] = [...patterns]
-    void this.scope.set('tools', next)
+  private async updateMcpTools(key: string, patterns: readonly string[]): Promise<void> {
+    await this.enqueueWrite(async () => {
+      const map = (await this.readWritable('tools')) as Record<string, unknown>
+      const next = { ...map }
+      if (patterns.length === 0) Reflect.deleteProperty(next, key)
+      else next[key] = [...patterns]
+      await this.scope.set('tools', next)
+    })
   }
 
   private async setMcpLoading(mode: McpLoadingOption): Promise<void> {

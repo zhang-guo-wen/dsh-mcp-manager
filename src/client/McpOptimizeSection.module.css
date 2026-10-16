@@ -110,6 +110,10 @@
   color: var(--dsw-alias-state-success-primary);
 }
 
+.rowState[data-state='failed'] {
+  color: var(--dsw-alias-state-error-primary);
+}
+
 .numberInput {
   width: 88px;
 }

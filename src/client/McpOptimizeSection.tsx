@@ -54,7 +54,27 @@ type CatalogView =
   }
 
 /** One row's save state, shown beside its control. */
-type RowState = 'idle' | 'saving' | 'saved'
+type RowState = 'idle' | 'saving' | 'saved' | 'failed'
+
+/** The localized text for one row's save state. */
+function stateText(state: RowState, t: Translate): string {
+  if (state === 'saving') return t('opt.state.saving')
+  if (state === 'saved') return t('opt.state.saved')
+  if (state === 'failed') return t('opt.state.failed')
+  return ''
+}
+
+/**
+ * The localized headline for one failed save.
+ * @param cause - the rejection the write failed with.
+ * @param t - the section's translator.
+ * @returns a localized line, with the raw reason kept as technical detail.
+ */
+export function saveFailureMessage(cause: unknown, t: Translate): string {
+  const code = (cause as { code?: unknown } | null)?.code
+  const detail = cause instanceof Error ? cause.message : String(cause)
+  return code === 'not-writable' ? t('opt.save.notWritable') : `${t('opt.save.failed')} ${detail}`
+}
 
 /** How long a row keeps its "saved" note before the slot goes quiet again. */
 const SAVED_NOTE_MS = 2_500
@@ -92,7 +112,7 @@ function SwitchRow({ field, label, desc, value, disabled, state, onWrite, t }: {
       </div>
       <div className={css.rowControl}>
         <span className={css.rowState} data-state={state} role="status">
-          {state === 'saving' ? t('opt.state.saving') : state === 'saved' ? t('opt.state.saved') : ''}
+          {stateText(state, t)}
         </span>
         <Switch
           checked={value}
@@ -155,7 +175,7 @@ function NumberRow({ field, label, desc, value, min, max, disabled, state, onWri
       </div>
       <div className={css.rowControl}>
         <span className={css.rowState} data-state={state} role="status">
-          {state === 'saving' ? t('opt.state.saving') : state === 'saved' ? t('opt.state.saved') : ''}
+          {stateText(state, t)}
         </span>
         <Input
           className={css.numberInput ?? ''}
@@ -229,11 +249,11 @@ export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
     void setOptimize(field, value).then(
       () => { markRow(field, 'saved') },
       (cause: unknown) => {
-        markRow(field, 'idle')
-        setFailure(cause instanceof Error ? cause.message : String(cause))
+        markRow(field, 'failed')
+        setFailure(saveFailureMessage(cause, t))
       },
     )
-  }, [markRow, setOptimize])
+  }, [markRow, setOptimize, t])
 
   useEffect(() => {
     let current = true
