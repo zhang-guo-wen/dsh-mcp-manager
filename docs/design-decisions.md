@@ -17,11 +17,11 @@ kind: "package-reference"
 | D1 | 「允不允许用」与「什么时候进上下文」是两个开关 | 两件正交的事用一个枚举表达不了 |
 | D2 | 三种加载模式，默认 `dynamic` | 省 token 与工具绑定质量之间取默认值 |
 | D3 | 按需工具的注册落在 host 平面 | 放 preset 作用域会让 preset 反复重挂 |
-| D4 | 连接按会话隔离，随会话回收 | 一个会话加载的服务器不能漏给别的会话，也不能活过它 |
-| D5 | 预加载靠运行时摘行（gate），不写文件 | preset 是输入不是持久化目标 |
+| D4 | 连接进宿主级常驻池，按 claim 引用计数释放 | 一台服务器在宿主进程内只起一次、跨会话复用，没有会话再用时才停 |
+| D5 | 预加载靠「发布点抑制 + 挂载前拦截 + late hold」三条路径 | 三种建立顺序都不 import 插件；全局行只在内存里拦，绝不写用户文件 |
 | D6 | 工具过滤在返回与调用两点强制 | 只挡一处挡不住模型凭记忆直呼工具名 |
 | D7 | `mcp_load` 结果带 `hidden` 计数 | 模型必须知道"还有工具但不可调用" |
-| D8 | 载体由加载模式决定，规则只决定可见集合 | 模式才是「绑定 vs 缓存」的取舍，规则不该替用户改代价 |
+| D8 | 载体由加载模式决定，规则与收窄只决定可见集合 | 模式才是「绑定 vs 缓存」的取舍；`mount` 载体已删除，`dynamic` 一律 `native` |
 | D9 | 服务器清单进系统提示，不做成列目录工具 | 模型看不到名字就加载不了，而这段常驻成本可用预算封顶 |
 | D10 | 名册读声明 + live fiber，不等任何行的激活 | 等激活等于把 MCP 子进程启动时间（实测 7.5–23s）算进设置页 |
 | D11 | 全局行写 Include 的文件 + `refresh()`，不走 Loader 写回 | Loader 写回会把带补丁的树拍平进用户的 `cordis.yml` |
@@ -29,6 +29,8 @@ kind: "package-reference"
 | D13 | 资源仓库 MCP 经内存接口交给管理器 | 保留资源管理器的数据所有权，同时让加载模式统一生效 |
 | D14 | 预设读取经公开 Loader/scope 接口，按代次保存声明 | 不依赖已移除导出，不等待激活，不把旧会话改成新声明 |
 | D15 | 配置不完整是独立状态，与加载模式分开 | 「按需可用」是模式的结果，不是用户要处理的状态 |
+| D16 | 优化策略独立成页，粒度分三层 | 规范只给分页与缓存提示，检索/分页/只带名称都得宿主侧做 |
+| D17 | 「零拉起 + 宿主级常驻 + 引用计数」是一组取舍（2026-10-15） | 不用就不起、用过就留着、没人用才停（见下文 D17） |
 
 ### D1 允许与进上下文分离
 
@@ -40,13 +42,13 @@ kind: "package-reference"
 ### D2 三种加载模式
 
 - **结论**：
-  - `eager`：允许的行照常挂载，不注册任何按需工具。
-  - `dynamic`（默认）：允许的行默认不挂载；`mcp_load` 把 mcp-client 挂进**调用方 agent 的作用域**，工具原生注册。绑定质量最好，代价是工具列表每次加载变一次，请求缓存前缀随之失效。配了工具过滤规则的行改由插件只注册可见工具（见 D8），绑定质量相同，被隐藏的工具不注册。
-  - `lazy`：允许的行默认不挂载；`mcp_load` 用 MCP SDK 直连且**不注册任何工具**，把工具 schema 作为结果返回，模型用固定的 `mcp_call` 代理调用。工具列表永不变，请求缓存前缀零失效。
+  - `eager`：允许的行照常挂载（由组合/harness 的 mcp-client 挂），不注册任何按需工具。
+  - `dynamic`（默认）：允许的行默认不挂载；`mcp_load` 用 MCP SDK 直连**宿主级常驻池**里的那条连接（D4），把**可见工具**用 harness 的适配器原生注册进**调用方 agent 的作用域**（`agent.ctx.get('tools')`）。绑定质量最好，代价是工具列表每次加载变一次，请求缓存前缀随之失效。工具过滤规则与 `query` / `tool` 收窄只决定**注册哪些定义**（见 D8、D16），载体不变。
+  - `lazy`：允许的行默认不挂载；同样走池的 SDK 直连，但**不注册任何工具**，把工具 schema 作为结果返回，模型用固定的 `mcp_call` 代理调用。工具列表永不变，请求缓存前缀零失效。
 - **理由**：默认值要覆盖大多数场景——既省 token，又保持原生工具绑定。`lazy` 的代理通道要求模型照抄 schema 里的参数，质量风险高于收益，因此不做默认。
-- **被否决**：默认 `lazy`（把质量风险推给所有用户）；只留 `eager`/`lazy` 两档（丢掉原生绑定这一最有价值的中间态）。
-- **代价**：`dynamic` 下每次 `mcp_load` 破坏一次前缀，长会话里这是真实成本；选择权交给用户。
-- **实现**：[`src/lazy-mcp.ts`](../src/lazy-mcp.ts) 的 `registerMcpTools`，模式由 `parseMcpLoadingMode` 收敛（无法识别的存量值回退 `dynamic`，不因一个拼错的值让设置提交失败）。
+- **被否决**：默认 `lazy`（把质量风险推给所有用户）；只留 `eager`/`lazy` 两档（丢掉原生绑定这一最有价值的中间态）；让 `dynamic` 的"整台加载"走 harness 挂载而收窄的走插件注册（同一个模式两种代价，见 D8 的被否决 1）。
+- **代价**：`dynamic` 下每次 `mcp_load` 破坏一次前缀，长会话里这是真实成本；选择权交给用户。按需模式（`dynamic` / `lazy`）拿不到 server instructions 与 `mcp-resources` 工具（D8 的已知代价）。
+- **实现**：[`src/lazy-mcp.ts`](../src/lazy-mcp.ts) 的 `registerMcpTools`，模式由 `parseMcpLoadingMode` 收敛（无法识别的存量值回退 `dynamic`，不因一个拼错的值让设置提交失败）；三个模式是否注册按需工具、是否注册 `mcp_call` / `mcp_search` 由 `carrierFor`（[`src/mcp-carrier.ts`](../src/mcp-carrier.ts)）与 `mcpRegistrationKey(policy)` 决定。
 
 ### D3 注册落在 host 平面
 
@@ -54,24 +56,57 @@ kind: "package-reference"
 - **理由**：实测把注册做成 preset 行（`inject: ['tools']`，在 preset 的 standing 作用域里注册）后，**preset 每 ~5 秒被重挂一次**，MCP 子进程反复重启；撤掉即恢复。
 - **代价**：注册的生命周期由插件自身管理——模式切换时 `dispose()` 旧注册再按新模式注册，交换对所有会话的下一次请求生效。
 
-### D4 连接按会话隔离、随会话回收
+### D4 连接进宿主级常驻池，按 claim 引用计数释放
 
-- **结论**：`mounted` 是 `Map<agentId, Map<serverName, MountedServer>>`。同一会话重复 `mcp_load` 复用一份；不同会话各起一份（stdio 就是各一个子进程）；子 agent 与 fork 出的会话都算独立会话。`eager` 相反——preset 是 standing mount，全局共享一个实例。
-- **理由**：一个会话加载的服务器不应把工具漏进别的会话的层；会话结束后也不该继续占着进程。
-- **实现分野**：**native 载体**挂在 agent ctx 上，Cordis 随该 ctx 销毁一并回收；**proxy 载体**是裸 SDK client，不绑定任何作用域，`bindAgentScope` 在该会话第一次 load 时用 `agent.ctx.effect` 注册一次清理，`releaseAgent` 只 dispose proxy 载体（native 的 handle 属于正在销毁的那个 ctx，再调一次是多余的）。
-- **代价**：同一服务器被多个会话并发使用时会有多份进程。
+- **结论**：连接**属于宿主，不属于加载它的会话**。池（[`src/mcp-pool.ts`](../src/mcp-pool.ts) 的 `createMcpConnectionPool`）按「行身份 + 连接配置指纹」去重：键是 `rowKey`（`preset:<id>:<name>` / `global:<name>`）拼上 `connectionFingerprint(config)`（transport / serverName / command / args / env / cwd / url / headers 的 SHA-256 前 16 位十六进制）。同一台服务器的后续加载——同一会话、别的会话、子代理——**复用同一条连接**（stdio 就是同一个子进程）。
+  每个会话对条目持有一个 **claim**：
+  - `mcp_load` 命中已有条目直接复用（不重连）；`native` 载体在该 agent 的 tools 上重建**这一代**注册，`proxy` 载体按会话保留 `tools` / `hidden` 视图。
+  - `mcp_unload` 只释放**调用方那个会话**的 claim，返回三个字段：`released=false`（本会话没加载过）/ `released=true, stopped=true`（最后一个引用，连接已停）/ `released=true, stopped=false`（别的会话仍在用，连接保留）。
+  - 会话销毁（`bindAgentScope` 用 `agent.ctx.effect` 注册一次清理，每个会话只注册一次）同样只释放该会话的 claim；**最后一个 claim 释放时才关闭连接**。
+- **存活语义**：连接在宿主进程内保持，直到最后一个会话释放引用、**提交了不同的加载模式**（工具面重建、该模式的引用释放，无人再持有时停止）、或插件卸载。常驻 = **宿主进程生命周期内**，**不是**跨宿主重启持久化——宿主重启后要重新 `mcp_load`；而"启动与声明重建永不 spawn"是无条件的（见 D5、D17）。
+- **理由**：旧行为在两头都反着来——没加载时启动又杀掉子进程；加载过的服务器在会话结束时被回收，下一个会话又要等一次冷启（`npx -y` 实测 7.5–23 秒）。而 MCP 服务器是**进程级资源**，"谁加载的"与"谁在用"本来就是两件事：连接共享不代表工具泄漏——工具注册仍然落在**调用方 agent 作用域**（D3、D8）。
+- **被否决**：
+  1. **每会话一份连接 + 延迟回收**（旧行为）：`npx -y` 冷启 7.5–23 秒，第二个会话复用不上就等于每次会话都付一遍；再叠一个"延迟回收定时器"只是在给错误的粒度打补丁。
+  2. **给池加空闲 TTL**（5 分钟级）：没有需求支撑，而且会把"用过就留着"改成"过一会儿再付一次冷启"；留在路线图的待评估项（competitive-landscape P1）。
+  3. **让池跨宿主重启持久化**（守护进程 / 开机自启）：超出插件边界，也绕开组合行的授权语义。
+- **代价 / 边界**：
+  - 一份进程被多个会话共享：服务器自身崩溃或挂死会影响**所有**持有它的会话（旧行为下各会话相互隔离）。
+  - 连接配置变化会开出**新条目**，旧连接继续服务仍在用它的会话；指纹只进键与日志，**`env` / `headers` 的值不落日志、不进错误消息**。
+  - 池的操作串行化：两个会话同时加载同一台不会开出两条连接。
+  - 模式切换会重建工具面并释放该模式的 claim，届时无人再持有的连接才停止——这是既定语义，不是常驻失效。
+- **实现**：`src/mcp-pool.ts`（纯 Map + `node:crypto`，不 import harness 包，vitest 直接跑）；`mcp_load` / `mcp_unload` / `mcp_call` 的接线在 [`src/lazy-mcp.ts`](../src/lazy-mcp.ts)，会话清理在 `bindAgentScope`。
+- **测试**：`tests/mcp-pool.spec.ts`（指纹去重、claim 引用计数、最后一个引用关闭、配置变化开新条目）、`tests/on-demand-pool.harness.spec.ts`（真实 Loader/registry 下两个会话只 `opened === 1`、会话销毁后连接存活、末位释放才关闭、切回 `eager` 能恢复挂载）。
 
-### D5 预加载闸门是事后纠正
+### D5 预加载靠三条抑制路径，都不写文件
 
-- **结论**：`dynamic`/`lazy` 下"允许但不预加载"靠运行时摘行实现——读每个 preset 的**文件真值**得到 allowed，令 live 行满足 `mounted === (allowed && mode === 'eager')`，用 `entry.update({disabled})` 驱动挂载/卸载。
-- **理由**：harness 的 `mcp-client` 在 `apply` 里立刻 spawn，插件没有"提前告知"的入口；事件驱动的事后纠正是不改 harness 时唯一可行的做法。
-- **四条性质**（[`src/mcp-gate.ts`](../src/mcp-gate.ts)）：
-  1. **不写文件**。preset 树是 `PresetTree`，`write()` 是空实现（agent-presets 的契约：preset 是输入不是持久化目标）。
-  2. **全局行绝不动**。它们的树是 file-backed `Include`，`write()` 会把闸门状态写回配置，所以全局行恒为常驻挂载，不受加载模式影响。
-  3. **触发点是 `tools/change`（无过滤广播）**，另订阅 `loader/entry-init` / `agent-preset/selected`；`reconcile()` 内部串行化、幂等、可重放。
-  4. **一次 reconcile 会真的 kill 掉 MCP 子进程**，所以设置页先等 `gateState` 再读名册。
-- **已知代价（本插件唯一需要 harness 配合的缺口）**：行是"先挂载、再被摘掉"的，所以每个 host 生命周期内 preset 首次挂载会有一次真实的启动+杀掉。要消除它，需要 harness 侧让 `mcp-client` 在 apply 早期就知道自己被抑制。
-- **被否决**：在插件里拦截 spawn（越界）；改 `mcp-client`（不属于本插件的边界）。
+- **结论**：`dynamic`/`lazy` 下"允许但不预加载"覆盖**两个平面**（preset 行与全局行），靠**三条互补的路径**完成，任一条都不写文件：
+  - **(a) 发布点抑制**（行在本插件 `apply` 之后才发布）：gate 订阅 Cordis 的 `internal/plugin`，在 fiber 发布那一刻**同步** `fiber.dispose()`。Cordis 在发布之后才解析依赖并激活，被处置的 fiber 直接跳过激活——**`mcp-client` 的 `apply` 从不执行，子进程不会 spawn**。**只对 preset 行用这条**：`vendor/loader/src/index.ts:160-165` 在 fiber 自处置时会 `entry.options.disabled = true` + `entry.parent.tree.write()`，全局行的树正是 file-backed `Include`，**会把闸门状态写回用户的 `cordis.yml`**。
+  - **(b) 挂载前拦截**（行在本插件 `apply` 之前就已建好：Loader 先把组合里的 entry 全建出来，再逐个 import 插件，这段窗口没有发布可观察）：`index.ts` 在 `apply` **第一条语句**同步订阅 `loader/entry-init`，交给 `gate.onEntryInit(entry)`。`holdBeforeMount` 只在**这一个 entry 实例**上遮蔽 `disabled` 自身属性（不动声明）、并拦截它**第一次 `update()`**——Loader 正是用 `update` 赋 options、紧接着 import 插件（options 取自该次调用的入参），所以在 update 里确认 `options.name === '@deepseek-ai/dsh-mcp-client'` 再判归属，命中就让 `update` 直接 return，**插件从不被 import**；不是本插件的行立即还原（无副作用）。**file-backed Include 子树里的全局行走这条；写在组合本身里的全局行走 (c)。**
+  - **(c) late hold**（全局行的兜底：行写在**组合本身**里——root anchor 或补丁层 `insert`——Loader 在本插件 import 之前就把它建好并 import 完了）：`run()` 在 `!wantMounted && !held && mounted` 时由 `holdMountedGlobal(entry)` 事后接管。**顺序是硬要求：先 `Object.defineProperty` 遮蔽 `disabled`，再 `fiber.dispose()`**——自处置分支只在 entry 已读作 disabled 时才不落盘。切回 `eager` 由 `releaseGlobalHold` 撤销遮蔽；`Entry.update` 不写文件。
+- **归属判据分两种树**：preset tree 用三层判定（reader 快照 / entry 祖先链找 `AGENT_PRESET_MODULE` / `scopes.scopeOf(tree.ctx) !== undefined`）；全局 tree 用 `isGlobalPlaneTree`＝有字符串 `filename` 且 `write` 是函数（file-backed `Include` 的特征），`ownsGlobalTree` 额外接受 owner 名为 `cordis:include` / `@deepseek-ai/cordis-plugin-include` 的树。**不能用 `ctx === undefined` 判定**——`EntryTree` 基类给每棵树都设了 `ctx`（第一版就是这么错的）；preset tree 没有 `filename`。
+- **触发点**：`tools/change`、`loader/entry-init`、`loader/partial-dispose`、相关 `internal/status`、`agent-preset/selected` 都使快照失效；`reconcile()` 内部串行化、幂等、可重放。**另有两处"取行集合变化"必须自己上报**：`createMcpPreloadGate(..., onRowTaken)` 与 `createPresetMountReader(ctx, scopes, onCaptured)`，`index.ts` 据此 `queueMicrotask(resync)`——被 hold 的行**没有 fiber**，靠 fiber 状态事件驱动清单刷新会让系统提示里的 MCP 清单**一直为空**（真实回归）。
+- **抑制不是闩锁**：切回 `eager` 后同一行要能重新挂载。preset 行由 `reconcile()` 在 `wantMounted` 分支先 `releasePreHeldRow(leaf)` 还原遮蔽与 `update` 拦截、再 `entry.update({disabled:false})`；全局行走 `releaseGlobalHold(entryId)`。**这条有真实反面案例**：只还原 `entry.disabled` 而漏掉遮蔽时，该行 `entry.disabled` 恒为 true，静默死亡直到宿主重启。
+- **抑制是一等状态**：被抑制的行 fiber/状态都可能读成"已停止"，所以 gate 单独登记 `suppressedEntryIds()`，名册据此报 `fiberPhase: 'held'`（D10）。全局行的 `enabled` 必须读**声明** `entry.options.disabled !== true`，不能读被自己遮蔽的实例 getter——否则被 hold 的行会被读成"用户禁用"，`mcp_load` 直接拒绝（verify-instance 实测到的 G2 缺陷）。
+- **理由**：harness 的 `mcp-client` 在 `apply` 里立刻 spawn，事后纠正总是慢一步；但 fiber 的**发布点**比 `apply` 更早，而 `internal/plugin` 是 Cordis 自己的扩展点。发布点仍漏掉"行在本插件 `apply` 之前建好"的顺序（真实 profile 里 `mcp-manager` 行声明在 preset 之前，bundle 层补丁即如此），所以补 (b)；写在组合本身里的全局行连这个窗口都没有，补 (c)。**三条路径都不需要改 harness。**
+- **被否决**：
+  1. **继续事后纠正**（挂载后再 `entry.update({disabled})`）：每次宿主启动与声明重建都会真的启动再杀掉一轮子进程，代价随行数放大，用户看得见。
+  2. **抢在 `import` 阶段拦截**（不加载 mcp-client 模块、不建 fiber）：`Entry._init()` 走完 import 与 fiber 创建是 Loader 的内部流程，插件只能观察不能改写。
+  3. **改 harness 的 `mcp-client`**（让它自己知道被抑制）：跨包改 + 发版，插件随之依赖新版本 harness。
+  4. **对全局行也用发布点处置**：fiber 自处置会把 `disabled` 写回用户的组合文件（见 (a) 的理由）。
+  5. **用 `ctx === undefined` 认全局树**：`EntryTree` 基类给每棵树都设了 `ctx`，这个判据永远为假。
+  6. **late hold 先 dispose 再遮蔽**：自处置分支看到 entry 还没读作 disabled，就会把闸门状态写回用户文件。
+  7. **让全局行继续"始终挂载"**：与本决策冲突（全局行同样跟随加载方式），也与 D17 的按需语义冲突。
+- **已知代价 / 边界**：
+  - 依赖 Cordis"发布点早于激活"这一时序，以及 Loader 用 `update` 赋 options、自处置分支的落盘条件；升级 harness / cordis 后要重跑 `fiber-publication` 与 `global-zero-launch`（5 项）。
+  - 两种全局行形状的差别（实测）：放在**独立的 file-backed Include 文件**里→(b) 直接挡住，**连插件回调都不发生**；写在**组合本身**里→(c) 事后接管，`mcp-client` 的 `apply` 会被调用一次，**但没有留下子进程**（"形状 B 会多起一个子进程"在真实实例上不成立）。**推荐形状 A**。
+  - 一次 `reconcile()` 会真的 kill 掉 MCP 子进程（`entry.update` 走 `Entry._dispose`），所以设置页先等 `gateState`（它内部 await reconcile）再读名册，否则会看到"摘到一半"的名册。
+  - 配置不完整的行也不挂载，与"模式不预加载"共用同一条摘行路径（D15）。
+- **证据级别（2026-10-15）**：
+  - **harness 真实组合回归**：`npm run test:harness` **6 文件 / 25 项通过**——`zero-launch`（4 项）断言 `dynamic` 下 preset 行的 `mcp-client` 回调执行 **0 次**（`eager` 对照 1 次、声明重建后仍 0），含 `holds a row that was declared before the plugin activated`（(b) 路径）；`global-zero-launch`（5 项）覆盖全局行：非 `eager` 下不被 import、`eager` 下照常挂载、被 hold 的行能按需加载、组合已挂载的行由 **(c) late hold** 接管（先遮蔽再 dispose）、切回 `eager` 后连用户文件一起完好。
+  - **单元 / Cordis 层**：`tests/mcp-gate.spec.ts` 的挂载前拦截用例与全局行读取用例；`tests/fiber-publication.spec.ts` 固定"发布点处置 → `apply` 不执行"；`tests/mcp-row-state.spec.ts` 固定"明确 `false` 压过 `suppressed` 兜底"。
+  - **隔离实例端到端（真实宿主）**：**读数是最终产物 `lib/index.mjs` = `121B8C0A…` / `lib/client.js` = `E1B1051A…`**，宿主 `@deepseek-ai/dsh@0.2.0-rc.2`（隔离 `DSH_HOME`）——`dynamic` 启动后 marker 文件从未创建、进程 0、stderr 为空；两种全局行形状经 1 秒采样复测都是零拉起；`eager` 对照长期存活；多次 `mcp_load` 复用同一条子进程。较早产物 `9B5D8D19…` / `D498FEC7…` 的读数保留在 [testing.md](testing.md) 里作为历史，不再代表当前产物。
+  - **验证基线口径**：`0.2.0-rc.2` 就是 npm 上的 `latest` / `next`，也是日常实例实际运行的宿主版本——**实测版本 = 正在使用的版本**。较早的一次兼容性验证在 `0.2.1-alpha.1`（2026-10-07 提交 `19d02aa`，针对 `livePresetMounts` 移除的适配）；该 `alpha` tag 现为 `0.2.1-alpha.4`，本次两条线合并**未**在 alpha 线上复跑（也**不**表示 alpha 线失效，只是没有新读数）。
+  - 原始读数与复现命令见 [testing.md](testing.md)。
 
 ### D6 工具过滤两点强制
 
@@ -88,28 +123,22 @@ kind: "package-reference"
 - **结论**：`mcp_load` 的输出带 `hidden` 字段，render 里有一行提示。
 - **理由**：模型需要知道"这台服务器还有工具但不可调用"，否则会照历史里的名字硬调，失败后无法归因。
 
-### D8 载体由加载模式决定
+### D8 载体由加载模式决定，`mount` 已删除
 
-- **结论**：`lazy` → 代理通道；`dynamic` → 原生注册（无规则时整台交给 harness 的 mcp-client 挂载，有规则时插件只注册可见工具）；
-  `eager` → harness 常驻挂载，规则不生效。**规则只决定哪些工具可见，不决定载体。**
-- **理由**：模式回答的正是「绑定质量 ↔ 缓存与 token」这个取舍（D2）。旧实现让"配了规则"把行从原生踢到代理，等于用一条可见性
-  设置替用户改了代价模型，用户不读文档根本不知道。改完之后，过滤行的代价与该模式的承诺一致：可见工具的 schema 每轮在请求里、
-  每次 `mcp_load` 断一次前缀，换来真实 schema 的参数绑定与富 UI 呈现。
-- **实现**：[`src/mcp-carrier.ts`](../src/mcp-carrier.ts) 的 `carrierFor` 决定载体；原生载体用 harness 自己的
-  `createMcpToolDefinition`（`@deepseek-ai/dsh-mcp-client` 的公开根导出）造定义，注册进**调用方 agent 作用域**
-  （`agent.ctx.tools.register`），隐藏的工具根本不构建。注册代次按公开名字做 diff 替换：新增的先注册、消失的最后撤销、
-  存活的名字保持原注册——工具列表只在服务器真的改动处变化。
+- **结论**：`carrierFor(mode, _filter, _narrowed)` 只返回三种结果：`lazy` → `proxy`；`dynamic` → **`native`**；`eager` → `undefined`（整台交给 harness 的 mcp-client 常驻挂载，规则不生效并 warn）。**规则与 `query` / `tool` 收窄只决定注册哪些定义，不决定载体**——`narrowed` 参数只为调用点兼容保留，它不能改变载体。
+- **`mount` 载体已删除**。它把整台服务器交给 harness 的 `mcp-client` 挂进调用方 agent 作用域，而那个插件**按挂载作用域连接**：per-session 挂载必然得到 per-session 子进程，与「一台服务器在宿主内只起一次、跨会话复用」（D4）不可兼得。`native` 与原生挂载共用同一个适配器（`createMcpToolDefinition`），绑定质量不变。
+- **理由**：模式回答的正是「绑定质量 ↔ 缓存与 token」这个取舍（D2）。旧实现让"配了规则"把行从原生踢到代理，等于用一条可见性设置替用户改了代价模型；而"整台加载走 mount、收窄加载走 native"是同一个毛病的另一种形态——同一个 `dynamic` 模式两种代价，用户不读文档根本不知道。改完之后 `dynamic` 只有一条路径：**SDK 直连常驻池的连接 → `listTools` → 过滤/收窄 → 原生注册进调用方 agent 作用域**，差别只在注册哪些定义。
+- **实现**：[`src/mcp-carrier.ts`](../src/mcp-carrier.ts) 的 `carrierFor`；`nativeDefinitions` / `swapNativeTools` 用 harness 自己的 `createMcpToolDefinition`（`@deepseek-ai/dsh-mcp-client` 的公开根导出，经 loader 取同一实例）造定义，注册进 `agent.ctx.get('tools')`。注册代次按公开名字做 diff 替换：新增的先注册、消失的最后撤销、存活的名字保持原注册。工具名必须用 `mcpToolPublicName` 复刻 mcp-client 的命名契约，否则 `mcp__<serverName>__` 前缀的 toolview 与命名空间会失准。
 - **被否决**：
-  1. **「配了规则就自动升级到原生」**：只是把同一类隐式改代价换个方向（从省钱变费钱），用户更不会预期。
-  2. **改 harness 的 `mcp-client` 加工具过滤字段**：语义上最正（原生注册本来就该能只挂一部分），但要跨包改并发版，插件随之依赖
-     新版本 harness；适配器已是公开导出，插件侧能拿到同样的绑定质量，不值得付这份耦合。
-  3. **`agent.ctx.tools.restrict({ deny })` 事后遮罩**：它拒绝 scope-local 名字，而原生载体的工具正是 scope-local 的。
-- **已知代价**：
-  - 原生载体绕开了 mcp-client，**拿不到 server instructions 与 `mcp-resources` 的共享资源工具**；工具本身的参数绑定、结果、错误与
-    图片呈现与原生挂载一致（同一个适配器）。
-  - 同一条 `mcp__<serverName>__` 命名空间在同一作用域只能有一个载体占着：同一 (会话, server) 的载体互斥由 `mounted` 表保证，
-    换载体前必须先释放旧载体。
-  - 服务器换工具列表时按加载时的规则重新同步，不重新读设置（与 D6 的「规则在加载时读取」一致）。
+  1. **「配了规则/收窄就换载体」**：隐式改代价，用户无法预期（旧实现的实测教训）。
+  2. **保留 `mount` 作为"整台加载"的快速路径**：与本插件自己的常驻池直接冲突（两个进程并存），也是这一轮删掉它的原因。
+  3. **改 harness 的 `mcp-client` 加工具过滤字段**：语义上最正，但要跨包改并发版；适配器已是公开导出，插件侧能拿到同样的绑定质量。
+  4. **`agent.ctx.tools.restrict({ deny })` 事后遮罩**：它拒绝 scope-local 名字，而原生载体的工具正是 scope-local 的。
+- **已知代价（如实记录，不隐去）**：
+  - 按需加载（`dynamic` / `lazy`）绕开了 mcp-client，**拿不到 server instructions 与 `mcp-resources` 的共享资源工具**。工具本身的参数绑定、结果、错误与图片呈现与原生挂载一致（同一个适配器）。这是删掉 `mount` 载体换来的：以前只有"过滤行"付这份代价，现在所有按需行都付；要 resources，把该行放到 preset 并选 `eager`。
+  - 同一条 `mcp__<serverName>__` 命名空间在同一作用域只能有一个载体占着：同一 (会话, server) 的载体互斥，换载体 / 重载前必须先释放旧的一代。
+  - `tools/list_changed` 的重同步由**池装在连接上的 `fallbackNotificationHandler`** 扇出到各会话视图（`resyncView` 不再逐视图串行；池自己的重新列目录是串行的），且**目录只由 `mcp_load` 的发现路径写回，重同步不回写目录缓存**——所以重同步只保证"已加载的会话看到新集合"，不会让缓存悄悄变新。
+  - 服务器换工具列表时按**加载时那套规则**重新同步，不重新读设置（与 D6 一致）。
 
 ### D9 服务器清单进系统提示
 
@@ -117,7 +146,7 @@ kind: "package-reference"
   `- <名称> — <用户在设置页写的描述>`，配一句用法说明。原先的 `mcp_list` 工具删掉，它的内容就是这段清单。
 - **理由**：按需模式下没有任何 MCP 工具 schema 在请求里，**模型不知道名字就永远加载不了任何服务器**；而列目录工具是
   "为了知道有什么，先花一次工具调用和一轮往返"，对每次会话都要做的事不划算。清单常驻换来的是零往返 + 名字始终可见。
-  同时它把工具面从 4 个降到 `dynamic` 2 个 / `lazy` 3 个。
+  同时它把工具面从 4 个降到 `dynamic` 2 个 / `lazy` 3 个（优化页打开检索时各多一个 `mcp_search`，见 D16）。
 - **成本**：常驻 token 由预算封顶 —— 单条描述截断 80 字符、整段描述预算 900 字符，**名字永远列全**（宁可丢描述，
   也不让一台服务器变得不可加载）。实测本机 4 台服务器约 70 token，与删掉 `mcp_list` 的定义大致相抵。
 - **不写加载状态**：那会让每次 `mcp_load` 都重写系统提示，把系统 + 工具 + 历史整个前缀打断一次，比工具列表变化贵得多；
@@ -133,9 +162,7 @@ kind: "package-reference"
 
 ### D10 名册读声明 + live fiber，不等激活
 
-- **结论**：设置页的名册由插件自己的 `mcpManager.listMcps`（[`src/mcp-roster.ts`](../src/mcp-roster.ts)）回答：
-  全局行来自 `ctx.loader.entries()`，preset 行优先来自 live mount 树的 entry、没挂载时退回声明；
-  `enabled` / `fiberPhase` 直接读 `entry.disabled` 与 `entry.fiber.state`，**任何一处都不 await 激活**。
+- **结论**：设置页的名册由插件自己的 `mcpManager.listMcps`（[`src/mcp-roster.ts`](../src/mcp-roster.ts)）回答：全局行由 `gate.globalRows()` 提供（从 Include 子树递归读，按 entryId 去重），preset 行优先来自 live mount 树的 entry、没挂载时退回该代次声明；**`enabled` 一律读声明**（全局行读 `entry.options.disabled !== true`，preset 行读该代次声明而非 live 行的 `!entry.disabled`），`fiberPhase` 取 live fiber；被抑制的行报 `held`（`gate.suppressedEntryIds()`）。**任何一处都不 await 激活。**
 - **理由**：名册原先来自 `remote.pluginInventory.list`，它经 agent-preset registry 的
   `compositionInventory()` → `diagnostic()` → `auditRows()`，而 `auditRows` 会 `tree.await()` 并逐行
   `fiber.await()`。MCP 行的 `apply` 要等子进程完成握手，本机实测 `cmd /c npx -y @upstash/context7-mcp`
@@ -148,13 +175,27 @@ kind: "package-reference"
   2. **给名册加缓存**：缓存要自己维护失效点，而声明与 live fiber 本来就同步可读，没有需要缓存的慢读。
 - **代价**：preset 未挂载（声明读）时 `!!js` 的 `disabled` 无法求值，报 `conditional` 而不是猜；
   group 的 `disabled` 继承规则在本模块复刻了一份（镜像 Loader 的语义，见 AGENTS.md 的「名册读取」）。
+- **两个"被抑制"不是一回事（本轮 bug 的根源）**：`gate.suppressedKeys()` 回答的是"模式正在扣住一个**用户允许**的行"，
+  只作设置页的兜底标志，且**被用户停用的行必须退出它**；`gate.suppressedEntryIds()` 回答的是"闸门此刻实际扣住了
+  哪些行"，名册据此报 `fiberPhase: 'held'`（D15：不给它加任何标记）。把前者当用户意图的后果是：运行中停用一行后，
+  开关仍显示"已启用"，再点只是把 `disabled: true` 重复写一次（幂等 no-op），只有重启实例才显示正确。
+  客户端侧的对应规则是 `rowAllowed(enabled, suppressed)`（`src/client/mcp-row-state.ts`，不依赖 React 的纯模块）：
+  **Host 明确的 `enabled: false` 优先于兜底标志**。
+- **行级只读是第二个判据**：平面可写 ≠ 这一行可写。全局行只有在该行 id 出现在那个可写 Include 的**文件行**里时
+  才可写；组合或补丁层声明的行报 `readOnly: 'composed-row'`（平面的问题报 `no-writable-include` /
+  `several-writable-includes` / `unreadable-include`）。客户端置灰并说明原因，服务端同时以 `mcp/read-only` 拒绝。
 
 ### D11 全局行写文件 + 重读 Include
 
 - **结论**：全局平面的写（新增 / 编辑 / 开关）改 **file-backed Include 自己的文件**（`writeEntryListFile`，
   只写用户自己的行列表），然后调 `Include.refresh()` 让组合重读该文件并重新套用补丁层；**不再用
-  `loader.create` / `loader.update`**。`globalWritable` 的判据因此只剩"组合里是否恰好挂着一个 file-backed
-  Include"。
+  `loader.create` / `loader.update`**。
+- **可写判据（本轮修正）**：`globalWritable` = 组合里是否**恰好挂着一个用户自己的** file-backed Include。
+  `writableGlobalIncludes` **排除宿主的 root anchor**（`app-boot` 固定 Loader id `include` →
+  `$DSH_HOME/profiles/<profile>/cordis.yml`，`prepareProfile` 每次启动把它重写成空模板）：把它算进来时，
+  "profile 自己声明了一个 Include"的组合会被读成两个 Include，整个平面被判只读。排除之后，**推荐形状 A
+  （行写在自己的 Include 文件里）可以真正开关全局行**；只有 anchor → 只读；≥2 个用户 Include → 仍拒绝
+  （定不出文件）；唯一那个文件读不出 → `unreadable-include`。行级再判一次文件行（见 D10）。
 - **理由**：`loader.create` / `loader.update` 会走到 `EntryTree` 的写回，`Include.write()` 把**带过补丁的树**
   序列化回文件——bundle 层与用户补丁层被拍平进用户的 `cordis.yml`。旧版为避免这一点把全局平面判为只读，
   于是 CLI 默认 profile 里"新增到全局"必然失败。改文件 + `refresh()` 既保住分层，又当场生效（不需要重启）。
@@ -162,9 +203,16 @@ kind: "package-reference"
   1. **维持只读，导流到 preset**：全局平面本来就是这个组合的合法入口，用户明确要求能写；
   2. **把新行插进 profile patch 的顶层 `insert:`**：那要插件自己实现 `configEditor` 的 YAML 文档事务
      （`!!js` 标签、锁、回滚），而 `cordis.yml` 的 Include 就是为此存在的；
-  3. **写文件后用 `loader.create` 补一次挂载**：那正是会拍平的那一步。
-- **代价**：`writeEntryListFile` 用 `yaml.dump` 重写文件，**用户文件里的注释会丢**（本次实测：
-  `cordis.yml` 顶部的说明注释）。写入后做一次"行确实挂上了"的校验，校验失败就报错而不是假装成功。
+  3. **写文件后用 `loader.create` 补一次挂载**：那正是会拍平的那一步；
+  4. **把 root anchor 也当成可写目标**：它的文件每次启动都被宿主重写，写进去等于写进一个会被丢弃的模板。
+- **代价（如实记录）**：`writeEntryListFile` 用 `yaml.dump` **整表重写**文件，所以**用户文件里的注释会丢**、
+  引号风格被规范化、启用后的行会留下显式的 `disabled: false`（实测 1247B → 942B）。功能正确
+  （`disabled: true` 确实被移除、行当场生效），但**不回到逐字节原样**——是否改成"只改该行的 `disabled` 键"
+  待定。写入后做一次"行确实挂上了"的校验，校验失败就报错而不是假装成功。
+- **一次性异常（未复现，不要当成已解决）**：某一轮里 root anchor 曾被写成 46973B 的完整组合树——正是
+  "Loader 树的写回把组合烘进 anchor"的形态。此后四次对照（纯运行 / 完整往返六时点 / 两实例并发共用
+  `DSH_HOME` / 又一次纯运行）**全部复现不出**，anchor 始终 223B，而且宿主每次启动都会重写它。它**不波及
+  用户自己的 Include**（那些文件的内容与行都在），所以按"观察到一次、未能复现、有自愈行为"记录。
 - **实现**：`src/mcp-remote.ts` 的 `writeGlobalRow` / `writeGlobalOne`；行查找不能走 `loader.resolve`
   （它只看根 store），见 AGENTS.md 的「MCP 行编写」。
 
@@ -185,10 +233,10 @@ kind: "package-reference"
 
 ### D13 资源仓库 MCP 的内存交接
 
-- **结论**：`dsh-resource-manager` 保留仓库同步、文件校验、凭据和 Agent 作用域，向运行中的 `mcpManager` 服务提交已解析的 MCP 定义。管理器持有定义和常驻连接，`dynamic` / `lazy` 时把它们加入按需清单并由 `mcp_load` 加载；不改写用户组合文件。
+- **结论**：`dsh-resource-manager` 保留仓库同步、文件校验、凭据和 Agent 作用域，向运行中的 `mcpManager` 服务提交已解析的 MCP 定义。管理器持有定义，并让这些定义走**宿主级常驻池**（D4）：`dynamic` / `lazy` 时加入按需清单并由 `mcp_load` 加载；不改写用户组合文件。
 - **理由**：资源管理器原先直接 `ctx.plugin(mcp-client)`，这条路径绕过组合行闸门，无法响应加载方式。强行把资源写进 profile patch 会混淆仓库来源与用户配置，还会触发 preset 整体重挂。
 - **作用域**：全局资源对所有 Agent 可见；Agent 资源只有在调用方 scope 链包含资源所属的 preset scope 时可见。Agent scope 不可辨认时拒绝托管，防止专属 MCP 泄漏给别的 Agent。
-- **切换**：交接前释放资源管理器旧连接。管理器更换定义时释放按需会话连接；切换加载方式时先回收旧载体再按新模式注册。管理器离线时资源管理器恢复原有直接加载。
+- **切换**：交接前释放资源管理器旧连接。管理器更换定义时释放受影响的按需引用（claim）；切换加载方式时先释放旧模式的 claim、再按新模式注册（无人再持有的连接随之停止，D4）。管理器离线时资源管理器恢复原有直接加载。
 - **界面**：资源管理器的 MCP Tab 展示托管状态及当前模式；资源配置与密钥仍从该页维护。管理器的组合行编辑器不把内存定义写回用户配置。
 
 ### D14 新注册表的预设代次适配（2026-10-07）
@@ -212,10 +260,58 @@ kind: "package-reference"
 - **被否决**：
   - 把"配置不完整"编码进行上的 `disabled`。那会篡改用户的授权意图：变量在宿主环境里补上后，行不会自己恢复。
   - 为了省一个状态而在 `dynamic`/`lazy` 下继续显示「待加载」。它不指向任何可执行动作。
-  - 全局行也由 gate 摘掉。全局行的树是 file-backed `Include`，`write()` 会把闸门状态写回用户配置（见 D5、D11），所以全局行只能"标记 + 不许开启"，不能"运行时摘除"。
+  - 全局行不参与"配置不完整"判据：闸门不读它们的配置，它们的树是 file-backed `Include`（D5、D11），所以配置不完整只能"标记 + 不许开启"；模式造成的未挂载由 D5 的内存拦截另行处理，两件事不混。
   - 完全放开保存不做检查，或反过来把未解析变量也挡在保存前。前者让配错的行静默存在，后者让用户在浏览器里永远存不下一行等着 Host 填变量的配置。
 - **实现**：[`src/mcp-diagnostics.ts`](../src/mcp-diagnostics.ts)（纯函数，环境由参数传入）、[`src/mcp-variable-refs.ts`](../src/mcp-variable-refs.ts)（不引用环境的扫描规则，可进浏览器包）、[`src/mcp-gate.ts`](../src/mcp-gate.ts)、[`src/mcp-remote.ts`](../src/mcp-remote.ts) 的 `assertRunnableConfig`、[`src/client/McpSection.tsx`](../src/client/McpSection.tsx) 的 `statusOf`。
 - **测试**：`tests/mcp-diagnostics.spec.ts` 覆盖三类判定与两种输入形状（Claude spec / 归一化 config）；`tests/mcp-gate.spec.ts` 断言 `eager` 下配置不完整的行仍被摘掉。
+
+### D16 优化策略独立成页，粒度分三层（2026-10-15）
+
+- **结论**：上下文预算由一个独立的用户设置页（设置 → MCP 优化）控制，字段全部存在 `mcp-manager` 命名空间的 `optimize` 开映射里，由 `parseMcpOptimizeFlags` 在读点收敛。粒度分三层，互不替代：
+  1. **选择**：`mcp_load` 的 `query`（词法匹配，无 embedding）与 `tool`（按名取一个）收窄本次会话**能调用**的集合；**载体不变**——`dynamic` 一律 `native`，收窄只决定注册哪些定义（D8）。已经加载过的服务器再给新 `query` 只会**加宽**（`widen`），永不收窄。
+  2. **列表**：`cursor` / `limit` 只分页**结果**，不改变会话能调用的工具（分页是上下文预算，不是能力开关）。默认 `pageSize` 10。
+  3. **形态**：`namesOnly` 默认让 `mcp_load` 只带名称与描述；按名字要一个工具（`tool`）时默认 `full`，因为那正是要参数的时机。
+  另有 `mcp_search`（规范称之为 Layer 1 目录）、目录缓存（`catalogTtlMs`，同时尊重服务器自己给的 `ttlMs`、`tools/list_changed` 立即失效）、`maxTools` 采集上限，以及注解策略（`annotations` / `hideDestructive`）。
+- **理由**：规范侧能用的只有 `tools/list` 的游标分页（**必须**把游标当不透明字符串、空串是合法游标、只有缺 `nextCursor` 才是结束）和 2026-07-28 新增的 `ttlMs` / `cacheScope`（`CacheableResult`，收到通知即失效）；**没有** `query` 参数，也没有「只列名称」的线上形态（`inputSchema` 必填）。官方《Client Best Practices》明确把渐进式发现放在宿主侧（`search_tools` → `get_tool_details` → 执行），并把「提供多档详情」列为实现建议。本插件因此在这一层实现，而不是发明协议字段。
+- **命名的对应关系**：`mcp_search` 即 Layer 1（目录：名称 + 一行描述），`mcp_load` 带 `tool` 即 Layer 2（Inspect：单个工具的完整 schema），`mcp_call` / 原生工具即 Layer 3。插件不用单独注册 `get_tool_details`，省一个常驻工具定义。
+- **被否决**：
+  - **给 `tools/list` 加 `query` 参数**：规范没有这个字段，写了也只有自己的客户端认。
+  - **磁盘持久化目录**：冷启动就能检索很诱人，但需要一个本插件并不拥有的数据目录，而且过期目录比空目录更难解释。当前只做进程内缓存。
+  - **检索默认允许连接未缓存服务器**：20 台服务器的部署会因为模型问一句就 spawn 20 个子进程。默认关闭，用 `searchIndex` 显式打开（并发 3、单台 8 秒）。
+  - **把分页做成能力开关**（只加载当前页的工具）：模型的下一句可能就要第 11 个工具，而它不知道要翻页；用 `query` 精确选择才是根治，分页只用来省上下文。
+  - **让 `hideDestructive` 追溯已加载的服务器**：加载后换一套注册会让模型手上有名字、实际不可调；策略在下一次加载生效，与工具过滤同一条契约。
+- **代价**：`mcp_load` 的结果多了 `total` / `shown` / `loaded` / `truncated` / `nextCursor` 五个字段，渲染文本变长；检索只覆盖「曾经列出过」的服务器，未索引的服务器只能列出名字让模型先加载。
+- **实现**：[`src/mcp-optimize.ts`](../src/mcp-optimize.ts)（纯策略：收敛、匹配、分页、注解）、[`src/mcp-catalog.ts`](../src/mcp-catalog.ts)（有界 TTL 目录）、[`src/lazy-mcp.ts`](../src/lazy-mcp.ts)（`listAllTools` 游标遍历、`mcp_load` / `mcp_search`）、[`src/client/McpOptimizeSection.tsx`](../src/client/McpOptimizeSection.tsx)（设置页）。
+- **测试**：`tests/mcp-optimize.spec.ts`、`tests/mcp-catalog.spec.ts`、`tests/mcp-discovery.spec.ts`；`tests/mcp-load.spec.ts` 用被 mock 的 MCP SDK 驱动真实的 `registerMcpTools`，覆盖分页、收窄、names-only、注解策略、检索与 `tools/list_changed` 失效。
+
+### D17 「零拉起 + 宿主级常驻 + 引用计数」是一组取舍（2026-10-15）
+
+- **结论**：三件事一次定死：
+  1. `dynamic`/`lazy` 下允许的行被抑制，**宿主启动与声明重建都不 spawn**（D5 的三条路径）；**两个平面都算**"允许的行"——preset 行与全局行（全局行只在内存里拦，绝不落盘）。
+  2. 加载过的连接进**宿主级常驻池**，跨会话、跨子代理复用（D4）；全局行的 `mcp_load` 也走同一个池、同一份连接。
+  3. 释放按**每会话 claim 引用计数**，最后一个引用释放才关闭连接（D4）。
+  工具注册仍然落在**调用方 agent 作用域**（D3、D8），所以"常驻"说的是连接，不是"工具漏给所有会话"。
+- **理由**：旧行为在两个方向上都与"按需"这个名字相反——没加载时启动又杀掉子进程；加载过的服务器在会话结束时被回收，下一个会话又要等一次冷启（`npx -y` 实测 7.5–23 秒）。改完之后：不用就不起、用过就留着、没人用才停。
+- **被否决**（本轮合并考虑的替代组合）：
+  1. **每会话一份 + 延迟回收**：见 D4 的被否决 1。
+  2. **抢在 `import` 阶段拦截**：见 D5 的被否决 2。
+  3. **保留 `mount` 载体**：见 D8 的被否决 2。
+  4. **把"常驻"做成跨宿主重启持久化**（守护进程 / 开机自启）：没有需求支撑，也绕开组合行的授权语义；边界明确限定为**宿主进程生命周期内**。
+  5. **给池加空闲 TTL**：见 D4 的被否决 2（留在路线图的待评估项）。
+  6. **对全局行也用发布点处置、或让全局行继续"始终挂载"**：前者会把闸门状态写回用户文件，后者与本决策冲突；三条路径的分工见 D5。
+- **代价 / 边界**：
+  - 常驻只到宿主重启为止，重新加载要再付一次冷启；**提交不同的加载模式会重建工具面并释放该模式的引用**，届时无人再持有的连接会停止——这是模式切换的既定语义，不是常驻失效。
+  - 一份进程被多个会话共享：服务器自身崩溃或挂死会影响所有持有它的会话（旧行为下各会话相互隔离）。
+  - **全局行的行为变了**：`dynamic`/`lazy` 下它们不再在启动时被组合挂载，而是被内存拦截、由 `mcp_load` 按需拉起；工具过滤对全局行仍不生效（规则藏不掉组合已经注册的工具，见 D6）。设置页的全局分组文案随之改了。
+  - **按需模式拿不到 server instructions 与 `mcp-resources`**（`mount` 载体删除的代价，见 D8）；要这两样把行放 preset 并选 `eager`。
+  - "启动零拉起"依赖三条机制都成立（D5）；被 hold 的行没有 fiber，所以取行集合的变化必须由 `onRowTaken` / `onCaptured` 上报。
+- **证据**：
+  - **框架层**：`npm run test:harness` **6 文件 / 25 项通过**——`zero-launch`（4 项）断言 `dynamic` 下 `mcp-client` 回调执行 **0 次**（`eager` 对照 1 次）；`global-zero-launch`（5 项）把同一条结论扩到全局行（含 late hold 接管与"用户文件完好"）；`on-demand-pool` 断言两次 `mcp_load` 只 `opened === 1`、会话销毁后连接存活、末位释放才关闭、切回 `eager` 能恢复挂载；`global-toggle` 覆盖全局行开关与只读判据。
+  - **单测层**：`npm test` **19 文件 / 204 项通过**（`tests/mcp-pool.spec.ts` 的 claim / 引用计数语义、`tests/mcp-gate.spec.ts` 的挂载前拦截与全局行读取、`tests/mcp-row-state.spec.ts` 的 `rowAllowed` 优先序等）。
+  - **真实宿主（隔离实例）**：**读数是最终产物 `lib/index.mjs` = `121B8C0A…` / `lib/client.js` = `E1B1051A…`**，宿主 `@deepseek-ai/dsh@0.2.0-rc.2`（= npm `latest`/`next`，也是日常实例实际运行的版本）：`dynamic` 启动后 marker 从未创建、进程 0、stderr 为空；`eager` 对照长期存活；两个真实会话多次 `mcp_load` 只产生 **1 条 spawn / 1 个存活进程**（同一个 pid），末位释放后进程归零；`mcp_unload` 三分支逐条命中；全局行的开关（形状 A）在设置页真正可用，被用户停用的行开关立即显示为关。**较早产物 `9B5D8D19…` / `D498FEC7…` 的读数保留为历史**（见 [testing.md](testing.md)），不再代表当前产物。
+  - **已知限制/异常**：全局写入是整表重写（丢注释、留显式 `disabled: false`，见 D11）；root anchor 被写成完整组合树的现象**观察到一次、未能复现**（D11）。
+  - **未覆盖**（与 testing.md 一致）：真实 `npx -y` 冷启动路径、GUI 里由模型决定的调用路径、`tools/list_changed` 跨会话 resync、活动实例内运行中切换加载模式、活动实例里的 `lazy` 池复用、`mcp_search` 工具本身、新增/导入/删除行与编辑弹窗「保存」的浏览器实测、用户 Include 的注释保留。
+  - 原始读数见 [testing.md](testing.md)。
 
 ## 先例：Claude 的 MCP 延迟加载
 
@@ -253,17 +349,17 @@ tool search 默认开启：会话启动时进上下文的只有**工具名 + 服
 | 未加载时的上下文 | 工具名 + instructions（约百 token） | 0 个工具 schema；常驻清单段（服务器名 + 描述，预算封顶） | 同左 |
 | 定义何时进上下文 | 搜索结果内联 `tool_reference` | `mcp_load` 原生注册，进工具段（前缀断一次） | `mcp_load` 结果，作为对话内容 |
 | 每轮是否仍发全部定义 | **是**（服务端要靠它展开引用） | 否 | 否 |
-| 谁做检索 | 服务端 regex/BM25，或客户端自定义检索 | 模型自己选服务器 | 模型自己选服务器 |
-| 粒度 | 单个工具 | 整台服务器 | 整台服务器（可叠规则过滤） |
+| 谁做检索 | 服务端 regex/BM25，或客户端自定义检索 | `mcp_search`（打开时）或模型自己选服务器 | 同左 |
+| 粒度 | 单个工具 | 单个工具（`query` / `tool` 收窄）或整台 | 单个工具（同左）或整台 |
 | 缓存前缀 | 不破（前缀不动） | 每次 load 断一次 | 永不破 |
 | 依赖 | 需支持 `tool_reference` 的模型 + 第一方 API | 纯 harness | 纯 harness |
-| 服务器进程 | 发现缓存 / 首用才连 | 加载时才 spawn | 同左 |
+| 服务器进程 | 发现缓存 / 首用才连 | 加载时才 spawn（连接此后留宿主持久池） | 同左 |
 
 ### 可迁移结论
 
 1. **前缀稳定优先于"少发请求"。** Claude 宁可每轮把全部定义发出去，也不动 system 前缀。我们的 `lazy` 更进一步（连定义都不发），`dynamic` 则每次 load 付一次前缀失效——这条支持 D2 把默认值留给用户而不是替用户选。
-2. **粒度是下一个可优化维度。** Claude 是单工具检索；我们的粒度是整台服务器，所以一次 `mcp_load` 至少会把该行**可见的**全部 schema 倒进历史——不过滤就是整台几十个工具（D6 的过滤先把可见集合收到能接受的范围，D8 让它仍然按原生工具绑定）。过滤只是权宜，检索才是根治。
-3. **检索可以自己做。** 官方明确允许自定义 search tool 返回 `tool_reference` 等价物；我们的 `mcp_call` 在结构上已经是这个形状，升级路径是把"选服务器"细化为"按查询检索工具"。
+2. **粒度是下一个可优化维度（已落地一部分）。** Claude 是单工具检索；我们原来只有"整台服务器"这一档，一次 `mcp_load` 会把该行**可见的**全部 schema 倒进历史。D16 补齐了 `query`（只加载命中）与 `tool`（按名取一个及其参数），所以不必再靠工具过滤把可见集合收到能接受的范围。仍未做的是 10,000 工具规模下的相关度排序与上限调优。
+3. **检索可以自己做（已实现）。** 官方明确允许自定义 search tool 返回 `tool_reference` 等价物；我们的 `mcp_search`（Layer 1 目录）+ `mcp_load` 的 `tool`（Layer 2 单个工具 schema）+ 原生工具 / `mcp_call`（Layer 3）就是这套分层的对应物，见 D16。
 4. **"允许/进上下文"分离是共识。** Claude 用 `alwaysLoad` + `ENABLE_TOOL_SEARCH` 表达同一对正交输入，与本插件 D1 同构。
 5. **隐藏必须在执行点强制。** Claude 的 `blocked` 工具是"模型看不见 + 调用被拒"，与 D6 同构。
 

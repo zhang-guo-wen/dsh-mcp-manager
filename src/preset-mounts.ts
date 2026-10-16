@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import type { GateEntry, GateMount, GateTree } from './mcp-gate.ts'
+import { AGENT_PRESET_MODULE } from './mcp-modules.ts'
 
 interface RuntimeFiber {
   readonly uid: number | null
@@ -11,8 +12,11 @@ interface RuntimeFiber {
 }
 
 interface RuntimeEntry extends GateEntry {
-  readonly parent?: { readonly tree: RuntimeTree }
+  readonly parent?: { readonly tree: RuntimeTree; readonly ctx?: { readonly fiber?: RuntimeFiber } }
 }
+
+/** One declaration row reached through the owning entry chain. */
+type RuntimeDeclaration = RuntimeEntry & { readonly options?: { readonly name?: string } }
 
 interface RuntimeTree extends GateTree {
   readonly ctx: Context & { readonly fiber: RuntimeFiber }
@@ -48,6 +52,15 @@ function presetState(ctx: Context): PresetState {
 export interface PresetMountReader {
   (within?: unknown): readonly GateMount[]
   observe(entry: unknown): void
+  /**
+   * Whether one Loader tree carries a preset this plugin governs. The answer
+   * must not depend on a capture that already happened: the caller asks about
+   * a row's tree at the moment the row's fiber is published, which is the
+   * first time this reader can see that tree at all.
+   * @param tree - candidate tree, usually reached through `entry.parent.tree`.
+   * @returns true for a preset mount, false for the host tree and other owners.
+   */
+  ownsTree(tree: unknown): boolean
   dispose(): void
 }
 
@@ -76,6 +89,49 @@ function declaredRows(rows: readonly EntryOptions[]): EntryOptions[] {
 }
 
 /**
+ * Whether one loader tree is a preset mount rather than the host composition.
+ *
+ * Three answers, strongest first, because the callers ask at moments when the
+ * reader may know nothing yet:
+ *
+ * 1. A tree this reader already captured is that preset, by identity.
+ * 2. A tree whose owning entry chain reaches an agent-preset declaration is a
+ *    preset mount: rows are created before their declaration is captured, and
+ *    the row's own entry points at that declaration.
+ * 3. A tree whose context belongs to a standing scope is a preset mount. A
+ *    preset tree's context is not created by a Loader entry — its context fiber
+ *    carries no `entry` — so the scope on that context is the only structural
+ *    signal left, and it is the same predicate {@link createPresetMountReader}
+ *    uses to decide which trees to capture.
+ *
+ * The host composition's tree and every detached subtree owned by another
+ * plugin answer false at all three steps and keep their composed state.
+ * @param tree - candidate loader tree, usually reached through `entry.parent.tree`.
+ * @param known - the reader's captured trees, when it has any.
+ * @param scoped - whether a tree's context belongs to a standing preset scope.
+ * @returns true when this tree carries one agent preset's rows.
+ */
+export function presetOwnedTree(
+  tree: unknown,
+  known?: (tree: unknown) => boolean,
+  scoped?: (tree: unknown) => boolean,
+): boolean {
+  if (tree === undefined || tree === null) return false
+  if (known?.(tree) === true) return true
+  const entry = (tree as RuntimeTree).ctx?.fiber?.entry
+  if (entry !== undefined) {
+    const seen = new Set<unknown>()
+    for (let row: RuntimeDeclaration | undefined = entry; row !== undefined;) {
+      if (seen.has(row)) break
+      seen.add(row)
+      if (row.options?.name === AGENT_PRESET_MODULE) return true
+      row = row.parent?.ctx?.fiber?.entry
+    }
+  }
+  return scoped?.(tree) === true
+}
+
+/**
  * Discover detached trees through public Loader entries. A registry no longer
  * publishes mutable mounts, but every live entry still names its owning tree.
  * A short-lived, empty scope parented to that tree lets `composedPreset` answer
@@ -85,7 +141,11 @@ function declaredRows(rows: readonly EntryOptions[]): EntryOptions[] {
  * The reader captures each revision's own declaration before the gate touches
  * it. Old Agents therefore retain their old allowance, not the latest file's.
  */
-export function createPresetMountReader(ctx: Context, scopes: PresetScopeLookup): PresetMountReader {
+export function createPresetMountReader(
+  ctx: Context,
+  scopes: PresetScopeLookup,
+  onCaptured?: (mount: GateMount) => void,
+): PresetMountReader {
   const state = presetState(ctx)
   const snapshots = state.mounts
   let disposed = false
@@ -131,6 +191,10 @@ export function createPresetMountReader(ctx: Context, scopes: PresetScopeLookup)
         if (presetId === undefined) continue
         mount = { presetId, tree, scope: key, declaration: declaredRows(tree.root.data) }
         snapshots.set(tree, mount)
+        // A generation becomes readable here, and nothing else reports it: the
+        // mount itself emits no event, and a held row has no fiber to publish a
+        // status event. Whatever derives from the row set has to be told.
+        onCaptured?.(mount)
       }
       mounts.push(mount)
     }
@@ -141,6 +205,12 @@ export function createPresetMountReader(ctx: Context, scopes: PresetScopeLookup)
   }
   return Object.assign(read, {
     observe,
+    ownsTree: (tree: unknown): boolean => presetOwnedTree(
+      tree,
+      candidate => snapshots.has(candidate as RuntimeTree),
+      candidate => (candidate as RuntimeTree | undefined)?.ctx !== undefined
+        && scopes.scopeOf((candidate as RuntimeTree).ctx) !== undefined,
+    ),
     dispose: () => { disposed = true },
   })
 }

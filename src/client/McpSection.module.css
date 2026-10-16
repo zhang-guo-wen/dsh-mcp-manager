@@ -39,6 +39,40 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* One plane's heading inside the single roster list. The global plane and the
+   agent plane share the list, so each needs a name of its own. */
+.mcpGroup {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-tertiary);
+}
+.mcpGroup > span:first-child {
+  flex: 0 0 auto;
+}
+
+/* The one rule that still differs between the planes, kept beside the heading
+   where their rows split rather than in a control of its own. It yields space
+   first and wraps: the heading names the group, this only explains it. */
+.mcpGroupHint {
+  min-width: 0;
+  font-weight: 400;
+  text-align: right;
+}
+
+/* A panel this narrow cannot hold an explanation beside the heading: wrapping
+   it grew the heading to seven lines. The heading alone stays. */
+@media (max-width: 760px) {
+  .mcpGroupHint {
+    display: none;
+  }
+}
+
 /* A screen-reader-only line for a loading region whose visible part is
    decorative. */
 .visuallyHidden {
@@ -56,19 +90,6 @@
   margin: 0;
   font: var(--dsw-font-s-14);
   color: var(--dsw-alias-label-secondary);
-}
-
-/* One tab's own controls, above the shared roster. The pane sets its own
-   display, which would otherwise beat the user-agent `[hidden]` rule and leave
-   the unselected plane's controls on screen. */
-.planePanel {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.planePanel[hidden] {
-  display: none;
 }
 
 .mcpToolbar {

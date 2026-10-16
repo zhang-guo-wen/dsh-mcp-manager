@@ -16,7 +16,7 @@ import { mcpEntryConfig } from '../mcp-config.ts'
 import { isBlockingConfigIssue, diagnoseMcpSpec } from '../mcp-diagnostics.ts'
 import { flattenSpec, parseSpecText } from '../mcp-spec.ts'
 import { formatMcpConfigIssues } from './config-issues.ts'
-import type { McpSectionKey } from './locales.ts'
+import { MCP_READ_ONLY_REASON, type McpSectionKey } from './locales.ts'
 import type { McpPlane, McpPresetOption, McpServer } from './settings-controller.ts'
 import css from './McpSection.module.css'
 
@@ -45,9 +45,14 @@ interface McpEditorProps {
   readonly presets: () => Promise<readonly McpPresetOption[]>
   /**
    * The plane the section currently shows. A new row is written there, so the
-   * dialog offers no scope choice: the tab already made it.
+   * dialog offers no scope choice: the picker already made it.
    */
   readonly plane: McpPlane
+  /**
+   * The agent preset the section is narrowed to, when it is narrowed to one.
+   * A new row is written into it, so the dialog's own preset picker opens on it.
+   */
+  readonly preset?: string
   readonly descriptionInitial: string
   readonly onUpdateDescription: (key: string, value: string) => void
   /** Tool rules this row currently carries, as stored entries. */
@@ -92,11 +97,11 @@ function specJson(describe: DescribeMcpResult | undefined): string {
 }
 
 /** Modal editor split into a pane for the row's fields and a pane for its tools. */
-export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, plane, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
+export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, plane, preset, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
   const [tab, setTab] = useState<McpEditorTab>('config')
   const tabId = useId()
   /** Chosen agent preset for a new row; a placeholder while the list loads. */
-  const [presetId, setPresetId] = useState(server?.scope === 'preset' ? server.presetId ?? '' : '')
+  const [presetId, setPresetId] = useState(server?.scope === 'preset' ? server.presetId ?? '' : preset ?? '')
   const [presetOptions, setPresetOptions] = useState<readonly McpPresetOption[]>([])
   const [title, setTitle] = useState(server?.serverName ?? '')
   const [description, setDescription] = useState(descriptionInitial)
@@ -182,7 +187,13 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
     setLocalError(null)
     setConfigNotice(null)
     setTab('config')
-    setPresetId(server?.scope === 'preset' ? server.presetId ?? '' : '')
+    // An edited row keeps its own preset; a new row opens on the preset the list
+    // is narrowed to, which is the one the section will write into. Losing that
+    // here left the picker on the first preset, so a row landed somewhere the
+    // user was not looking. `preset` is deliberately not a dependency: the list
+    // can refresh while this dialog is open, and re-running this effect would
+    // reset the form under the user.
+    setPresetId(server?.scope === 'preset' ? server.presetId ?? '' : preset ?? '')
     setTitle(server?.serverName ?? '')
     setDescription(descriptionInitial)
     setTools(null)
@@ -282,7 +293,10 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
     })
   }
 
-  const formDisabled = disabled || busy
+  // A row the Host's roster marks read-only has no writable home: opening its
+  // editor must show the row, not offer a save that the Host will refuse.
+  const readOnlyRow = mode === 'edit' && server !== undefined && !server.writable
+  const formDisabled = disabled || busy || readOnlyRow
   const enabledCount = tools === null ? 0 : tools.length - tools.filter(tool => hiddenTools.has(tool.name)).length
   const titleText = mode === 'add' ? t('mcp.form.addTitle') : t('mcp.form.editTitle')
   // Rules are enforced by this plugin's own carriers, which only run for rows it
@@ -316,6 +330,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       )}
     >
       <div className={css.mcpForm}>
+        {readOnlyRow ? <p className={css.fieldHint} role="status">{t(MCP_READ_ONLY_REASON[server.readOnly ?? 'composed-row'])}</p> : null}
         <SegmentedTabs<McpEditorTab>
           className={css.editorTabs}
           label={t('mcp.form.tabs')}

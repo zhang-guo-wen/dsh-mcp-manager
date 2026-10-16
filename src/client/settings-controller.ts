@@ -17,6 +17,8 @@ import type {
   AddMcpRequest,
   AddMcpsRequest,
   AddMcpsResult,
+  ClearMcpCatalogRequest,
+  ClearMcpCatalogResult,
   DescribeMcpRequest,
   DescribeMcpResult,
   DisableMcpRequest,
@@ -24,9 +26,12 @@ import type {
   ListMcpToolsRequest,
   ListMcpToolsResult,
   ListMcpsResult,
+  McpCatalogStateRequest,
+  McpCatalogStateResult,
   McpConfigIssue,
   McpFiberPhase,
   McpMutationResult,
+  McpRowReadOnly,
   ScanClaudeMcpRequest,
   ScanClaudeMcpResult,
 } from '../types.ts'
@@ -78,6 +83,16 @@ export interface McpServer {
   presetId: string | undefined
   /** Effective enablement; `'conditional'` marks a `!!js` gate only a mount can resolve. */
   enabled: boolean | 'conditional'
+  /**
+   * Whether the settings page may write this row.
+   *
+   * False closes the row's switch and editor: a global row is written by
+   * patching the user's own Include file, so a row that file does not declare
+   * has nowhere to be written. {@link readOnly} names the reason to show.
+   */
+  writable: boolean
+  /** Why the row cannot be written, present exactly when {@link writable} is false. */
+  readOnly?: McpRowReadOnly
   /** Root-fiber phase when live, otherwise null. */
   fiberPhase: McpPhase
   /**
@@ -99,6 +114,12 @@ export interface McpSettingsFlags {
   descriptions: Record<string, string>
   /** Plugin-owned MCP tool rules keyed the same way. */
   tools: Record<string, unknown>
+  /**
+   * Plugin-owned context-budget policy, as one open map. The Host converges
+   * every field at read time, so the surface never has to validate it and a
+   * malformed entry cannot roll the namespace back.
+   */
+  optimize: Record<string, unknown>
 }
 
 /**
@@ -134,6 +155,10 @@ export interface McpAuthoringActions {
   listMcpTools: (request: ListMcpToolsRequest) => Promise<ListMcpToolsResult>
   /** Read the MCP servers the Claude Code configuration files declare. */
   scanClaudeMcp: (request: ScanClaudeMcpRequest) => Promise<ScanClaudeMcpResult>
+  /** Read what the discovery catalogue remembers, for the optimization page. */
+  catalogState: (request: McpCatalogStateRequest) => Promise<McpCatalogStateResult>
+  /** Forget every recorded discovery result. */
+  clearCatalog: (request: ClearMcpCatalogRequest) => Promise<ClearMcpCatalogResult>
 }
 
 /** The roster read's answer, as the section consumes it. */
@@ -165,6 +190,8 @@ export interface McpSectionState {
   descriptions: Record<string, string>
   /** Plugin-owned MCP tool rules keyed the same way. */
   tools: Record<string, unknown>
+  /** Plugin-owned context-budget policy, as stored; the Host converges it at read time. */
+  optimize: Record<string, unknown>
 }
 
 /** Registration-side face for the section. */
@@ -182,6 +209,12 @@ export interface McpSectionFace {
    * every tool it publishes becomes visible again.
    */
   updateMcpTools: (key: string, patterns: readonly string[]) => void
+  /**
+   * Persist one optimization field, merging it into the stored policy map.
+   * Resolves once the Host accepted the write and rejects with the reason it did
+   * not, so the page can show a per-row save state instead of a silent no-op.
+   */
+  setOptimize: (field: string, value: unknown) => Promise<void>
   /** Add one MCP row through the Claude-compatible Host Remote. */
   addMcp: (request: AddMcpRequest) => Promise<McpMutationResult>
   /** Add a batch of MCP rows in one write through the Claude-compatible Host Remote. */
@@ -196,6 +229,10 @@ export interface McpSectionFace {
   listMcpTools: (request: ListMcpToolsRequest) => Promise<ListMcpToolsResult>
   /** Read the MCP servers the Claude Code configuration files declare. */
   scanClaudeMcp: (request: ScanClaudeMcpRequest) => Promise<ScanClaudeMcpResult>
+  /** Read what the discovery catalogue remembers. */
+  catalogState: () => Promise<McpCatalogStateResult>
+  /** Forget every recorded discovery result. */
+  clearCatalog: () => Promise<ClearMcpCatalogResult>
   /**
    * Keys of the allowed rows the Host holds unmounted because the loading mode
    * does not preload. The list uses them to tell "disabled by the user" apart
@@ -225,6 +262,10 @@ export function mapMcpServers(roster: ListMcpsResult): readonly McpServer[] {
       scope: 'global',
       presetId: undefined,
       enabled: entry.enabled,
+      // A page can outlive the Host it talks to: an older Host reports no
+      // per-row flag, and then the plane-level answer still governs.
+      writable: entry.writable !== false,
+      ...entry.readOnly === undefined ? {} : { readOnly: entry.readOnly },
       fiberPhase: entry.fiberPhase,
       ...entry.configIssue === undefined ? {} : { configIssue: entry.configIssue },
     })
@@ -237,6 +278,8 @@ export function mapMcpServers(roster: ListMcpsResult): readonly McpServer[] {
         scope: 'preset',
         presetId: preset.id,
         enabled: row.enabled,
+        writable: row.writable !== false,
+        ...row.readOnly === undefined ? {} : { readOnly: row.readOnly },
         fiberPhase: row.fiberPhase,
         ...row.configIssue === undefined ? {} : { configIssue: row.configIssue },
       })
@@ -280,6 +323,7 @@ export class McpSettingsController {
       setMcpLoading: (mode) => this.setMcpLoading(mode),
       updateMcpDescription: (key, description) => { this.updateMcpDescription(key, description) },
       updateMcpTools: (key, patterns) => { this.updateMcpTools(key, patterns) },
+      setOptimize: (field, value) => this.setOptimize(field, value),
       addMcp: this.authoring.addMcp,
       addMcps: this.authoring.addMcps,
       editMcp: this.authoring.editMcp,
@@ -287,10 +331,32 @@ export class McpSettingsController {
       describeMcp: this.authoring.describeMcp,
       listMcpTools: this.authoring.listMcpTools,
       scanClaudeMcp: this.authoring.scanClaudeMcp,
+      catalogState: () => this.authoring.catalogState({}),
+      clearCatalog: () => this.authoring.clearCatalog({}),
       suppressedMcps: this.suppressed,
       mcps: this.mcps,
       presets: this.presets,
     }
+  }
+
+  /**
+   * Write one optimization field.
+   *
+   * The stored policy is one open map, so a field write is a read-modify-write
+   * of that map rather than a separate namespace field. The Host converges every
+   * field at read time, which is why nothing here validates the value: a bad one
+   * falls back to its default instead of failing the namespace commit.
+   * @param field - the policy field name.
+   * @param value - the value to store.
+   * @throws when the document is not writable, or when the Host rejects the write.
+   */
+  private async setOptimize(field: string, value: unknown): Promise<void> {
+    const snapshot = this.scope.getSnapshot()
+    if (snapshot.status !== 'ready' || !snapshot.writable) {
+      throw new Error('the MCP settings document is not writable')
+    }
+    const next = { ...snapshot.value?.optimize, [field]: value }
+    await this.scope.set('optimize', next)
   }
 
   private updateMcpDescription(key: string, description: string): void {
@@ -329,6 +395,7 @@ export class McpSettingsController {
       loading: snapshot.value?.loading ?? 'dynamic',
       descriptions: snapshot.value?.descriptions ?? {},
       tools: snapshot.value?.tools ?? {},
+      optimize: snapshot.value?.optimize ?? {},
     }
   }
 

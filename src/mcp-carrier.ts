@@ -5,10 +5,12 @@
  * The loading mode owns the carrier. `dynamic` gives the model real tool
  * schemas — and pays a prefix invalidation per load — while `lazy` keeps every
  * tool out of the request and serves it through the proxy. A row's filter only
- * narrows the visible set inside that decision, which is why a filtered
- * `dynamic` row registers its VISIBLE tools natively here instead of falling
- * back to the proxy: the harness mount cannot hold individual tools back, but
- * the plugin can hold them back by never building them.
+ * narrows the visible set inside that decision, which is why a `dynamic` row
+ * registers its VISIBLE tools natively here instead of handing the whole server
+ * to the harness: the harness mount cannot hold individual tools back, and it
+ * also connects once per mounting scope, so a per-session mount would mean a
+ * per-session process. Registering the definitions against a shared connection
+ * (`mcp-pool.ts`) is what lets one server serve every session.
  *
  * This module is pure policy plus registration primitives; the connect,
  * lifetime, and re-sync machinery lives in `lazy-mcp.ts`, which imports from
@@ -21,26 +23,46 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { McpToolDefinitionOptions } from '@deepseek-ai/dsh-mcp-client'
 import type { McpLoadingMode } from './lazy-mcp.ts'
-import { filterHidesAnything, type McpToolFilter } from './mcp-tool-filter.ts'
+import type { McpToolFilter } from './mcp-tool-filter.ts'
 import { mcpToolPublicName } from './mcp-tool-name.ts'
+import type { McpToolAnnotations } from './mcp-optimize.ts'
 
 /** How one loaded row's tools reach the model once a session loads it. */
-export type McpCarrier = 'mount' | 'native' | 'proxy'
+export type McpCarrier = 'native' | 'proxy'
 
 /** One MCP tool as the SDK client reports it. */
 export interface LazyTool {
   readonly name: string
+  /** Display name the spec added in 2025-06-18; a listing prefers it over the raw name. */
+  readonly title?: string
   readonly description?: string
   readonly inputSchema?: unknown
   /** Advertised structured-output schema, forwarded to the definition adapter. */
   readonly outputSchema?: unknown
+  /** Spec annotations; policy input for the destructive-tool setting. */
+  readonly annotations?: McpToolAnnotations
   /** Upstream execution metadata; a `required` task support is unsupported here. */
   readonly execution?: { readonly taskSupport?: string }
 }
 
 /** The subset of the MCP SDK client the carriers use. */
 export interface LazyClient {
-  listTools(): Promise<{ tools?: readonly LazyTool[] }>
+  /**
+   * List one page of the server's tools.
+   *
+   * The spec makes `cursor` opaque, allows the empty string as a valid cursor,
+   * and defines end-of-list as "no `nextCursor`" — never as a falsey cursor. The
+   * optional `ttlMs` is the server's own freshness hint for the page
+   * (`CacheableResult`, spec 2026-07-28), which the catalogue honours when it is
+   * present.
+   * @param params - the page cursor, or undefined for the first page.
+   * @returns that page's tools and the cursor of the page after it.
+   */
+  listTools(params?: { cursor?: string }): Promise<{
+    tools?: readonly LazyTool[]
+    nextCursor?: string
+    ttlMs?: number
+  }>
   /**
    * Call one upstream tool.
    * @param request - upstream tool name and arguments.
@@ -77,17 +99,23 @@ export type McpToolAdapter = (ctx: Context, options: McpToolDefinitionOptions) =
  * The mode owns this decision: it is what decides whether the model argues from
  * real tool schemas — and pays a prefix invalidation per load — or calls
  * through the proxy and pays arguments copied out of a result. A row's filter
- * only narrows the visible set inside that decision.
+ * and a load-time query only narrow the visible set inside that decision: under
+ * `dynamic` the plugin builds exactly the visible tools natively, so a narrowed
+ * load needs no separate carrier.
  * @param mode - the loading mode a session committed to.
  * @param filter - the row's resolved rules.
- * @returns `proxy` under `lazy`; under `dynamic`, `native` when the rules hide
- *   anything and `mount` when they hide nothing; `undefined` under `eager`,
- *   which mounts every allowed row and registers no on-demand tool at all.
+ * @param _narrowed - whether the load itself asks for a subset of the server's
+ *   tools (`query`/`tool` on `mcp_load`). Accepted for call-site compatibility;
+ *   it cannot change the carrier, because `dynamic` builds individual
+ *   definitions whether or not the load narrows anything.
+ * @returns `proxy` under `lazy` and `native` under `dynamic`; `undefined` under
+ *   `eager`, which mounts every allowed row and registers no on-demand tool at
+ *   all. The filter does not change the carrier: it only decides which of a
+ *   `native` row's tools are built.
  */
-export function carrierFor(mode: McpLoadingMode, filter: McpToolFilter): McpCarrier | undefined {
+export function carrierFor(mode: McpLoadingMode, _filter: McpToolFilter, _narrowed = false): McpCarrier | undefined {
   if (mode === 'eager') return undefined
-  if (mode === 'lazy') return 'proxy'
-  return filterHidesAnything(filter) ? 'native' : 'mount'
+  return mode === 'lazy' ? 'proxy' : 'native'
 }
 
 /**

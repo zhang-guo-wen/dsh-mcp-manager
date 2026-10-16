@@ -32,40 +32,56 @@ MCP Apps 宿主 [sugarforever/dsh-mcp-apps](https://github.com/sugarforever/dsh-
 | 维度 | 我们 | 竞品做法 |
 |---|---|---|
 | 加载模式 | 三档 `eager`/`dynamic`/`lazy` + 「允许」与「何时进上下文」两个开关 | 多数只有 enable/disable；leaforbook 分「自动接管（只藏 schema）」与「连接层懒加载」两级 |
-| 进程惰性 | 行级摘除，未加载的服务器**一个进程都不起** | leaforbook 明说不关第三方进程；wings1848 / ben7am1n 只在首次调用时 spawn |
-| schema 交接 | `lazy` 把 schema 作为 `mcp_load` 的文本结果返回 | proxy / panel 干脆不给完整 schema（只在调用时透传）；leaforbook 用 `describe` 按需吐；tool-search 不复制 schema，靠下一次请求头部带上 |
-| 检索 | 无，一次倒出整台服务器 | hyqhyq3 三工具（BM25 + NFKC + CJK + 别名 + 编辑距离，默认 10 / 上限 50）；labmimors 两工具固定 1,114 B；ben7am1n 纯关键词；wings1848 加权排序 |
-| 回合末回收与闲置 | 连接留到会话结束 | leaforbook `releaseOnTurnEnd` + `warmIdleMs` 5 分钟；ben7am1n `idleDisconnectMs` 5 分钟；lilyblessing 30 秒 |
-| 目录磁盘缓存 | 无 | wings1848 / ben7am1n 元数据落盘，**不连进程也能答搜索**；labmimors `catalogTtl` 24 小时 |
-| 覆盖非 preset 行 | 全局行恒常驻（README 已注明） | leaforbook 自动接管任意 `mcp__<server>__*`；AllenLogo 每个 agent `restrict({deny:['mcp__*']})` |
+| 进程惰性 | 三条抑制路径（发布点处置 / 挂载前拦截 / late hold）：允许但未加载的行，**preset 行与全局行**在宿主启动与声明重建时**一个进程都不起**，首次 `mcp_load` 才拉起 | leaforbook 明说不关第三方进程；wings1848 / ben7am1n 只在首次调用时 spawn |
+| schema 交接 | `lazy` 把 schema 作为 `mcp_load` 的文本结果返回；`dynamic` 原生注册，`query` / `tool` 只决定注册哪些定义 | proxy / panel 干脆不给完整 schema（只在调用时透传）；leaforbook 用 `describe` 按需吐；tool-search 不复制 schema，靠下一次请求头部带上 |
+| 检索 | 已实现：`mcp_search`（目录：名称 + 一行描述，词法、离线）+ `mcp_load` 的 `query` / `tool`，默认只看已缓存服务器 | hyqhyq3 三工具（BM25 + NFKC + CJK + 别名 + 编辑距离，默认 10 / 上限 50）；labmimors 两工具固定 1,114 B；ben7am1n 纯关键词；wings1848 加权排序 |
+| 回合末回收与闲置 | 连接进**宿主级常驻池**，按每会话 claim 引用计数释放（无闲置超时） | leaforbook `releaseOnTurnEnd` + `warmIdleMs` 5 分钟；ben7am1n `idleDisconnectMs` 5 分钟；lilyblessing 30 秒 |
+| 目录磁盘缓存 | 只有进程内目录缓存（TTL + 服务器 `ttlMs` + `tools/list_changed` 失效） | wings1848 / ben7am1n 元数据落盘，**不连进程也能答搜索**；labmimors `catalogTtl` 24 小时 |
+| 覆盖非 preset 行 | 全局行并入同一套按需语义（`eager` 由组合挂载；`dynamic`/`lazy` 走内存拦截、`mcp_load` 按需走同一个池），**设置页也能开关**（行写在自己的 Include 文件里时），组合/补丁层声明的行只读 | leaforbook 自动接管任意 `mcp__<server>__*`；AllenLogo 每个 agent `restrict({deny:['mcp__*']})` |
 | OAuth | 只有静态 header / env | 五家都有 PKCE + DCR + 回环回调 + 刷新 |
-| Resources / Prompts | `lazy` 与过滤载体的服务器拿不到 resources | PerryLink 只读浏览 resources；hyqhyq3 与 labmimors 都处理了 |
+| Resources / Prompts | 按需加载（`dynamic` / `lazy`）的服务器都拿不到 resources：`mount` 载体已删除，原生注册绕开了 mcp-client | PerryLink 只读浏览 resources；hyqhyq3 与 labmimors 都处理了 |
 | 探测与试调 | 只有启用停用与名册 | Js2Hou 探测报延迟 + 工具数；PerryLink `/mcp call` 试调走官方执行管线 |
-| 配置导入 | 导入 Claude Code 全部来源（用户 / 项目 / 设置 / `.mcp.json`），名称按规范预检，逐条独立导入 | Imzl-zl 导入 Claude / Cursor / Cline / Roo / VS Code 配置 |
-| 作用域 | 全局 + preset，且 `mcp_load` 绑到单个会话 | 多数只有全局；五家做项目或工作区级（见[作用域分层](#作用域分层)） |
-| 写配置的可回滚 | atomic write + `tree.refresh()` | PerryLink 审批门 + 自动备份；null119 override + revert/restore；ArvinQi 受管块 + `.bak` + 幂等 |
+| 配置导入 | 导入 Claude Code 全部来源（用户 / 项目 / 设置 / `.mcp.json`），名称按规范预检，逐条独立导入，目标跟随当前平面（全局分组或选中的预设） | Imzl-zl 导入 Claude / Cursor / Cline / Roo / VS Code 配置 |
+| 作用域 | 全局 + preset；`mcp_load` 的工具注册绑到调用方会话（连接是宿主级常驻池） | 多数只有全局；五家做项目或工作区级（见[作用域分层](#作用域分层)） |
+| 写配置的可回滚 | atomic write；全局行改文件 + `Include.refresh()`，preset 行走 `configEditor.edit` | PerryLink 审批门 + 自动备份；null119 override + revert/restore；ArvinQi 受管块 + `.bak` + 幂等 |
 | CLI / HTTP API | 无 | Fishquito7 全套 `dsh-panel` CLI；xxxyz `POST /dsh-mcp-manager/api`（同源 + token 校验） |
-| 测试 / CI / 分发 | 1 个 spec（51 行），无 test script、无 CI、未发 npm | leaforbook CI 跑 rc.6/rc.7/rc.8；labmimors 178 测试 + 1000 工具基准；vibeinging 带 invariant companion |
+| 测试 / CI / 分发 | 单测 **19 个 spec / 204 项** + harness 真实组合回归 **6 文件 / 25 项**（`npm test` / `npm run test:harness`）；npm 已发（latest 1.2.1）；缺 CI | leaforbook CI 跑 rc.6/rc.7/rc.8；labmimors 178 测试 + 1000 工具基准；vibeinging 带 invariant companion |
 
 ### 我们守住的三点
 
-1. **进程级惰性 + 行级过滤 + 会话隔离三合一**：`mcp_load` 的 `mount` 载体走 `exec.agent.ctx.plugin()`（随会话销毁），
-   过滤行改走插件自己的 `native` 载体（注册落进调用方 agent 作用域），`proxy` 载体靠 `bindAgentScope` 回收。
-   竞品要么不管进程（leaforbook），要么不管作用域（多数面板插件）。
-2. **工具过滤不牺牲绑定**：`dynamic` 下的过滤行只注册可见工具，参数 schema 与原生挂载同源（harness 自己的
-   `createMcpToolDefinition`）；只有 `lazy` 才退到 `mcp_call` 的入参校验。labmimors 的 `allowTools/denyTools`
-   最接近，但它是网关级、没有按行规则，也没有"过滤之后仍然是原生工具"这一档。
+1. **启动零拉起 + 宿主级常驻复用 + 行级过滤三合一**：`dynamic`/`lazy` 下允许的行由**三条路径**抑制——行在本插件
+   `apply` 之后发布就在发布点处置 fiber，行在 `apply` 之前建好就拦截它第一次 `update`，全局行若已随组合挂载则由
+   **late hold**（先遮蔽再 dispose）事后接管；三种顺序下都不会真的留下 MCP 子进程。**harness 已证实**：
+   `zero-launch`（4 项）断言回调执行 0 次，`global-zero-launch`（5 项）把同一条结论扩到全局行；
+   **隔离实例已证实（最终产物 `121B8C0A…`/`E1B1051A…`）**：`dynamic` 下 marker 文件从未创建、存活进程 0，`eager` 对照
+   长期存活，未改动的 v1.3.0 基线在同一组合下启动即拉起；较早产物 `9B5D8D19…` / `D498FEC7…` 的读数作为历史保留。
+   首次 `mcp_load` 拉起的连接进**宿主级常驻池**，其他会话复用同一份、最后一个引用释放才停止（harness 断言两个
+   会话只 opened 1 次；隔离实例里两个会话三次 `mcp_load` 只有 1 条 spawn / 1 个存活进程、三次返回同一个 pid，
+   `mcp_unload` 三分支逐条命中，末位释放后进程归零）。**全局行不再"始终挂载"**：它走内存拦截（不写用户文件），
+   模式切换时由 `Entry.update` 恢复。工具注册仍落进调用方 agent 作用域，行级过滤只注册可见工具。竞品要么不管
+   进程（leaforbook），要么不区分作用域
+   （多数面板插件）。
+2. **工具过滤不牺牲绑定**：`dynamic` 下一律原生注册（`mount` 载体已删除），过滤规则与 `query` / `tool` 收窄
+   只决定注册哪些定义，参数 schema 与原生挂载同源（harness 自己的 `createMcpToolDefinition`）；只有 `lazy` 才退到
+   `mcp_call` 的入参校验。labmimors 的 `allowTools/denyTools` 最接近，但它是网关级、没有按行规则，也没有
+   "过滤之后仍然是原生工具"这一档。
 3. **加载语义显式建模**：两个正交开关，且模式是活设置（提交即对所有会话的下一次请求生效）。
    竞品普遍只有一个 enable/disable 维度。
 
-### 已知的两类代价（只在 `lazy` 下成立）
+### 已知的四类代价（如实记录）
 
-- **代理通道丢掉模型侧的参数文档**：`lazy` 要求模型照抄 schema 里的参数（设计取舍见 design-decisions.md D2）。
-  `dynamic` 下的过滤行没有这条代价 —— 可见工具照旧带真实 schema 进请求（D8）。
+- **按需加载拿不到 instructions 与 resources。** `dynamic` / `lazy` 的服务器都由插件自己连（`native` 或 `proxy`），
+  绕开了 harness 的 mcp-client，所以**没有 server instructions，也没有 `mcp-resources` 的共享资源工具**——
+  这是删掉 `mount` 载体换来的（design-decisions.md D8）。要这两样就把该行放进 preset 并选 `eager`。
+- **代理通道丢掉模型侧的参数文档**：`lazy` 要求模型照抄 schema 里的参数（D2）。`dynamic` 没有这条代价——
+  可见工具照旧带真实 schema 进请求。
 - **代理通道丢掉富 UI 呈现**：`dsh-mcp-diff` 按 `mcp__<serverName>__<tool>` 前缀注册 toolview，
   `dsh-mcp-apps` 按工具 `_meta.ui.resourceUri` 渲沙箱 App——两者都依赖工具被**原生注册**。
-  经 `mcp_call` 的调用结果只有一个文本字段，这类卡片与 App 不会触发；`dynamic` 下过滤行仍按同一前缀原生注册，
+  经 `mcp_call` 的调用结果只有一个文本字段，这类卡片与 App 不会触发；`dynamic` 下全部工具都按同一前缀原生注册，
   所以照样命中。
+- **全局行写入是整表重写**：功能正确（开关生效、`disabled: true` 被移除），但会丢用户 Include 文件里的注释、
+  规范引号风格，并留下显式的 `disabled: false`——不回到逐字节原样（design-decisions.md D11）。竞品里 PerryLink
+  用审批门 + 自动备份、null119 用 override + revert 覆盖同一段风险。
 
 ## 作用域分层
 
@@ -77,7 +93,7 @@ MCP Apps 宿主 [sugarforever/dsh-mcp-apps](https://github.com/sugarforever/dsh-
 | 项目 / 工作区（按目录，不按 agent） | 只有 cwd 落在该工作区的会话可见 | Imzl-zl（`.dsh/mcp.json`）、hyqhyq3（user vs workspace）、yangfch3（只有 workspace 级）、duhu2000（project 半边 + Host 强制隔离）、lilyblessing（`.dsh/mcps`） |
 | **agent preset 平面** | 行写进该 preset 的 `agent.cordis.yml` | **只有 lilyblessing 与本插件**。它显式操作 preset 行（`loader.resolve(id).update({disabled})`，README 写明「启停作用于 preset 层」）；我们按 `preset:<id>:<name>` 行键管理，用闸门挂载而不写文件 |
 | per-agent 可见性 | 每个 agent（含子代理）一份可见集合，服务器归属不变 | AllenLogo（`agent/created` 给每个 agent 装 `restrict({deny:['mcp__*']})`，`mcp_pin` 显式物化）、hyqhyq3（`agents.create` / `resume` 时在 agent scope 注册 + `exclude` 遮蔽）、vibeinging（per-agent 工具检索） |
-| 单会话加载 | 服务器真的挂进调用方那一个 agent 的层 | 只有本插件（`mcp_load` → `exec.agent.ctx.plugin()`）。竞品的「按需」多是揭示已有工具，不涉及服务器归属 |
+| 单会话加载 | 服务器的工具注册真的落进调用方那一个 agent 的层，而**连接来自宿主级常驻池** | 只有本插件（`mcp_load` → SDK 直连池里的连接 → `agent.ctx.get('tools')` 原生注册）。竞品的「按需」多是揭示已有工具，不涉及服务器归属 |
 
 两条容易混为一谈的线要分开看：**可见性**（每个 agent 看到哪些工具，AllenLogo / hyqhyq3 / vibeinging 在做）与
 **绑定**（服务器属于谁，只有 preset 平面与 `mcp_load` 在做）。Imzl-zl 的 README 甚至明说不要把本插件手工插进 Agent preset。
@@ -99,7 +115,7 @@ MCP Apps 宿主 [sugarforever/dsh-mcp-apps](https://github.com/sugarforever/dsh-
 ### 交叉验证
 
 lilyblessing 记录过一次事故：**运行期写 preset 文件会触发 standing 重挂且旧实例不清理**（serverName 全冲突、会话创建失败），
-它因此改成「状态文件 + 启动早期物化」。这与 [design-decisions.md](design-decisions.md) D5 选「运行时摘行、绝不写文件」
+它因此改成「状态文件 + 启动早期物化」。这与 [design-decisions.md](design-decisions.md) D5 选「抑制在内存里做、绝不写文件」
 是各自独立得到的同一结论。
 
 ## 路线图
@@ -112,30 +128,32 @@ lilyblessing 记录过一次事故：**运行期写 preset 文件会触发 stand
    证据：我们仓库 `topics` 为空、0 star；竞品全部带 `dsh-plugin`，[awesome-dsh-plugins](https://github.com/kejixiaoliang/awesome-dsh-plugins)
    的 [CONTRIBUTING](https://github.com/kejixiaoliang/awesome-dsh-plugins/blob/main/CONTRIBUTING.md) 以该 topic 为收录前提，其 MCP 分类眼下只有 8 条。
    落点：仓库 topics（`dsh-plugin`、`dsh`、`mcp`、`deepseek-harness`）+ 往 `plugins/mcp.md` 提一行 PR。
-2. **接上 `npm test` 与最小 CI。**
-   证据：`package.json` 只有 `build` / `typecheck`，`tests/mcp-tool-filter.spec.ts` 没有任何 script 调到它；无 `.github/`。
-   落点：加 vitest script + 一个跑 build / typecheck / test 的 workflow。
-3. **发 npm。** 证据：社区文档给的安装形态主要是 `dsh plugin add <npm 包>`；`@yilinxiao/dsh-mcp-lazy`、`dsh-mcp-proxy` 都已发布，我们只能 git 装。
+2. **接上最小 CI。**（测试已接上：`npm test` 19 文件 / 204 项、`npm run test:harness` 6 文件 / 25 项）
+   证据：`package.json` 已有 `test` / `test:harness` / `typecheck` / `build`；仍无 `.github/`。
+   落点：一个跑 build / typecheck / test 的 workflow。
+3. **发新版的 npm 包。** 证据：npm 上 `latest` 仍是 `1.2.1`，而仓库 `package.json` 已经是 `1.3.0`；
+   社区文档给的安装形态主要是 `dsh plugin add <npm 包>`。
 
 ### P1 —— 核心赛道（1–2 周）
 
-4. **检索式 `mcp_load`（最高优先级）。**
-   证据：hyqhyq3 的三工具 broker（BM25 + NFKC + CJK + 别名 + 编辑距离，默认 10 / 上限 50）、
-   labmimors 的两工具固定 1,114 B、ben7am1n 纯关键词、leaforbook 的路由工具——四家都证明"按查询只给出命中的工具"可行且有效。
-   落点：给 `mcp_load` 加可选 `query`，复用 [`src/mcp-tool-filter.ts`](../src/mcp-tool-filter.ts) 的白名单机制与
-   [`src/lazy-mcp.ts`](../src/lazy-mcp.ts) 的结果渲染，只返回命中的 top-N 工具及其 schema。检索保持离网、无 embedding。
-5. **回合末 schema 回收 + 连接保温。**
+4. ~~检索式 `mcp_load`~~ —— **已完成（2026-10-15）**：注册 `mcp_search`（Layer 1 目录：关键词匹配名称/标题/描述，离网、无 embedding，命中按相关性排序），`mcp_load` 加 `query`（只加载命中）与 `tool`（按名取一个工具及其 schema），`cursor` / `limit` 分页，`namesOnly` 默认只带名称与描述。落点：[`src/mcp-optimize.ts`](../src/mcp-optimize.ts)、[`src/lazy-mcp.ts`](../src/lazy-mcp.ts)、设置页 [`src/client/McpOptimizeSection.tsx`](../src/client/McpOptimizeSection.tsx)，决策见 [design-decisions.md](design-decisions.md) D16。
+   仍需做：检索默认只看已缓存服务器（`searchIndex` 才连接），未做 10,000 工具规模的上限调优。
+5. **回合末 schema 回收 + 连接闲置回收。**
    证据：leaforbook `releaseOnTurnEnd` + `warmIdleMs`（默认 5 分钟）是当前最完整的形态；
-   ben7am1n 与 lilyblessing 也各有 5 分钟 / 30 秒的回收。我们的 `lazy` 一旦加载，schema 就留在会话历史里收不回。
-   落点：`mounted` 现在只有 `Map<agentId, Map<serverName, MountedServer>>`，需要再维护每个 agent 的可见集合与保温暖回收定时器。
-6. **用 `tools.restrict()` 把全局平面纳入 lazy。**
-   证据：这能消掉我们 README 里那条"全局行恒常驻"的限制，也是 leaforbook 与 AllenLogo 覆盖第三方行的手段。
+   ben7am1n 与 lilyblessing 也各有 5 分钟 / 30 秒的回收。我们的 `lazy`/`dynamic` 一旦加载，schema 就留在会话历史里收不回；
+   **连接**这一半已由宿主级常驻池满足（跨会话复用、按 claim 释放），但池没有空闲 TTL。
+   落点：维护每个 agent 的可见集合与"回合末撤回注册"，并给池条目加空闲超时。
+6. **用 `tools.restrict()` 让全局行的工具过滤生效。**
+   证据：全局行这一轮已并入按需语义（见上表「覆盖非 preset 行」），**剩下的限制只是工具过滤对全局行不生效**——
+   全局行由组合直接挂载，插件没有"少注册几个"的插手点。`restrict()` 正是 leaforbook 与 AllenLogo 覆盖第三方行的手段。
    harness 已有公共 API：`ctx.tools.restrict({ deny })` 要求 scoped context、名字必须已知、被 restrict 的名字读作不存在（调用直接 `UNKNOWN_TOOL`）。
    可直接照抄的先例是 [`packages/experimental/browser-use-runtime/src/mcp.ts`](../../packages/experimental/browser-use-runtime/src/mcp.ts)
    （`createScope(ctx, agent)` + `restrict({ deny: inherited.map(t => t.name) })` 屏蔽继承来的 MCP 工具）。
 7. **目录磁盘缓存 + 闲置回收。**
    证据：wings1848 与 ben7am1n 的元数据落盘让搜索不必启动进程；labmimors 的 `catalogTtl` / `idleDisconnect` 是现成参数表。
    落点：缓存 `listTools` 结果（含 schema），供编辑弹窗复用；给已加载连接加空闲超时。
+   **部分完成（2026-10-15）**：进程内目录缓存（TTL + 服务器 `ttlMs` + `tools/list_changed` 失效）已落地，检索命中缓存时确实不启动进程；
+   仍未做：落盘（冷启动即可检索）与已加载连接的空闲回收。
 8. **量化并公布 token 收益，同时测出 `dynamic` 的前缀代价。**
    证据：leaforbook 给出 95.6% / 94.4% / 88.8%（合计 9,727 → 581）；wings1848 给出 5,313 → 381；
    labmimors 给出 1,114 B vs 647,962 B；lilyblessing 量化了缓存 miss 的 5–12.5 倍费率；
@@ -160,8 +178,9 @@ lilyblessing 记录过一次事故：**运行期写 preset 文件会触发 stand
 
 12. ~~批量导入 Claude Code 的 `mcpServers`~~ —— **已完成**：设置页工具栏「导入 Claude 配置」，
     读 `~/.claude.json`（含 `projects[<cwd>]` 分区）、`~/.claude/settings.json`、`settings.local.json`
-    与项目 `.mcp.json`，勾选后逐条导入为全局行（`scanClaudeMcp` + 现有 `addMcp`，见 [AGENTS.md](../AGENTS.md)）。
-    仍未做：Cursor / Cline / Roo / VS Code 的配置文件（Imzl-zl 覆盖的那批），以及导入到 preset 平面。
+    与项目 `.mcp.json`，勾选后一次 `addMcps` 导入；**目标跟随当前平面**（全局分组，或预设下拉选中的预设），
+    见 [AGENTS.md](../AGENTS.md)。
+    仍未做：Cursor / Cline / Roo / VS Code 的配置文件（Imzl-zl 覆盖的那批）。
 13. 配置写入的备份与 revert；14. UI 内工具试调（走官方执行管线，不进模型上下文）；
 15. 观察项：MCP Apps（`_meta.ui.resourceUri`）已经进入生态，我们的三种模式都未考虑它。
 
@@ -183,3 +202,9 @@ gh api repos/<owner>/<repo>/topics -H 'Accept: application/vnd.github+json'
 
 结论来自各仓库 README 原文、[awesome-dsh-plugins](https://github.com/kejixiaoliang/awesome-dsh-plugins) 目录，
 以及本仓源码对 harness 能力（`tools.restrict()`、`mcpResources.register()`）的核对。星标与时间均为 2026-09-20 采样。
+
+### 本仓验证基线（读上表「我们」一列时的前提）
+
+- **当前基线**：隔离实例实测跑在 `@deepseek-ai/dsh@0.2.0-rc.2` 上——它就是 npm 的 `latest` / `next`，也是日常实例实际运行的宿主版本，所以"实测版本 = 正在使用的版本"。
+- **产物归属**：隔离读数是**最终产物** `lib/index.mjs` `121B8C0A…` / `lib/client.js` `E1B1051A…`；较早产物 `9B5D8D19…` / `D498FEC7…` 的读数作为历史保留在验证记录里。
+- **历史**：较早的一次兼容性验证在 `0.2.1-alpha.1`（2026-10-07 提交 `19d02aa`，针对 `livePresetMounts` 移除的适配）；该 `alpha` tag 现为 `0.2.1-alpha.4`，本次工作**未**在 alpha 线上复跑——只是没有新读数，**不代表** alpha 线失效。

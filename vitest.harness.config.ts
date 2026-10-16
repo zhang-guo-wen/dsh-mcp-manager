@@ -23,7 +23,14 @@ export default defineConfig({
       } }).outputText
     },
   }],
-  resolve: { alias },
+  resolve: { alias: [...alias, {
+    // The Harness checkout has no node_modules of its own, so Vite cannot
+    // resolve its bare `semver` import to a real file; without this alias the
+    // CJS entry is loaded under a fabricated extension-less id and dies with
+    // `Cannot find module './internal/re'`. See tests/fixtures/semver-esm.ts.
+    find: /^semver$/,
+    replacement: resolve(import.meta.dirname, 'tests/fixtures/semver-esm.ts'),
+  }] },
   test: {
     root: import.meta.dirname,
     include: ['tests/**/*.harness.spec.ts'],

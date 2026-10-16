@@ -60,8 +60,13 @@ interface ClaudeImportDialogProps {
   readonly servers: readonly McpServer[]
   /** Presets an import can target, in roster order. */
   readonly presets: () => Promise<readonly McpPresetOption[]>
-  /** The plane the settings tab shows, which the batch writes into. */
+  /** The plane the settings list currently writes to, which the batch targets. */
   readonly plane: McpPlane
+  /**
+   * The agent preset the list is narrowed to, when it is narrowed to one. The
+   * batch targets it, so the dialog's own preset picker opens on it.
+   */
+  readonly preset?: string
   readonly t: Translate
   readonly onClose: () => void
   /** Called after a batch settles so the section can refresh its roster. */
@@ -144,7 +149,7 @@ const EntryRow = memo(function EntryRow({ entryKey, entry, checked, disabled, on
 
 /** The Claude configuration import dialog. */
 export function ClaudeImportDialog({
-  open, busy, error, scanClaudeMcp, addMcps, servers, presets, plane, t, onClose, onImported,
+  open, busy, error, scanClaudeMcp, addMcps, servers, presets, plane, preset, t, onClose, onImported,
 }: ClaudeImportDialogProps): ReactNode {
   const [view, setView] = useState<ImportView>({ status: 'loading' })
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(() => new Set<string>())
@@ -169,8 +174,9 @@ export function ClaudeImportDialog({
     // the user's own selection: clearing it there silently re-checked every row.
     if (opening) {
       setExcluded(new Set<string>())
-      // An empty preset id stands for "the first preset once they are known".
-      setPresetId('')
+      // An empty preset id stands for "the first preset once they are known";
+      // a preset the list is narrowed to is the one the batch will target.
+      setPresetId(preset ?? '')
     }
     void presets().then(
       (list) => {
