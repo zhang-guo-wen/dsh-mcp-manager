@@ -35,8 +35,10 @@ export interface PooledConnection {
   readonly truncated: boolean
   /** The server's own freshness hint for its listing, when it published one. */
   readonly ttlMs?: number
-  /** Sessions currently holding this connection open. */
+  /** Claim tokens currently holding this connection open. */
   readonly claims: Set<string>
+  /** Whether `dispose` already ran: a closed connection must never be reused. */
+  readonly closed: boolean
   dispose(): Promise<void>
 }
 
@@ -103,18 +105,23 @@ export interface McpConnectionPool {
    */
   acquire(key: PoolKey, config: McpEntryConfig): Promise<PooledConnection>
   /**
-   * Record that one session is using one connection.
+   * Record one holder's claim on one connection.
    * @param key - the row identity and its current config identity.
-   * @param connection - the connection that session just loaded.
-   * @param sessionId - the session holding the claim.
+   * @param connection - the connection that holder just loaded.
+   * @param claimId - the claim token, unique per holder and load; `release`
+   *   must be given the same token back.
+   * @throws when the connection is already closed — a dead connection must not
+   *   be registered back into the pool.
    */
-  claim(key: PoolKey, connection: PooledConnection, sessionId: string): void
+  claim(key: PoolKey, connection: PooledConnection, claimId: string): void
   /**
-   * Release one session's claim and close the connection when it was the last.
-   * @param connection - the connection the session is giving up.
-   * @param sessionId - the session releasing its claim.
+   * Release one claim and close the connection when it was the last. A token
+   * this connection never claimed releases nothing: an error path that never
+   * claimed must not close a connection another holder is still loading.
+   * @param connection - the connection the holder is giving up.
+   * @param claimId - the claim token given to `claim`.
    */
-  release(connection: PooledConnection, sessionId: string): Promise<void>
+  release(connection: PooledConnection, claimId: string): Promise<void>
   /**
    * Close one connection regardless of its claims, used when its row is gone.
    * @param key - the row identity whose connection should stop.
@@ -193,6 +200,7 @@ export function createMcpConnectionPool(opener: ConnectionOpener): McpConnection
           truncated,
           ...ttlMs === undefined ? {} : { ttlMs },
           claims: new Set<string>(),
+          get closed() { return closed },
           dispose: async () => {
             if (closed) return
             closed = true
@@ -212,17 +220,20 @@ export function createMcpConnectionPool(opener: ConnectionOpener): McpConnection
       }
     }),
 
-    claim: (key, connection, sessionId) => {
+    claim: (key, connection, claimId) => {
+      if (connection.closed) {
+        throw new Error(`the connection to "${connection.serverName}" is already closed`)
+      }
       // A connection displaced by a config change keeps serving its own
-      // sessions, so it is registered under the identity it was opened with.
+      // holders, so it is registered under the identity it was opened with.
       const id = keyOf({ ...key, fingerprint: connection.fingerprint })
       if (entries.get(id)?.connection === undefined) entries.set(id, { connection })
-      connection.claims.add(sessionId)
+      connection.claims.add(claimId)
     },
 
-    release: (connection, sessionId) => enqueue(async () => {
-      connection.claims.delete(sessionId)
-      if (connection.claims.size > 0) return
+    release: (connection, claimId) => enqueue(async () => {
+      const held = connection.claims.delete(claimId)
+      if (!held || connection.claims.size > 0) return
       await close(connection)
     }),
 

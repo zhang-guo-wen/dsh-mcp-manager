@@ -161,6 +161,8 @@ interface LoadedView {
   readonly rowKey: string
   readonly carrier: 'native' | 'proxy'
   readonly connection: PooledConnection
+  /** The pool claim token this view holds on its connection; released with it. */
+  readonly claimId: string
   /** Rules this view was admitted with; a re-sync recomputes the same set. */
   readonly filter: McpToolFilter
   /** The tools this session may call, in the server's own order. */
@@ -576,6 +578,10 @@ export function registerMcpTools(
   const scopedAgents = new Set<string>()
   /** The agent behind one id, for a re-sync that has no execution context. */
   const agents = new Map<string, { readonly id: string; readonly ctx: Context }>()
+  /** Serial behind unique claim tokens: every load claims under its own. */
+  let claimSerial = 0
+  /** In-flight search indexing by row key, so parallel searches share one connect. */
+  const indexing = new Map<string, Promise<void>>()
   /** Live tool registrations, undone by the returned disposer. */
   const registrations: (() => void)[] = []
   /** Set by the returned disposer, so a late pool notification does nothing. */
@@ -619,7 +625,7 @@ export function registerMcpTools(
     if (perAgent.size === 0) views.delete(agentId)
     for (const dispose of [...view.definitions.values()].reverse()) dispose()
     view.definitions.clear()
-    await pool.release(view.connection, agentId)
+    await pool.release(view.connection, view.claimId)
     return true
   }
 
@@ -1002,6 +1008,12 @@ export function registerMcpTools(
       // the server's listing, so what this connection already discovered is what
       // the catalogue remembers for it.
       const connection = await pool.acquire(key, config)
+      // Claim before any further work, under a token unique to this load: a
+      // connection no claim holds can be closed under it by any release, and a
+      // token-per-load keeps the count right even when one session loads the
+      // same server twice in parallel. Every exit below releases this token.
+      const claimId = `${agent.id}\u0000${(claimSerial += 1)}`
+      pool.claim(key, connection, claimId)
       remember(row.key, {
         tools: connection.tools,
         truncated: connection.truncated,
@@ -1016,7 +1028,7 @@ export function registerMcpTools(
       // wrong name), and an ordinary empty listing when a query simply matched
       // nothing (the model should try other words).
       if (narrowing !== undefined && selection.admitted.length === 0) {
-        await pool.release(connection, agent.id)
+        await pool.release(connection, claimId)
         if (wanted === undefined) {
           return {
             server: serverName,
@@ -1038,25 +1050,48 @@ export function registerMcpTools(
         )
       }
       const registry = agent.ctx.get('tools') as ToolRegistry | undefined
-      if (registry === undefined) throw new Error('mcp_load requires the tools service')
+      if (registry === undefined) {
+        await pool.release(connection, claimId)
+        throw new Error('mcp_load requires the tools service')
+      }
       let definitions = new Map<string, () => void>()
       if (carrier === 'native') {
-        const adapter = await resolveAdapter()
         try {
+          const adapter = await resolveAdapter()
           definitions = swapNativeTools(
             registry,
             new Map(),
             nativeDefinitions(agent.ctx, adapter, serverName, selection.admitted, connection.client),
           )
         } catch (error) {
-          await pool.release(connection, agent.id)
+          await pool.release(connection, claimId)
           throw error
         }
       }
       agents.set(agent.id, agent)
+      // A parallel load of the same server may have won the race while this one
+      // was connecting or registering. The first view keeps what it registered
+      // — a later load only ever widens — so this one undoes its own
+      // registrations and claim instead of silently clobbering the winner.
+      const won = viewsFor(agent.id).get(serverName)
+      if (won !== undefined) {
+        for (const dispose of [...definitions.values()].reverse()) dispose()
+        definitions.clear()
+        await pool.release(connection, claimId)
+        const widening = narrowing === undefined ? widenToWhole(won) : widen(won, narrowing)
+        if (widening) await reregister(agent.id, serverName, won)
+        return reportLoad(
+          won,
+          serverName,
+          { query, wanted, detail, page, widened: widening },
+          policy,
+          () => toolNamesFor(tools, agent.ctx, serverName, external),
+        )
+      }
       const view: LoadedView = {
         rowKey: row.key,
         carrier,
+        claimId,
         connection,
         filter,
         tools: selection.visible,
@@ -1066,7 +1101,6 @@ export function registerMcpTools(
         ...narrowing === undefined ? {} : { admits: narrowing },
       }
       viewsFor(agent.id).set(serverName, view)
-      pool.claim(key, connection, agent.id)
       bindAgentScope(agent)
       return reportLoad(view, serverName, { query, wanted, detail, page }, policy, () => toolNamesFor(tools, agent.ctx, serverName, external))
     },
@@ -1184,9 +1218,19 @@ export function registerMcpTools(
       const stale = rows.filter(row => catalog.get(row.key, policy.catalogTtlMs) === undefined)
       if (policy.searchIndex && stale.length > 0) {
         await mapLimited(stale, SEARCH_INDEX_CONCURRENCY, async (row) => {
+          // Two parallel searches share one indexing connect instead of
+          // starting the same server twice.
+          const prior = indexing.get(row.key)
+          if (prior !== undefined) {
+            await prior.catch(() => {})
+            return
+          }
+          let finish!: () => void
+          const turn = new Promise<void>(resolve => { finish = resolve })
+          indexing.set(row.key, turn)
           try {
             const config = row.externalConfig ?? mcpEntryConfig(await describeRow(ctx, row), row.serverName)
-            if (describeRow === undefined || diagnoseRowConfig(config).length > 0) return
+            if (diagnoseRowConfig(config).length > 0) return
             const { client, tools: listed, truncated, ttlMs } = await connectLazyWithin(
               config,
               { maxTools: policy.maxTools },
@@ -1200,6 +1244,9 @@ export function registerMcpTools(
           } catch {
             // A server that will not answer is reported as still not indexed
             // rather than failing the whole search.
+          } finally {
+            finish()
+            indexing.delete(row.key)
           }
         })
       }

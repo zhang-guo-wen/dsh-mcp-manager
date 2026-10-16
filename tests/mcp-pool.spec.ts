@@ -111,6 +111,36 @@ describe('host-level connection pool', () => {
     expect(io.opened).toBe(2)
   })
 
+  it('a release for a claim it never held closes nothing', async () => {
+    const io = opener()
+    const pool = createMcpConnectionPool(io)
+    const identity = key(connectionFingerprint(stdio()))
+    const connection = await pool.acquire(identity, stdio())
+    pool.claim(identity, connection, 'session-a')
+    // An error path that never claimed must not drop a connection another
+    // holder is still loading through.
+    await pool.release(connection, 'session-b')
+    expect(io.closes).toBe(0)
+    expect(connection.claims).toEqual(new Set(['session-a']))
+    await pool.release(connection, 'session-a')
+    expect(io.closes).toBe(1)
+  })
+
+  it('refuses to claim a connection that is already closed', async () => {
+    const io = opener()
+    const pool = createMcpConnectionPool(io)
+    const identity = key(connectionFingerprint(stdio()))
+    const connection = await pool.acquire(identity, stdio())
+    pool.claim(identity, connection, 'session-a')
+    await pool.release(connection, 'session-a')
+    expect(io.closes).toBe(1)
+    // A dead connection must never be registered back into the pool: the claim
+    // fails loud and the next acquire opens a fresh one instead of serving it.
+    expect(() => { pool.claim(identity, connection, 'session-b') }).toThrow(/already closed/)
+    expect(await pool.acquire(identity, stdio())).not.toBe(connection)
+    expect(io.opened).toBe(2)
+  })
+
   it('opens a new connection when the row config changed, keeping the old one for its sessions', async () => {
     const io = opener()
     const pool = createMcpConnectionPool(io)

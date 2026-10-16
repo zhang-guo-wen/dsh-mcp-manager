@@ -268,6 +268,23 @@ describe('mcp_load discovery', () => {
     expect(sdk.clients.length).toBe(0)
     expect(shared.size).toBe(1)
   })
+
+  it('two parallel loads of one server settle on one view, not a clobber', async () => {
+    setToolPages([tools('a', 'b')])
+    const h = harness({ mode: 'dynamic' })
+    await Promise.all([
+      h.run('mcp_load', { server: 'alpha' }),
+      h.run('mcp_load', { server: 'alpha', query: 'a' }),
+    ])
+    // Whichever load finished first keeps its view — a later load only widens —
+    // so the session still holds the whole server and nothing was dropped or
+    // left registered twice under the losing load.
+    const again = await h.run('mcp_load', { server: 'alpha' })
+    expect(again.widened ?? false).toBe(false)
+    expect(again.tools).toHaveLength(2)
+    await h.run('mcp_unload', { server: 'alpha' })
+    expect(h.registered().filter((name: string) => name.includes('alpha'))).toEqual([])
+  })
 })
 
 describe('mcp_load listing shape', () => {
