@@ -25,6 +25,7 @@ import * as scopes from '@deepseek-ai/dsh-scope'
 import { createMcpPreloadGate, MCP_ROW_EVENTS, type McpPreloadGate } from '../src/mcp-gate.ts'
 import { createPresetMountReader, type PresetMountReader } from '../src/preset-mounts.ts'
 import { createMcpConnectionPool } from '../src/mcp-pool.ts'
+import { McpCatalog } from '../src/mcp-catalog.ts'
 import { registerMcpTools, type McpLoadingMode, type McpToolRegistration } from '../src/lazy-mcp.ts'
 import { createMcpClientFixture, type McpClientFixture } from './fixtures/mcp-client-fixture.ts'
 
@@ -156,7 +157,7 @@ async function harness(mode: McpLoadingMode = 'dynamic'): Promise<Harness> {
     onToolsChanged: () => {},
     warn,
   })
-  const registration = registerMcpTools(ctx, state.value, gate, undefined, pool)
+  const registration = registerMcpTools(ctx, state.value, gate, undefined, pool, undefined, new McpCatalog())
   let syncing = false
   let dirty = false
   const resync = (): void => {

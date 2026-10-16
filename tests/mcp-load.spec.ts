@@ -80,12 +80,15 @@ function setToolPages(chunks: LazyTool[][], ttlMs?: number): void {
  * @param options.rows - the composition rows the fake Loader declares.
  * @param options.mode - the loading mode under test.
  * @param options.policy - the stored optimization policy.
+ * @param options.catalog - the discovery catalogue to share, as `index.ts`
+ *   shares one across every registration generation.
  */
 function harness(options: {
   rows?: readonly RowSpec[]
   mode?: 'dynamic' | 'lazy'
   policy?: Record<string, unknown>
   filters?: Record<string, unknown>
+  catalog?: McpCatalog<LazyTool>
 }) {
   const rows = options.rows ?? [{ serverName: 'alpha' }]
   const definitions = new Map<string, { name: string; execute(args: unknown, exec: unknown): Promise<never> }>()
@@ -132,7 +135,7 @@ function harness(options: {
     plugin: async () => ({ dispose: async () => {} }),
     logger: { warn: () => {} },
   }
-  const catalog = new McpCatalog<LazyTool>()
+  const catalog = options.catalog ?? new McpCatalog<LazyTool>()
   /** Set once the registration exists: the pool's change reports reach it here. */
   let changed: (connection: PooledConnection) => void = () => {}
   const gate = {
@@ -208,6 +211,26 @@ describe('mcp_load discovery', () => {
     await h.run('mcp_load', { server: 'alpha' })
     expect(h.catalog.size).toBe(1)
     expect(h.catalog.get('global:alpha', 60_000)?.tools).toHaveLength(2)
+  })
+
+  it('one catalogue serves every registration generation', async () => {
+    setToolPages([tools('issue')])
+    const shared = new McpCatalog<LazyTool>()
+    const first = harness({ catalog: shared })
+    await first.run('mcp_load', { server: 'alpha' })
+    expect(shared.size).toBe(1)
+    // A mode commit rebuilds the tool set as a new registration; the later
+    // generation must read the same memory the settings page's catalogue reads,
+    // instead of a private instance that loses every discovery at rebuild.
+    sdk.pages.clear()
+    sdk.clients.length = 0
+    const second = harness({ catalog: shared })
+    const result = await second.run('mcp_search', { query: 'issue' })
+    expect(result.hits.map((hit: { server: string }) => hit.server)).toEqual(['alpha'])
+    expect(result.indexed).toBe(1)
+    expect(result.pending).toEqual([])
+    expect(sdk.clients.length).toBe(0)
+    expect(shared.size).toBe(1)
   })
 })
 

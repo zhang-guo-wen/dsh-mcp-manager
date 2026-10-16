@@ -253,7 +253,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // being initialized.
   const active: { current?: McpToolRegistration } = {}
   const activate = (next: McpLoadingMode): McpToolRegistration => {
-    const registration = registerMcpTools(ctx, next, gate, readers, pool, external)
+    // The shared catalogue is the seventh argument: `mcp_load`/`mcp_search`
+    // must remember discoveries where `McpManager.catalogState` reads them and
+    // where every later registration generation still finds them.
+    const registration = registerMcpTools(ctx, next, gate, readers, pool, external, catalog)
     active.current = registration
     changed = connection => { registration.toolsChanged(connection) }
     return registration

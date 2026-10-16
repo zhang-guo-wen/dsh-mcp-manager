@@ -483,8 +483,9 @@ export interface McpRowReaders {
  * @param readers - live per-row rule, description, and policy readers.
  * @param pool - the host-level connection pool every session shares.
  * @param external - the registry of resource-plugin rows, when one is mounted.
- * @param catalog - where discovery results are remembered between calls. Omitted
- *   means searches can only see servers this registration itself listed.
+ * @param catalog - where discovery results are remembered between calls. Every
+ *   caller passes one; `index.ts` passes the shared instance so searches and
+ *   the settings page's catalogue read the same memory, across registrations.
  * @returns the registration handle. `eager` registers no tool at all, and its
  *   handle is an inert pair of no-ops.
  */
@@ -494,8 +495,8 @@ export function registerMcpTools(
   gate: McpPreloadGate,
   readers: McpRowReaders = { filterFor: () => NO_TOOL_FILTER, descriptionFor: () => undefined },
   pool: McpConnectionPool,
-  external?: ExternalMcpRegistry,
-  catalog: McpCatalog<LazyTool> = new McpCatalog<LazyTool>(),
+  external: ExternalMcpRegistry | undefined,
+  catalog: McpCatalog<LazyTool>,
 ): McpToolRegistration {
   const tools = ctx.get('tools') as ToolRegistry | undefined
   if (tools === undefined || mode === 'eager') {

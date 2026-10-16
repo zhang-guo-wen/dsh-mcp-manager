@@ -9,6 +9,7 @@ import * as registryModule from '@deepseek-ai/dsh-agent-preset-registry'
 import { createPresetMountReader } from '../src/preset-mounts.ts'
 import { createMcpPreloadGate } from '../src/mcp-gate.ts'
 import { listMcpRows, registerMcpTools } from '../src/lazy-mcp.ts'
+import { McpCatalog } from '../src/mcp-catalog.ts'
 
 const MCP = '@deepseek-ai/dsh-mcp-client'
 const contexts: Context[] = []
@@ -167,7 +168,7 @@ describe('latest Harness preset compatibility', () => {
         return ctx.get(name as never)
       },
     } as unknown as Context
-    const registration = registerMcpTools(fakeCtx, 'dynamic', gate)
+    const registration = registerMcpTools(fakeCtx, 'dynamic', gate, undefined, undefined, undefined, new McpCatalog())
     await registration.refresh()
     expect(audit).not.toHaveBeenCalled()
     const agent = scopes.createScope(ctx, {}, { parent: reader()[0]!.scope! })
