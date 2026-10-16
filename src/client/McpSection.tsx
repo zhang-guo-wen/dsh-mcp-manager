@@ -21,7 +21,7 @@
  * @module @guowenzhang/dsh-mcp-manager/client/McpSection
  */
 
-import { useEffect, useId, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { Button, SegmentedControl, SegmentedTabs, StateDot, Switch, Tag, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
@@ -368,6 +368,10 @@ function McpDescription({ value, disabled, onCommit, t }: {
             event.currentTarget.blur()
           }
           if (event.key === 'Escape') {
+            // Only the draft is cancelled here. Left to bubble, the settings
+            // shell treats the same Escape as "close this dialog" and takes the
+            // whole page away from the user mid-edit.
+            event.stopPropagation()
             setDraft(null)
             setSave('idle')
             setFailure(null)
@@ -453,12 +457,24 @@ function McpRow({ server, description, suppressed, action, onEditDescription, on
   // so it is not given the pointer, and the controls inside keep working on
   // their own without the row opening behind them.
   const clickable = !actionsDisabled
+  // A click or key press that started on one of the row's own controls belongs
+  // to that control; the card must not open the editor behind it as well.
+  const fromRowControl = (target: EventTarget | null): boolean =>
+    target instanceof HTMLElement && target.closest('button, input, select, textarea, a, label') !== null
   const clickProps = clickable
     ? {
       onClick: (event: ReactMouseEvent<HTMLDivElement>) => {
-        // The row's own controls run the row's other actions; a click that
-        // started on one of them must not also open the editor.
-        if ((event.target as HTMLElement).closest('button, input, select, textarea, a, label')) return
+        if (fromRowControl(event.target)) return
+        openEditor()
+      },
+      // The card is a Tab stop of its own, so the keyboard reaches the row the
+      // way the pointer does; Enter and Space open it. Space is claimed only
+      // here, so the page still scrolls while focus is anywhere else.
+      tabIndex: 0,
+      onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (fromRowControl(event.target)) return
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
         openEditor()
       },
       title: actionsReason === undefined ? t('mcp.row.editHint') : undefined,

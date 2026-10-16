@@ -237,11 +237,11 @@
    elevation shadow.
 
    The card itself is the row's edit affordance, so an interactive one answers
-   the pointer: hover lifts its surface one step. The keyboard path stays the
-   row's own button, which is focusable and labelled — the card is not a focus
-   target, so it carries no focus ring of its own. A closed row (a global row
-   with no writable file) keeps the card inert and says why through its
-   controls' tooltips. */
+   the pointer and the keyboard: hover lifts its surface one step, and the card
+   is a Tab stop with the shared focus ring (Enter/Space open it; the controls
+   inside keep their own focus and keys). A closed row (a global row with no
+   writable file) keeps the card inert and says why through its controls'
+   tooltips. */
 .mcpRow {
   box-sizing: border-box;
   display: flex;
@@ -265,6 +265,13 @@
 
 .mcpRow[data-clickable='true']:active {
   background: var(--dsw-alias-interactive-bg-active);
+}
+
+/* The card is a Tab stop, so it needs the shared focus ring; the controls inside
+   keep their own. */
+.mcpRow[data-clickable='true']:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
 }
 
 /* The preset a row belongs to is metadata, like the status beside it: the list

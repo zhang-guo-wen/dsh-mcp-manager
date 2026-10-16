@@ -932,6 +932,21 @@ section 被压到约 36px 宽、行卡片被裁切（截图 `shots/v-03-width-36
 **读数（本轮）**：`npm run typecheck` 通过；`npm test` **22 文件 / 253 项**全绿；`npm run build` 通过，
 `lib/index.mjs`、`lib/client.js` 与源码同批提交。
 
+### 追加修复与**定向**复测（2026-10-16 15:17，非全量复跑）
+
+独立验收人在本轮产物上复核出两条交互缺陷，两者都已修复，并用**只针对这两条**的脚本 `verify-keyboard.mjs`
+（同一隔离实例、1280×900、无头 Chromium）复测，**没有**重跑上面的全量 22 项：
+
+| 缺陷 | 修法 | 定向读数 |
+| --- | --- | --- |
+| 卡片是 `div`，Tab 焦点落不到它（验收项 4 的键盘子句曾判未通过） | 卡片加 `tabIndex={0}` 与 Enter/Space 处理；命中判定抽成 `fromRowControl()`，行内控件自己处理按键 | `card-focusable`：`focus()` 后 `activeElement` 就是卡片、`tabindex="0"`；`card-enter-opens`、`card-space-opens` 均 true；`control-enter-does-not-open-card` 为 false（行内控件按 Enter 不会连带打开编辑器） |
+| 描述就地编辑时按 Esc 会连带关闭整个设置弹窗 | 描述输入框的 Escape 分支 `stopPropagation()`，只取消草稿 | `escape-cancels-draft-only`：按键前后对话框数都是 1，仍是「设置 / MCP 管理」 |
+
+追加修复后的产物：`lib/index.mjs` SHA-256 `CB726D57…`、`lib/client.js` SHA-256 `E3067B1F…`（MD5 `C7E8637A…`）。
+**注意**：上面那张 22 项总表读的是**追加修复前**的产物 `lib/client.js` `39F02038…`；追加修复只碰卡片的键盘
+处理、描述框的 Escape 与卡片焦点环，未改动列表结构、筛选、按钮文案或密钥页，但**全量 22 项没有在新产物上
+重跑**——按当轮指示只做定向验证。
+
 ## 八、连接掉线的感知与恢复（2026-10-16，合并后产物 `444E9B1E…`）—— **单测新增 6 项，两套测试全绿；隔离实例未复跑**
 
 **改动**：池新增「丢失」状态（`PooledConnection.lost`，与「我们自己关掉的」分开）。`LazyClient.onclose`（SDK 的传输结束回调，对我们自己的 `close()` 同样触发）在 `watch` 里接到这条连接自己的 `end(lost)` 闸门；判定为丢失时连接**立刻移出池**、warn 一次、调 `ConnectionOpener.onConnectionLost`，注册侧 `McpToolRegistration.connectionLost` **撤回每个会话对它的视图**，行仍留在按需清单里，所以下次 `mcp_load` 会拉起新进程并注册新的一代工具。设计与被否决方案见 [design-decisions.md](design-decisions.md) D23。
