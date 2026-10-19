@@ -21,7 +21,7 @@
  */
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
-import { Button, SegmentedControl, SegmentedTabs, StateDot, Switch, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconChevronDownOutlineRegular, Menu, SegmentedControl, SegmentedTabs, StateDot, Switch, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AddMcpRequest, DescribeMcpRequest, DescribeMcpResult, EditMcpRequest } from '../types.ts'
@@ -622,6 +622,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
   // whatever this value is, because a session carries them whatever preset it
   // runs; the picker exists to shorten a long roster, not to hide a plane.
   const [agentFilter, setAgentFilter] = useState<string>(MCP_ALL_PRESETS)
+  const [presetMenuOpen, setPresetMenuOpen] = useState(false)
   const disabled = !state.available || !state.writable
   const servers = mcpView.status === 'ready' ? mcpView.servers : []
   const presetNames = mcpView.status === 'ready' ? mcpView.presets : []
@@ -937,18 +938,19 @@ export function McpSection(props: McpSectionProps): ReactNode {
             onChange={(event) => { setSearch(event.currentTarget.value) }}
           />
           {presetChoices.length > 0 ? (
-            <select
-              className={css.mcpFilterSelect}
-              value={activePreset}
-              aria-label={t('mcp.filter.label')}
-              onChange={(event) => { setAgentFilter(event.currentTarget.value) }}
-            >
-              {presetChoices.map(option => (
-                <option key={option.id} value={option.id}>
-                  {t('mcp.filter.option').replace('{name}', option.name)}
-                </option>
-              ))}
-            </select>
+            <Menu open={presetMenuOpen} portal className={css.mcpFilterMenu}
+              selectedId={activePreset}
+              items={presetChoices.map(option => ({
+                id: option.id, label: t('mcp.filter.option').replace('{name}', option.name),
+              }))}
+              onClose={() => setPresetMenuOpen(false)}
+              onSelect={id => { setAgentFilter(id); setPresetMenuOpen(false) }}
+              anchor={<Button variant="outline" className={css.mcpFilterSelect}
+                aria-label={t('mcp.filter.label')} aria-haspopup="menu" aria-expanded={presetMenuOpen}
+                onClick={() => setPresetMenuOpen(value => !value)}>
+                <span className={css.mcpFilterName}>{t('mcp.filter.option').replace('{name}', activePresetName)}</span>
+                <IconChevronDownOutlineRegular size={16} />
+              </Button>} />
           ) : null}
         </div>
         {mcpView.status === 'loading' ? <McpRosterSkeleton label={t('mcp.loading')} /> : null}

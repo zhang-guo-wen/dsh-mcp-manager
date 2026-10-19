@@ -171,16 +171,26 @@
   color: var(--dsw-alias-label-caption);
 }
 
-.mcpFilterSelect {
-  box-sizing: border-box;
+.mcpFilterMenu {
+  min-width: 0;
   max-width: 240px;
-  height: 36px;
-  padding: 0 10px;
-  border-radius: var(--dsw-radius-md);
-  border: 0.5px solid var(--dsw-alias-border-l4);
-  background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-primary);
-  font: var(--dsw-font-xs-13);
+}
+
+.mcpFilterSelect.mcpFilterSelect {
+  width: 100%;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mcpFilterName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcpFilterSelect > svg {
+  flex: none;
 }
 
 /* ---- Roster ---- */
@@ -795,7 +805,7 @@
     justify-content: space-between;
   }
 
-  .mcpFilterSelect,
+  .mcpFilterMenu,
   .rosterSearch {
     max-width: none;
     flex: 1 1 100%;
@@ -806,6 +816,7 @@
    hitting the box itself. */
 @media (pointer: coarse) {
   .mcpRow,
+  .mcpFilterSelect,
   .toolRow {
     min-height: 44px;
   }
