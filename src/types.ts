@@ -188,6 +188,26 @@ export interface McpCatalogEntryView {
   readonly ageMs: number
   /** Whether the collection cap cut the server's listing short. */
   readonly truncated: boolean
+  /** Normalized transport; only remote catalogues can expire or be refreshed. */
+  readonly transport: 'stdio' | 'streamable-http'
+  /** Server-declared lifetime for a remote catalogue, absent for manual refresh. */
+  readonly ttlMs?: number
+  /** Whether the remote server's declared lifetime has elapsed. */
+  readonly expired: boolean
+}
+
+/** Request to reconnect remote HTTP/SSE servers and refresh their catalogues. */
+export interface RefreshMcpCatalogRequest {
+  /** Placeholder field: the catalogue is host-wide, so the request carries none. */
+  readonly unused?: boolean
+}
+
+/** Remote catalogue refresh outcomes; failed servers retain their previous records. */
+export interface RefreshMcpCatalogResult {
+  /** How many remote server catalogues were refreshed. */
+  readonly refreshed: number
+  /** One redacted failure per server that could not be refreshed. */
+  readonly failed: readonly { readonly serverName: string; readonly reason: string }[]
 }
 
 /** What the discovery catalogue currently remembers. */

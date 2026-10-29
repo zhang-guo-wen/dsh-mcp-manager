@@ -333,7 +333,9 @@ export async function listAllTools(client: LazyClient, maxTools: number): Promis
   let ttlMs: number | undefined
   for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
     const listed = await client.listTools(cursor === undefined ? undefined : { cursor })
-    if (ttlMs === undefined && listed.ttlMs !== undefined) ttlMs = listed.ttlMs
+    if (listed.ttlMs !== undefined && Number.isFinite(listed.ttlMs) && listed.ttlMs >= 0) {
+      ttlMs = ttlMs === undefined ? listed.ttlMs : Math.min(ttlMs, listed.ttlMs)
+    }
     let full = false
     for (const tool of listed.tools ?? []) {
       if (tools.length >= maxTools) {
@@ -389,8 +391,13 @@ export async function connectLazy(
     )
   }
   const client = new Client({ name: '@guowenzhang/dsh-mcp-manager', version: '0.1' })
-  await client.connect(transport)
-  return { client, ...(await listAllTools(client, options.maxTools ?? MCP_OPTIMIZE_DEFAULTS.maxTools)) }
+  try {
+    await client.connect(transport)
+    return { client, ...(await listAllTools(client, options.maxTools ?? MCP_OPTIMIZE_DEFAULTS.maxTools)) }
+  } catch (error) {
+    await client.close().catch(() => {})
+    throw error
+  }
 }
 
 /**
@@ -842,12 +849,8 @@ export function registerMcpTools(
   }
 
   /** Remember one server's discovery result, honouring its own freshness hint. */
-  const remember = (key: string, discovery: McpDiscovery): void => {
-    catalog.set(key, {
-      tools: discovery.tools,
-      truncated: discovery.truncated,
-      ...discovery.ttlMs === undefined ? {} : { ttlMs: discovery.ttlMs },
-    })
+  const remember = (key: string, discovery: McpDiscovery, config: McpEntryConfig, epoch: number): void => {
+    catalog.remember(config, discovery, key, Date.now(), epoch)
   }
 
 
@@ -1043,6 +1046,7 @@ export function registerMcpTools(
       // and the claim below are per session. `connectLazy` walks every page of
       // the server's listing, so what this connection already discovered is what
       // the catalogue remembers for it.
+      const epoch = catalog.epoch
       const connection = await pool.acquire(key, config)
       // Claim before any further work, under a token unique to this load: a
       // connection no claim holds can be closed under it by any release, and a
@@ -1054,7 +1058,7 @@ export function registerMcpTools(
         tools: connection.tools,
         truncated: connection.truncated,
         ...connection.ttlMs === undefined ? {} : { ttlMs: connection.ttlMs },
-      })
+      }, config, epoch)
       const selection = admittedTools(connection.tools, filter, narrowing, policy)
       // A narrowing that admits nothing must not leave a view behind: an empty
       // view would answer every later call for that server with an empty tool
@@ -1238,6 +1242,7 @@ export function registerMcpTools(
       const agent = exec.agent
       if (agent === undefined) throw new Error('mcp_search requires an owning agent session')
       const request = args as { query: string; server?: string; cursor?: string; limit?: number }
+      const requestEpoch = catalog.epoch
       const policy = policyNow()
       const limit = clampPageSize(request.limit, policy.pageSize)
       const query = String(request.query)
@@ -1251,9 +1256,31 @@ export function registerMcpTools(
       // `searchIndex` the search connects it once (bounded, and bounded in
       // concurrency) instead of leaving a hole in the answer that the model
       // cannot see.
-      const stale = rows.filter(row => catalog.get(row.key, policy.catalogTtlMs) === undefined)
-      if (policy.searchIndex && stale.length > 0) {
+      // Reading declarations does not connect. Resolve config before consulting
+      // disk-backed discoveries so changed commands/credentials cannot hit an
+      // old row-key entry, and HTTP can never read a local persisted entry.
+      const configs = new Map<string, McpEntryConfig>()
+      for (const row of rows) {
+        try {
+          const config = row.externalConfig ?? mcpEntryConfig(await describeRow(ctx, row), row.serverName)
+          if (diagnoseRowConfig(config).length === 0) configs.set(row.key, config)
+        } catch { /* unavailable declarations remain pending */ }
+      }
+      const discoveredNow = new Map<string, McpDiscovery>()
+      const cached = (row: McpRow) => {
+        if (requestEpoch !== catalog.epoch) return undefined
+        const fresh = discoveredNow.get(row.key)
+        if (fresh !== undefined) return fresh
+        const config = configs.get(row.key)
+        return config === undefined ? undefined : catalog.getFor(row.key, config)
+      }
+      const stale = rows.filter(row => {
+        const config = configs.get(row.key)
+        return cached(row) === undefined && (policy.searchIndex || config !== undefined && catalog.expiredFor(config))
+      })
+      if (stale.length > 0) {
         await mapLimited(stale, SEARCH_INDEX_CONCURRENCY, async (row) => {
+          if (disposed || requestEpoch !== catalog.epoch) return
           // Two parallel searches share one indexing connect instead of
           // starting the same server twice.
           const prior = indexing.get(row.key)
@@ -1265,15 +1292,18 @@ export function registerMcpTools(
           const turn = new Promise<void>(resolve => { finish = resolve })
           indexing.set(row.key, turn)
           try {
-            const config = row.externalConfig ?? mcpEntryConfig(await describeRow(ctx, row), row.serverName)
-            if (diagnoseRowConfig(config).length > 0) return
+            const config = configs.get(row.key)
+            if (config === undefined) return
+            const epoch = requestEpoch
             const { client, tools: listed, truncated, ttlMs } = await connectLazyWithin(
               config,
               { maxTools: policy.maxTools },
               SEARCH_INDEX_TIMEOUT_MS,
             )
             try {
-              remember(row.key, { tools: listed, truncated, ...ttlMs === undefined ? {} : { ttlMs } })
+              const discovery = { tools: listed, truncated, ...ttlMs === undefined ? {} : { ttlMs } }
+              remember(row.key, discovery, config, epoch)
+              if (epoch === catalog.epoch) discoveredNow.set(row.key, discovery)
             } finally {
               await client.close().catch(() => {})
             }
@@ -1291,7 +1321,7 @@ export function registerMcpTools(
       const pending: string[] = []
       let indexed = 0
       for (const row of rows) {
-        const entry = catalog.get(row.key, policy.catalogTtlMs)
+        const entry = cached(row)
         if (entry === undefined) {
           pending.push(row.serverName)
           continue

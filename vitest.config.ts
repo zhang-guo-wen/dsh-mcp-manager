@@ -8,8 +8,8 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     root: import.meta.dirname,
-    include: ['tests/**/*.spec.ts'],
-    exclude: ['tests/**/*.harness.spec.ts', '**/node_modules/**'],
+    include: ['tests/**/*.spec.{ts,tsx}'],
+    exclude: ['tests/**/*.harness.spec.ts', 'tests/**/*.test.mjs', '**/node_modules/**'],
     environment: 'node',
   },
 })

@@ -40,8 +40,8 @@ export interface McpSettingsFlags {
    */
   tools: Record<string, unknown>
   /**
-   * The context-budget policy: search, paging, names-only listings, catalogue
-   * TTL, the collection cap, and the annotation policy. Kept as one open map so
+   * The context-budget policy: search, paging, names-only listings,
+   * the collection cap, and the annotation policy. Kept as one open map so
    * a malformed entry converges at read time (`parseMcpOptimizeFlags`) instead
    * of rejecting the namespace; see `src/mcp-optimize.ts` for every field.
    */

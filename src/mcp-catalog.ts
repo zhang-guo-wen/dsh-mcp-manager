@@ -1,157 +1,217 @@
-/**
- * What each allowed MCP server publishes, kept between loads.
- *
- * Two of the optimizations need a tool list without a live connection: search
- * has to answer for servers the session never loaded, and a listing should not
- * spawn a child process just to be paged. The catalogue is that memory: every
- * `tools/list` this plugin performs — a load, an editor listing, an indexing
- * search — records what the server published, and a later search reads it back
- * while it is younger than the configured TTL.
- *
- * It is deliberately process-local and small. Nothing here is authoritative:
- * a connection is still opened to call anything, and `notifications/tools/
- * list_changed` or a TTL expiry drops the entry so the next search re-reads it.
- * Persisting it to disk would let a cold host answer a search, which is a
- * deliberate non-goal for now: it would need a data directory this plugin does
- * not own, and a stale on-disk catalogue is harder to explain than an empty one.
- *
- * @module @guowenzhang/dsh-mcp-manager/mcp-catalog
- */
+/** Durable MCP tool discovery, shared by local processes and HTTP servers. */
+import { createHash } from 'node:crypto'
+import { resolve } from 'node:path'
+import type { McpEntryConfig } from './mcp-config.ts'
 
-/** The one field the catalogue indexes tools by. */
-export interface CatalogTool {
-  /** The server's own tool name. */
-  readonly name: string
+/** Injectable database boundary; discoveries never contain connection credentials. */
+export interface McpCatalogStorage {
+  load(): Promise<unknown>
+  save(value: unknown, clear?: boolean): Promise<void>
 }
 
-/** One server's recorded tool list. */
+/** Configuration digest; transport, credentials and effective local cwd/env participate. */
+export function catalogIdentity(config: McpEntryConfig): string {
+  const source = config.transport === 'stdio'
+    ? ['stdio', config.serverName, config.command, config.args, resolve(config.cwd || process.cwd()),
+      Object.entries({ ...process.env, ...config.env }).sort(([a], [b]) => a.localeCompare(b))]
+    : ['streamable-http', config.serverName, config.url, Object.entries(config.headers).sort(([a], [b]) => a.localeCompare(b))]
+  return createHash('sha256').update(JSON.stringify(source)).digest('hex')
+}
+
+export interface CatalogTool { readonly name: string }
 export interface McpCatalogEntry<T extends CatalogTool> {
-  /** The tools the server published, in its own order. */
   readonly tools: readonly T[]
-  /** When the list was read, on the same clock the TTL is measured against. */
   readonly fetchedAt: number
-  /** Whether the collection cap cut the server's own listing short. */
   readonly truncated: boolean
-  /**
-   * The freshness window the server itself published (`ttlMs`, the spec's
-   * `CacheableResult` mixin). Absent when the server sent none, which is every
-   * revision before 2026-07-28 and every server that omits the field.
-   */
+  readonly transport: McpEntryConfig['transport']
   readonly serverTtlMs?: number
 }
-
-/** What one discovery walk records for a server. */
 export interface McpCatalogRecord<T extends CatalogTool> {
-  /** The tools the server published, in its own order. */
   readonly tools: readonly T[]
-  /** Whether the collection cap cut the server's own listing short. */
   readonly truncated: boolean
-  /** The server's own freshness hint, when it published one. */
   readonly ttlMs?: number
 }
-
-/** One catalogue entry as the settings page reports it. */
 export interface McpCatalogStat {
-  /** The row key the entry belongs to. */
   readonly key: string
-  /** How many tools were recorded. */
   readonly tools: number
-  /** How long ago the entry was recorded. */
   readonly ageMs: number
-  /** Whether the recorded list was cut short by the collection cap. */
   readonly truncated: boolean
+  readonly transport: McpEntryConfig['transport']
+  readonly ttlMs?: number
+  readonly expired: boolean
+}
+interface StoredRecord<T extends CatalogTool> {
+  readonly identity: string
+  readonly label: string
+  readonly transport: McpEntryConfig['transport']
+  readonly entry: McpCatalogEntry<T>
 }
 
-/** Upper bound on remembered servers, so a long-lived host cannot grow without limit. */
-const MAX_CATALOG_SERVERS = 500
-
-/**
- * A bounded, TTL-read tool catalogue.
- *
- * Reads and writes carry an explicit clock so the TTL rules are testable
- * without waiting.
- */
-export class McpCatalog<T extends CatalogTool = CatalogTool> {
-  private readonly entries = new Map<string, McpCatalogEntry<T>>()
-
-  /**
-   * Read one server's recorded tools while they are fresh enough to reuse.
-   *
-   * The effective window is the shorter of the configured TTL and the server's
-   * own `ttlMs` hint: a server that says its listing is good for a minute is not
-   * cached for five just because the deployment asked for five.
-   * @param key - the row key the tools were recorded under.
-   * @param ttlMs - how long a hint-less entry stays usable; zero disables reuse.
-   * @param now - current time on the caller's clock.
-   * @returns the entry, or undefined when it is absent or expired.
-   */
-  get(key: string, ttlMs: number, now: number = Date.now()): McpCatalogEntry<T> | undefined {
-    const entry = this.entries.get(key)
-    if (entry === undefined) return undefined
-    const window = entry.serverTtlMs === undefined ? ttlMs : Math.min(ttlMs, entry.serverTtlMs)
-    if (window <= 0) return undefined
-    return now - entry.fetchedAt <= window ? entry : undefined
-  }
-
-  /**
-   * Record what one server published, replacing anything recorded before.
-   * @param key - the row key to record under.
-   * @param record - the tools, whether the cap cut them short, and the server's
-   *   own freshness hint when it sent one.
-   * @param now - current time on the caller's clock.
-   */
-  set(key: string, record: McpCatalogRecord<T>, now: number = Date.now()): void {
-    // Re-inserting moves the key to the end of the insertion order, so the
-    // eviction below always drops the least recently written server.
-    this.entries.delete(key)
-    this.entries.set(key, {
-      tools: record.tools,
-      fetchedAt: now,
-      truncated: record.truncated,
-      ...record.ttlMs === undefined ? {} : { serverTtlMs: record.ttlMs },
-    })
-    while (this.entries.size > MAX_CATALOG_SERVERS) {
-      const oldest = this.entries.keys().next()
-      if (oldest.done === true) break
-      this.entries.delete(oldest.value)
+function validTool(value: unknown): value is CatalogTool {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const tool = value as Record<string, unknown>
+  if (typeof tool.name !== 'string') return false
+  for (const field of ['title', 'description']) if (tool[field] !== undefined && typeof tool[field] !== 'string') return false
+  if (tool.annotations !== undefined) {
+    if (tool.annotations === null || typeof tool.annotations !== 'object' || Array.isArray(tool.annotations)) return false
+    const hints = tool.annotations as Record<string, unknown>
+    for (const field of ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint']) {
+      if (hints[field] !== undefined && typeof hints[field] !== 'boolean') return false
     }
   }
+  return true
+}
 
-  /**
-   * Forget one server, so the next read re-lists it.
-   * @param key - the row key to drop.
-   * @returns whether an entry was there to drop.
-   */
+/** Validate database JSON before it can feed search or a write transaction. */
+export function validCatalogRecord(value: unknown): value is StoredRecord<CatalogTool> {
+  if (value === null || typeof value !== 'object') return false
+  const item = value as Partial<StoredRecord<CatalogTool>>
+  const entry = item.entry
+  return (item.transport === 'stdio' || item.transport === 'streamable-http')
+    && typeof item.label === 'string' && item.label.length <= 128
+    && typeof item.identity === 'string' && /^[a-f0-9]{64}$/.test(item.identity)
+    && entry !== null && entry !== undefined
+    && entry.transport === item.transport
+    && Number.isFinite(entry.fetchedAt) && entry.fetchedAt >= 0 && entry.fetchedAt <= Date.now()
+    && typeof entry.truncated === 'boolean' && Array.isArray(entry.tools) && entry.tools.length <= 2_000
+    && entry.tools.every(validTool)
+    && (entry.serverTtlMs === undefined || (Number.isFinite(entry.serverTtlMs) && entry.serverTtlMs >= 0))
+}
+
+const MAX_CATALOG_SERVERS = 500
+
+/** Local catalogues are durable until invalidated; only server-advertised HTTP TTLs expire. */
+export class McpCatalog<T extends CatalogTool = CatalogTool> {
+  private readonly records = new Map<string, StoredRecord<T>>()
+  private readonly bindings = new Map<string, string>()
+  private pending: Promise<void> = Promise.resolve()
+  private generation = 0
+  private closed = false
+  private writing = false
+  private dirty = false
+  private clearing = false
+
+  constructor(private readonly storage?: McpCatalogStorage, private readonly warn: () => void = () => {}) {}
+  get epoch(): number { return this.generation }
+  get persistent(): boolean { return this.storage !== undefined }
+  get size(): number { return this.records.size }
+
+  async restore(): Promise<void> {
+    if (this.storage === undefined) return
+    try {
+      const value = await this.storage.load() as { version?: unknown; entries?: unknown } | undefined
+      if (value === undefined) return
+      if (value.version !== 1 || !Array.isArray(value.entries)) throw new Error('invalid catalogue')
+      for (const item of value.entries.slice(-MAX_CATALOG_SERVERS)) {
+        if (!validCatalogRecord(item)) { this.warn(); continue }
+        this.records.set(item.identity, item as StoredRecord<T>)
+      }
+    } catch { this.warn() }
+  }
+
+  remember(config: McpEntryConfig, record: McpCatalogRecord<T>, key?: string, now = Date.now(), epoch = this.epoch): void {
+    if (this.closed || epoch !== this.epoch) return
+    const identity = catalogIdentity(config)
+    const entry: McpCatalogEntry<T> = {
+      tools: record.tools, fetchedAt: now, truncated: record.truncated, transport: config.transport,
+      ...config.transport === 'stdio' || record.ttlMs === undefined ? {} : { serverTtlMs: record.ttlMs },
+    }
+    this.records.delete(identity)
+    this.records.set(identity, { identity, label: config.serverName, transport: config.transport, entry })
+    if (key !== undefined) this.bindings.set(key, identity)
+    this.trim()
+    this.persist()
+  }
+
+  /** Config-aware lookup prevents changed URL/command/credentials from reusing old tools. */
+  getFor(key: string, config: McpEntryConfig, now = Date.now()): McpCatalogEntry<T> | undefined {
+    const identity = catalogIdentity(config)
+    this.bindings.set(key, identity)
+    this.trim()
+    const entry = this.records.get(identity)?.entry
+    return entry === undefined || this.expired(entry, now) ? undefined : entry
+  }
+
+  get(key: string, now = Date.now()): McpCatalogEntry<T> | undefined {
+    const identity = this.bindings.get(key)
+    const entry = identity === undefined ? undefined : this.records.get(identity)?.entry
+    return entry === undefined || this.expired(entry, now) ? undefined : entry
+  }
+
+  /** Whether a previously discovered server should be refreshed on the next search. */
+  expiredFor(config: McpEntryConfig, now = Date.now()): boolean {
+    const entry = this.records.get(catalogIdentity(config))?.entry
+    return entry !== undefined && this.expired(entry, now)
+  }
+
+  private expired(entry: McpCatalogEntry<T>, now: number): boolean {
+    return entry.transport === 'streamable-http' && entry.serverTtlMs !== undefined
+      && (entry.serverTtlMs <= 0 || now - entry.fetchedAt > entry.serverTtlMs)
+  }
+
   invalidate(key: string): boolean {
-    return this.entries.delete(key)
+    const identity = this.bindings.get(key)
+    if (identity === undefined) return false
+    const removed = this.records.delete(identity)
+    for (const [alias, target] of this.bindings) if (target === identity) this.bindings.delete(alias)
+    if (removed) this.persist()
+    return removed
   }
 
-  /**
-   * Forget every server.
-   * @returns how many entries were dropped.
-   */
   clear(): number {
-    const dropped = this.entries.size
-    this.entries.clear()
-    return dropped
+    this.generation += 1
+    const count = this.records.size
+    this.records.clear()
+    this.bindings.clear()
+    this.persist(true)
+    return count
   }
 
-  /** How many servers are remembered. */
-  get size(): number {
-    return this.entries.size
-  }
-
-  /**
-   * Report every remembered server, oldest first.
-   * @param now - current time on the caller's clock.
-   * @returns one row per entry, with its age relative to `now`.
-   */
-  stats(now: number = Date.now()): readonly McpCatalogStat[] {
-    return [...this.entries].map(([key, entry]) => ({
-      key,
-      tools: entry.tools.length,
-      ageMs: Math.max(0, now - entry.fetchedAt),
-      truncated: entry.truncated,
+  stats(now = Date.now()): readonly McpCatalogStat[] {
+    return [...this.records.values()].map(({ identity, label, transport, entry }) => ({
+      key: [...this.bindings].find(([, value]) => value === identity)?.[0] ?? `${transport === 'stdio' ? 'local' : 'server'}:${label}`,
+      transport, tools: entry.tools.length, ageMs: Math.max(0, now - entry.fetchedAt), truncated: entry.truncated,
+      ...entry.serverTtlMs === undefined ? {} : { ttlMs: entry.serverTtlMs }, expired: this.expired(entry, now),
     }))
+  }
+
+  async flush(): Promise<void> { await this.pending }
+  async close(): Promise<void> { this.closed = true; this.generation += 1; await this.flush() }
+
+  private trim(): void {
+    while (this.records.size > MAX_CATALOG_SERVERS) {
+      const identity = this.records.keys().next().value!
+      this.records.delete(identity)
+      for (const [key, value] of this.bindings) if (value === identity) this.bindings.delete(key)
+    }
+    while (this.bindings.size > MAX_CATALOG_SERVERS) this.bindings.delete(this.bindings.keys().next().value!)
+  }
+
+  private persist(clear = false): void {
+    if (this.storage === undefined) return
+    this.dirty = true
+    this.clearing ||= clear
+    if (this.writing) return
+    this.writing = true
+    this.pending = (async () => {
+      while (this.dirty) {
+        this.dirty = false
+        const clearing = this.clearing
+        this.clearing = false
+        const entries = [...this.records.values()].map(item => ({ ...item, entry: {
+          ...item.entry, tools: item.entry.tools.map(tool => Object.fromEntries(
+            ['name', 'title', 'description', 'inputSchema', 'outputSchema', 'annotations', 'execution']
+              .filter(field => field in tool).map(field => [field, (tool as unknown as Record<string, unknown>)[field]]),
+          )),
+        } }))
+        try {
+          await this.storage!.save({ version: 1, entries }, clearing)
+        } catch (error) {
+          if (clearing) this.clearing = true
+          throw error
+        }
+      }
+    })().finally(() => { this.writing = false })
+    void this.pending.catch(() => { this.warn() })
   }
 }

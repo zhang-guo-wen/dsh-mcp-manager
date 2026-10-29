@@ -30,6 +30,8 @@ import type {
   McpFiberPhase,
   McpMutationResult,
   McpRowReadOnly,
+  RefreshMcpCatalogRequest,
+  RefreshMcpCatalogResult,
 } from '../types.ts'
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -138,8 +140,8 @@ export const MCP_LOADING_OPTIONS: readonly McpLoadingOption[] = ['eager', 'dynam
 export interface McpPresetOption {
   /** Preset id used in the composition target. */
   readonly id: string
-  /** Display name the preset published, or the id. */
-  readonly name: string
+  /** Authored name, absent for built-ins whose display copy comes from the Host locale. */
+  readonly name?: string
 }
 
 /** Host-authoring callbacks projected into the MCP management section. */
@@ -154,8 +156,10 @@ export interface McpAuthoringActions {
   describeMcp: (request: DescribeMcpRequest) => Promise<DescribeMcpResult>
   /** Connect once with a spec and report the tools it publishes. */
   listMcpTools: (request: ListMcpToolsRequest) => Promise<ListMcpToolsResult>
-  /** Read what the discovery catalogue remembers, for the optimization page. */
+  /** Read the persisted discovery state without connecting to any server. */
   catalogState: (request: McpCatalogStateRequest) => Promise<McpCatalogStateResult>
+  /** Reconnect remote HTTP/SSE servers and persist their refreshed catalogues. */
+  refreshCatalog: (request: RefreshMcpCatalogRequest) => Promise<RefreshMcpCatalogResult>
   /** Forget every recorded discovery result. */
   clearCatalog: (request: ClearMcpCatalogRequest) => Promise<ClearMcpCatalogResult>
 }
@@ -225,8 +229,10 @@ export interface McpSectionFace {
   describeMcp: (request: DescribeMcpRequest) => Promise<DescribeMcpResult>
   /** List the tools a connection spec publishes through the Host Remote. */
   listMcpTools: (request: ListMcpToolsRequest) => Promise<ListMcpToolsResult>
-  /** Read what the discovery catalogue remembers. */
+  /** Read persisted discovery state without making remote connections. */
   catalogState: () => Promise<McpCatalogStateResult>
+  /** Reconnect remote HTTP/SSE servers and persist their refreshed catalogues. */
+  refreshCatalog: () => Promise<RefreshMcpCatalogResult>
   /** Forget every recorded discovery result. */
   clearCatalog: () => Promise<ClearMcpCatalogResult>
   /**
@@ -239,6 +245,8 @@ export interface McpSectionFace {
   mcps: () => Promise<McpRosterView>
   /** Resolve the agent presets the editor can target. */
   presets: () => Promise<readonly McpPresetOption[]>
+  /** Resolve a name at render time through the Host's current Agent locale. */
+  presetName: (preset: McpPresetOption) => string
 }
 
 /**
@@ -312,6 +320,7 @@ export class McpSettingsController {
    * @param authoring - Host-backed MCP mutation callbacks.
    * @param presets - Host-backed agent-preset options loader.
    * @param suppressed - Host-backed reader of the rows the gate holds unmounted.
+   * @param presetName - render-time Host Agent name resolver.
    */
   constructor(
     private readonly scope: ConfigForm<McpSettingsFlags>,
@@ -319,6 +328,7 @@ export class McpSettingsController {
     private readonly authoring: McpAuthoringActions,
     private readonly presets: () => Promise<readonly McpPresetOption[]>,
     private readonly suppressed: () => Promise<readonly string[]>,
+    private readonly presetName: (preset: McpPresetOption) => string,
   ) {
     this.store = createSnapshotStore(this.projection())
     this.unsubscribe = scope.subscribe(() => this.publish())
@@ -343,10 +353,12 @@ export class McpSettingsController {
       describeMcp: this.authoring.describeMcp,
       listMcpTools: this.authoring.listMcpTools,
       catalogState: () => this.authoring.catalogState({}),
+      refreshCatalog: () => this.authoring.refreshCatalog({}),
       clearCatalog: () => this.authoring.clearCatalog({}),
       suppressedMcps: this.suppressed,
       mcps: this.mcps,
       presets: this.presets,
+      presetName: this.presetName,
     }
   }
 

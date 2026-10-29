@@ -19,6 +19,7 @@ import type { McpLoadingMode, McpToolRegistration } from './lazy-mcp.ts'
 import { createMcpConnectionPool } from './mcp-pool.ts'
 import type { PooledConnection } from './mcp-pool.ts'
 import { McpCatalog } from './mcp-catalog.ts'
+import { catalogDatabasePath, databaseCatalogStorage } from './mcp-catalog-store.ts'
 import {
   mcpRegistrationKey,
   parseMcpOptimizeFlags,
@@ -61,7 +62,6 @@ export {
   encodeToolCursor,
   matchTools,
   mcpRegistrationKey,
-  MCP_CATALOG_TTL_RANGE,
   MCP_MAX_TOOLS_RANGE,
   MCP_OPTIMIZE_DEFAULTS,
   MCP_PAGE_SIZE_RANGE,
@@ -144,7 +144,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // search answer without starting a process, and what a `tools/list_changed`
   // invalidates; one catalogue serves every registration generation, so a mode
   // change does not throw away what was already discovered.
-  const catalog = new McpCatalog<LazyTool>()
+  const profile = ctx.get('profileContext') as { home?: string; dir?: string } | undefined
+  const storage = profile?.home && profile.dir
+    ? databaseCatalogStorage(catalogDatabasePath({ home: profile.home, dir: profile.dir }))
+    : {
+      async load(): Promise<never> { throw new Error('catalogue database profile is unavailable') },
+      async save(): Promise<never> { throw new Error('catalogue database profile is unavailable') },
+    }
+  const catalog = new McpCatalog<LazyTool>(storage, () => {
+    ctx.logger.warn('mcp-manager: tool catalogue database is unavailable or invalid')
+  })
+  // Keep the pre-mount subscriptions above synchronous; disk IO starts only now.
+  await catalog.restore()
+  ctx.effect(() => async () => { await catalog.close().catch(() => {}) }, 'mcp-manager: catalogue writes')
   const loader = ctx.get('loader') as { internal?: { import(spec: string, base: string, options: object): Promise<unknown> } }
   if (!loader.internal) throw new Error('mcp-manager: Harness module loader is unavailable')
   const scopes = await loader.internal.import('@deepseek-ai/dsh-scope', ctx.baseUrl ?? import.meta.url, {}) as ScopeLookup & PresetScopeLookup

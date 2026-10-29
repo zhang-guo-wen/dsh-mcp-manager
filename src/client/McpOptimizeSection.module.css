@@ -119,15 +119,14 @@
   width: 100%;
   height: 32px;
   padding: 0 10px;
-  font-size: 13px;
-  line-height: 20px;
+  font: var(--dsw-font-xs-13);
   text-align: right;
 }
 
 /* ---- Catalogue status ---- */
 
-/* A status surface, not a preference: its own fill and radius mark it as
-   something the Host reports rather than something the user sets. */
+/* Persisted cache state is nested under its cache-group heading, not a policy
+   row or a separate page-level block. */
 .status {
   display: flex;
   flex-direction: column;
@@ -140,6 +139,7 @@
 
 .statusHead {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
 }
@@ -183,6 +183,7 @@
 }
 
 .catalogKey {
+  min-width: 0;
   overflow: hidden;
   font: 12px/18px var(--ds-font-family-code);
   color: var(--dsw-alias-label-secondary);
@@ -191,10 +192,56 @@
 }
 
 .catalogMeta {
+  display: flex;
   flex: none;
+  flex-direction: column;
   font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-tertiary);
+  text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.catalogExpired {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.catalogFeedback {
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
+.catalogFeedback p {
+  margin: 0;
+}
+
+.catalogFeedback ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+}
+
+.catalogFeedback[data-tone='success'] {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.catalogFeedback[data-tone='warning'] {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.catalogFeedback[data-tone='error'] {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+@container mcp-manager (max-width: 480px) {
+  .catalogRow {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+  }
+
+  .catalogMeta {
+    text-align: left;
+  }
 }
 
 /* ---- Status lines ---- */

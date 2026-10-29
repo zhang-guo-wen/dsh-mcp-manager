@@ -47,6 +47,16 @@ kind: "package-reference"
 | D31 | JSON 配置的校验结果显示在该字段的标签行上，鼠标失焦时才判（2026-10-16） | 一个读不出来的文档是**当场**能改的问题，报在表单底部的共用错误行里（还会被弹窗滚动裁掉）等于让用户去找；写一半的文档不该被判错 |
 | D32 | 工具列表页去掉「加载工具列表」按钮：进页签即列举、表单变了才重列（2026-10-16） | 那一行只有它一个按钮时，下面的说明句会跟着上下掉一行；而"打开这一页"本来就是列举的触发点，按钮只是把同一件事再说一遍 |
 
+| D35 | 所有 MCP 目录统一 SQLite 持久化，仅服务器类型按声明 TTL 或手动刷新（2026-10-28） | 去掉用户 TTL 偏好，目录状态紧随缓存标题；刷新不能启动本地进程 |
+
+### D35 统一工具目录数据库
+
+- **结论**：stdio 与 HTTP/SSE 全部写入 `profileContext.home/cache/dsh-mcp-manager/<sha256(profile.dir)>/catalog.sqlite`。不读旧JSON、不迁移/双写、不保留云端memory-only分支。探测成功须在RPC返回前写完，不保存声明；失败不影响用户直接保存。
+- **新鲜度**：删除手动catalogTtlMs。stdio长期保存；HTTP仅按服务器ttlMs过期，下一次检索可限并发重新发现；没有ttlMs则由refreshCatalog按钮显式刷新当前启用HTTP/SSE，绝不启动本地进程。tools/list_changed仍使目录失效，重启不重置fetchedAt。0 TTL本次发现可回答当前请求，但不复用下一请求。
+- **身份与安全**：SHA-256覆盖传输、namespace及连接配置，stdio纳入实际cwd/合并环境，HTTP纳入URL/排序headers；数据库只存摘要和公开工具定义，不存原始凭据。目录只供检索，实际调用仍开真实连接、仍先校验允许行与过滤规则。
+- **写入**：Node内置SQLite，schema/user_version校验、短BEGIN IMMEDIATE事务与busy timeout，previous snapshot差异合并、共享clear generation拒绝旧writer复活；clear不删除数据库文件。500目录/32MiB逻辑payload上限，不承诺物理数据库页大小上限。坏库/未知schema拒绝覆盖、失败不假报成功，POSIX权限不等于Windows ACL。
+- **UI**：目录状态直接位于工具目录缓存标题下；catalogState纯状态不联网，refreshCatalog才刷新服务器，clearCatalog清全部。失败保留旧目录并逐台提示；没有TTL输入和额外兼容开关。
+
 ### D1 允许与进上下文分离
 
 - **结论**：composition 行上的 `disabled` 表示用户**允不允许用**（禁用 = 完全不用：不进系统提示里的按需清单，`mcp_load` 拒绝）；`mcp-manager.loading` 表示允许的服务器**什么时候进上下文**。

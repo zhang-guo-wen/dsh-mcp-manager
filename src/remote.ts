@@ -81,6 +81,7 @@ export const TYPERT_REMOTE: TypertRemoteContribution = {
     descriptor('listMcpTools'),
     descriptor('gateState'),
     descriptor('catalogState'),
+    descriptor('refreshCatalog'),
     descriptor('clearCatalog'),
   ],
 }

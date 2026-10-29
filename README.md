@@ -25,7 +25,7 @@ In the plugin list, display names and descriptions follow the Harness language s
 
 ![MCP management, Settings tab](<docs/images/mcp-context.png>)
 
-One page with two tabs: **Servers** holds the roster, **Settings** holds the loading mode and how much of a tool list one call hands to the model. The roster is one list — global rows first, labelled **Global**, then the rows of the agent preset picked in the filter bar. Click the card itself to open the editor: **Config / Credentials / Tools**; a row that carries an environment or a header opens straight on **Credentials**. Where an added row is written is chosen in the dialog's own **Config scope** select, which lists the global plane and every declared agent preset in one field; the tools pane shows each tool's estimated token cost and the totals for what is loaded and what a rule would drop. A switch that fails reports in its own row with a retry.
+One page with two tabs: **Servers** holds the roster, **Settings** holds the loading mode and how much of a tool list one call hands to the model. The server list scrolls independently while the page heading, tabs, Add button and filters stay in place. Agent preset names use the same Host translations as the new-session picker and update with the interface language; authored names remain unchanged. The roster is one list — global rows first, labelled **Global**, then the rows of the agent preset picked in the filter bar. Click the card itself to open the editor: **Config / Credentials / Tools**; a row that carries an environment or a header opens straight on **Credentials**. Where an added row is written is chosen in the dialog's own **Config scope** select, which lists the global plane and every declared agent preset in one field; the tools pane shows each tool's estimated token cost and the totals for what is loaded and what a rule would drop. A switch that fails reports in its own row with a retry.
 
 ## Install
 
@@ -50,11 +50,10 @@ See [AGENTS.md](https://github.com/zhang-guo-wen/dsh-mcp-manager/blob/master/AGE
 | **Items per listing** (`pageSize`) | `mcp_load` / `mcp_search` list at most this many items and return `nextCursor` for the rest. |
 | **Names and descriptions only** (`namesOnly`) | `mcp_load` omits argument schemas by default; asking for one tool by name still returns that tool's full schema. |
 | **Tools collected per server** (`maxTools`) | Caps the paginated `tools/list` walk, so an enormous server cannot flood a request. |
-| **Cache lifetime** (`catalogTtlMs`) | How long a discovery result can answer a search without reconnecting. A shorter `ttlMs` from the server wins, and `notifications/tools/list_changed` invalidates that server immediately. |
 | **Show tool annotations** (`annotations`) | Carries the server's `readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint` into listings. |
 | **Hide destructive tools** (`hideDestructive`) | Keeps tools whose `destructiveHint` is explicitly true out of the session entirely. |
 
-The same page shows what the tool catalogue has cached (servers, tool counts, age) and can clear it. Every switch is a live setting: it applies to the next load, search, or re-index without a restart.
+The same page shows what the tool catalogue has cached (servers, tool counts, age) and can clear both memory and disk records. Every switch is a live setting: it applies to the next load, search, or re-index without a restart.
 
 ## Notes
 

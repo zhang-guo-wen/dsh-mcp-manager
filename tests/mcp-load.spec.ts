@@ -25,6 +25,7 @@ const sdk = vi.hoisted(() => ({
   }[],
   /** When set, `connect` takes this long, standing in for a slow server. */
   connectDelayMs: 0,
+  connectGate: undefined as Promise<void> | undefined,
 }))
 
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
@@ -37,6 +38,7 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
     constructor() { sdk.clients.push(this as never) }
 
     async connect(): Promise<void> {
+      if (sdk.connectGate !== undefined) await sdk.connectGate
       if (sdk.connectDelayMs > 0) await new Promise(resolve => setTimeout(resolve, sdk.connectDelayMs))
     }
 
@@ -95,6 +97,7 @@ function harness(options: {
   policy?: Record<string, unknown>
   filters?: Record<string, unknown>
   catalog?: McpCatalog<LazyTool>
+  http?: boolean
 }) {
   const rows = options.rows ?? [{ serverName: 'alpha' }]
   const definitions = new Map<string, { name: string; execute(args: unknown, exec: unknown): Promise<never> }>()
@@ -127,7 +130,9 @@ function harness(options: {
     ],
     [
       'mcpManager',
-      { describeMcp: async (request: { entryId: string }) => ({ spec: { type: 'stdio', command: `run-${request.entryId}` } }) },
+      { describeMcp: async (request: { entryId: string }) => ({ spec: options.http
+        ? { type: 'http', url: `https://${request.entryId}.example.test/mcp` }
+        : { type: 'stdio', command: `run-${request.entryId}` } }) },
     ],
   ])
   const rootCtx = {
@@ -195,6 +200,7 @@ beforeEach(() => {
   sdk.pages.clear()
   sdk.clients.length = 0
   sdk.connectDelayMs = 0
+  sdk.connectGate = undefined
 })
 
 describe('connect lifetime under a time budget', () => {
@@ -252,7 +258,7 @@ describe('mcp_load discovery', () => {
     const h = harness({})
     await h.run('mcp_load', { server: 'alpha' })
     expect(h.catalog.size).toBe(1)
-    expect(h.catalog.get('global:alpha', 60_000)?.tools).toHaveLength(2)
+    expect(h.catalog.get('global:alpha')?.tools).toHaveLength(2)
   })
 
   it('one catalogue serves every registration generation', async () => {
@@ -591,6 +597,55 @@ describe('mcp_search', () => {
     expect(result.pending).toEqual([])
     // The indexing connection is closed again; the session loaded nothing extra.
     expect(online.catalog.size).toBe(2)
+  })
+
+  it('does not start queued indexing work or restore entries after clear', async () => {
+    setToolPages([tools('issue')])
+    let release!: () => void
+    sdk.connectGate = new Promise<void>(resolve => { release = resolve })
+    const h = harness({ rows: ['a', 'b', 'c', 'd', 'e', 'f'].map(serverName => ({ serverName })), policy: { searchIndex: true } })
+    const pending = h.run('mcp_search', { query: 'issue' })
+    await vi.waitFor(() => { expect(sdk.clients.length).toBe(3) })
+    h.catalog.clear()
+    release()
+    await pending
+    expect(sdk.clients.length).toBe(3)
+    expect(h.catalog.size).toBe(0)
+  })
+
+  it('searches a restored local probe without connecting after restart', async () => {
+    let disk: unknown
+    const storage = { load: async () => disk, save: async (value: unknown) => { disk = value } }
+    const first = new McpCatalog<LazyTool>(storage)
+    first.remember({ transport: 'stdio', serverName: 'alpha', command: 'run-alpha', args: [], env: {}, cwd: '' }, { tools: tools('issue'), truncated: false })
+    await first.flush()
+    const restored = new McpCatalog<LazyTool>(storage)
+    await restored.restore()
+    const h = harness({ catalog: restored })
+    const result = await h.run('mcp_search', { query: 'issue' })
+    expect(result.hits.map(hit => hit.tool)).toEqual(['issue'])
+    expect(sdk.clients.length).toBe(0)
+  })
+
+  it('refreshes a known expired HTTP directory even when cold indexing is off', async () => {
+    const catalog = new McpCatalog<LazyTool>()
+    const config = { transport: 'streamable-http' as const, serverName: 'alpha', url: 'https://alpha.example.test/mcp', headers: {} }
+    catalog.remember(config, { tools: tools('old_issue'), truncated: false, ttlMs: 1 }, 'global:alpha', 1)
+    setToolPages([tools('new_issue')], 0)
+    const h = harness({ catalog, http: true, policy: { searchIndex: false } })
+    const result = await h.run('mcp_search', { query: 'issue' })
+    expect(result.hits.map(hit => hit.tool)).toEqual(['new_issue'])
+    expect(sdk.clients).toHaveLength(1)
+    expect(sdk.clients[0]?.closed).toBe(1)
+    expect(catalog.stats()[0]?.expired).toBe(true)
+  })
+
+  it('never reconnects a persisted HTTP directory without a TTL just because time passed', async () => {
+    const catalog = new McpCatalog<LazyTool>()
+    catalog.remember({ transport: 'streamable-http', serverName: 'alpha', url: 'https://alpha.example.test/mcp', headers: {} }, { tools: tools('saved_issue'), truncated: false }, undefined, 1)
+    const h = harness({ catalog, http: true })
+    expect((await h.run('mcp_search', { query: 'issue' })).hits.map(hit => hit.tool)).toEqual(['saved_issue'])
+    expect(sdk.clients).toHaveLength(0)
   })
 
   it('never surfaces a tool the row rules hide', async () => {

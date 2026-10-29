@@ -63,7 +63,8 @@ const cssModulePlugin = {
 const bundle = await rolldown({
   input: join(root, 'src', 'client', 'index.ts'),
   platform: 'browser',
-  external: [/^react$/, /^react\//, /^@deepseek-ai\//],
+  // This import-free static helper is shared source, not a dynamic Client plugin.
+  external: [/^react$/, /^react\//, /^@deepseek-ai\/(?!dsh-agent-preset-registry\/display$)/],
   plugins: [cssModulePlugin],
 })
 await bundle.write({ format: 'cjs', file: join(root, 'lib', 'client.js'), banner, footer, intro, sourcemap: false })

@@ -84,8 +84,6 @@ export interface McpOptimizeFlags {
    * model is about to call (`mcp_load` with `tool`).
    */
   readonly namesOnly: boolean
-  /** How long a discovered catalogue may answer a search without reconnecting. */
-  readonly catalogTtlMs: number
   /** Hard cap on the tools one `tools/list` walk may collect from one server. */
   readonly maxTools: number
   /** Whether a listing reports the spec's annotations (`read-only`, `destructive`, …). */
@@ -106,7 +104,6 @@ export const MCP_OPTIMIZE_DEFAULTS: McpOptimizeFlags = Object.freeze({
   searchIndex: false,
   pageSize: 10,
   namesOnly: true,
-  catalogTtlMs: 300_000,
   maxTools: 200,
   annotations: true,
   hideDestructive: false,
@@ -117,9 +114,6 @@ export const MCP_PAGE_SIZE_RANGE = Object.freeze({ min: 1, max: 50 })
 
 /** Accepted range of {@link McpOptimizeFlags.maxTools}. */
 export const MCP_MAX_TOOLS_RANGE = Object.freeze({ min: 1, max: 2_000 })
-
-/** Accepted range of {@link McpOptimizeFlags.catalogTtlMs}; zero means "never reuse". */
-export const MCP_CATALOG_TTL_RANGE = Object.freeze({ min: 0, max: 24 * 60 * 60 * 1_000 })
 
 /** One page of a model-facing listing. */
 export interface McpToolPage<T> {
@@ -180,7 +174,6 @@ export function parseMcpOptimizeFlags(value: unknown): McpOptimizeFlags {
     searchIndex: readFlag(record.searchIndex, MCP_OPTIMIZE_DEFAULTS.searchIndex),
     pageSize: readNumber(record.pageSize, MCP_OPTIMIZE_DEFAULTS.pageSize, MCP_PAGE_SIZE_RANGE),
     namesOnly: readFlag(record.namesOnly, MCP_OPTIMIZE_DEFAULTS.namesOnly),
-    catalogTtlMs: readNumber(record.catalogTtlMs, MCP_OPTIMIZE_DEFAULTS.catalogTtlMs, MCP_CATALOG_TTL_RANGE),
     maxTools: readNumber(record.maxTools, MCP_OPTIMIZE_DEFAULTS.maxTools, MCP_MAX_TOOLS_RANGE),
     annotations: readFlag(record.annotations, MCP_OPTIMIZE_DEFAULTS.annotations),
     hideDestructive: readFlag(record.hideDestructive, MCP_OPTIMIZE_DEFAULTS.hideDestructive),

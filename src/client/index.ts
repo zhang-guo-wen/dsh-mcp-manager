@@ -24,6 +24,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 // remote-client augmentation of `dsh-api-remotes/client`.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+import { mcpPresetName } from './preset-name.ts'
 import { McpSection } from './McpSection.tsx'
 import { en, NS, zh, type McpSectionKey } from './locales.ts'
 import {
@@ -53,6 +54,8 @@ import type {
   McpGateStateRequest,
   McpGateStateResult,
   McpMutationResult,
+  RefreshMcpCatalogRequest,
+  RefreshMcpCatalogResult,
 } from '../types.ts'
 
 export type { McpSectionProps } from './McpSection.tsx'
@@ -80,6 +83,7 @@ interface McpManagerNamespace {
   listMcpTools(request: ListMcpToolsRequest): Promise<RemoteResult<ListMcpToolsResult>>
   gateState(request: McpGateStateRequest): Promise<RemoteResult<McpGateStateResult>>
   catalogState(request: McpCatalogStateRequest): Promise<RemoteResult<McpCatalogStateResult>>
+  refreshCatalog(request: RefreshMcpCatalogRequest): Promise<RemoteResult<RefreshMcpCatalogResult>>
   clearCatalog(request: ClearMcpCatalogRequest): Promise<RemoteResult<ClearMcpCatalogResult>>
 }
 
@@ -100,6 +104,8 @@ export async function apply(ctx: Context): Promise<void> {
 
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-mcp-manager: dictionaries')
   const t = ctx.locale.bind(NS)
+  const agentPresetCopy = ctx.locale.bind('settings.agentPreset')
+  const presetName = (preset: McpPresetOption): string => mcpPresetName(preset, agentPresetCopy)
   const mcpMgr = (): McpManagerNamespace => {
     const namespace = ctx.get(`remote.${REMOTE_NAMESPACE}`) as McpManagerNamespace | undefined
     if (namespace === undefined) {
@@ -117,7 +123,7 @@ export async function apply(ctx: Context): Promise<void> {
       servers: mapMcpServers(roster),
       // The same read carries the preset names, so the agent plane's filter
       // labels its options without asking the Host a second time.
-      presets: roster.presets.map(preset => ({ id: preset.id, name: preset.name ?? preset.id })),
+      presets: roster.presets.map(({ id, name }) => ({ id, ...name === undefined ? {} : { name } })),
       globalWritable: roster.globalWritable,
     }
   }
@@ -128,11 +134,12 @@ export async function apply(ctx: Context): Promise<void> {
     describeMcp: request => unwrapRemote(() => mcpMgr().describeMcp(request)),
     listMcpTools: request => unwrapRemote(() => mcpMgr().listMcpTools(request)),
     catalogState: request => unwrapRemote(() => mcpMgr().catalogState(request)),
+    refreshCatalog: request => unwrapRemote(() => mcpMgr().refreshCatalog(request)),
     clearCatalog: request => unwrapRemote(() => mcpMgr().clearCatalog(request)),
   }
   const presets = async (): Promise<readonly McpPresetOption[]> => {
     const roster = await readRoster()
-    return roster.presets.map(preset => ({ id: preset.id, name: preset.name ?? preset.id }))
+    return roster.presets.map(({ id, name }) => ({ id, ...name === undefined ? {} : { name } }))
   }
   const suppressedMcps = async (): Promise<readonly string[]> =>
     unwrapRemote(() => mcpMgr().gateState({}))
@@ -143,6 +150,7 @@ export async function apply(ctx: Context): Promise<void> {
     authoring,
     presets,
     suppressedMcps,
+    presetName,
   )
   ctx.effect(() => () => { controller.dispose() }, 'ui-mcp-manager: settings form')
 

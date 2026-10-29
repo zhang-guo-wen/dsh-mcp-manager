@@ -40,16 +40,18 @@ export function initialTarget(plane: McpPlane, preset: string | undefined): stri
  * @param props.label - localized field name, and the control's accessible name.
  * @param props.value - chosen home: `''` for the global plane, else a preset id.
  * @param props.presets - every preset a write can address, in roster order.
+ * @param props.presetName - live Host locale name resolver; ids remain write targets.
  * @param props.globalWritable - whether the global plane has a file to write.
  * @param props.disabled - whether the surrounding form refuses input.
  * @param props.onChange - called with the chosen value.
  * @param props.t - the section's translator.
  * @returns the field, as the `<label>`'s own contents.
  */
-export function McpTargetSelect({ label, value, presets, globalWritable, disabled, onChange, t }: {
+export function McpTargetSelect({ label, value, presets, presetName, globalWritable, disabled, onChange, t }: {
   readonly label: string
   readonly value: string
   readonly presets: readonly McpPresetOption[]
+  readonly presetName: (preset: McpPresetOption) => string
   readonly globalWritable: boolean
   readonly disabled: boolean
   readonly onChange: (next: string) => void
@@ -70,9 +72,9 @@ export function McpTargetSelect({ label, value, presets, globalWritable, disable
       >
         <option value="" disabled={!globalWritable}>{t('mcp.scopeGlobal')}</option>
         {presets.map(option => (
-          <option key={option.id} value={option.id}>{`${t('mcp.scopePreset')} · ${option.name}`}</option>
+          <option key={option.id} value={option.id}>{`${t('mcp.scopePreset')} · ${presetName(option)}`}</option>
         ))}
-        {unlisted ? <option value={value}>{`${t('mcp.scopePreset')} · ${value}`}</option> : null}
+        {unlisted ? <option value={value}>{`${t('mcp.scopePreset')} · ${presetName({ id: value })}`}</option> : null}
       </select>
     </>
   )

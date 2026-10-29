@@ -70,18 +70,14 @@ what they do without loading a server, and call \`mcp_load\` …`。
 - **`listAllTools(client, maxTools)` 是唯一的发现入口。** 游标按规范当**不透明字符串**:空串是合法游标,
   只有 `nextCursor === undefined` 才是结束(写成 `if (!next)` 会静默丢掉第二页);页数封顶 `MAX_TOOL_PAGES=64`,
   采集量封顶 `maxTools`,被截断时结果带 `truncated: true`。
-- **目录缓存在两个点失效**:服务器自己的 `ttlMs` 比设置更短时以服务器为准;`notifications/tools/list_changed` 一到就
-  `catalog.invalidate(row.key)`(规范要求通知立即作废仍然新鲜的列表)。行被增删改(`mcp-remote.ts` 的四个 mutation)
-  后 `catalog.clear()`,因为改配置等于换了台服务器。
-- **`mcp_search` 默认不连接任何服务器**(`searchIndex` 打开才连,`SEARCH_INDEX_CONCURRENCY=3`、
-  `SEARCH_INDEX_TIMEOUT_MS=8000`),否则二十台服务器的部署会因为模型问一句就 spawn 二十个子进程。查不到的服务器
-  以 `pending` 名单返回,让模型先 `mcp_load`。
+- **全部工具目录进 SQLite**：stdio 与 HTTP/SSE 统一以工具公开定义 + SHA-256配置摘要存入宿主 home/cache 下 profile 隔离的 catalog.sqlite。不读旧JSON、不双写、不保留云端memory-only流程。探测成功须 await flush；配置声明单独保存，失败探测不挡保存。
+- **新鲜度只有服务器声明**：删除catalogTtlMs设置、默认值、范围、控件和文案。本地stdio不按时间过期；HTTP有ttlMs时按该值过期、下一次检索限并发重新发现（即使searchIndex关闭）；HTTP无TTL长期保留，显式refreshCatalog只刷新当前启用HTTP/SSE、不spawn本地。通知list_changed依旧invalidate对应数据库记录；clear全部目录并await flush，epoch+DB generation防旧发现回写。
+- **`searchIndex` 只控制尚无目录的冷发现**（3并发、8秒预算）；关闭时仍允许刷新已知过期HTTP，未知服务器以pending返回。缓存必须先按当前允许行与连接摘要检索，不能从数据库恢复凭据或调用授权。
 - **收窄到空的加载不建立 mount。** `query` 没命中时返回空结果并关掉连接;`tool` 给的名字不存在时直接报错。
   否则会话会挂着一个空 mount,之后连"加载整台"都只能看到空列表(要 `mcp_unload` 才能恢复)。
 - **注解是策略输入,不是承诺。** `hideDestructive` 只认显式 `destructiveHint: true`(规范里缺省值是 true,
   按缺省处理会把没有注解的服务器整台藏掉);`annotations` 只把服务器**真的声明过**的提示带进列表。
 - **策略是同一个设置页的「上下文」页签**(2026-10-16 起,不再是独立的 `settings.section`),复用同一个 controller
   与 inject face。它按字段 merge 写 `optimize` 开映射,每个字段有自己的保存中/已保存状态(按字段存,不用单个
-  `savingField`,否则两个字段同时写会互相清掉提示;「已保存」2.5 秒后自动消失)。目录状态是**状态**不是设置,
-  单独一块,不与 TTL 行同组;两个动作走 `catalogState` / `clearCatalog` 两个 Remote(注意:新增 Remote 要三处齐,
+  `savingField`,否则两个字段同时写会互相清掉提示;「已保存」2.5 秒后自动消失)。目录状态位于**工具目录缓存标题下同组**,没有TTL偏好行；纯状态读取 `catalogState`、显式服务器刷新 `refreshCatalog`、全量清空 `clearCatalog` 三个 Remote(注意:新增 Remote 要三处齐,
   见「Typert Remote」)。策略解析复用 `src/mcp-optimize.ts`,**不要在浏览器侧再写一份默认值**,否则两侧会漂移。

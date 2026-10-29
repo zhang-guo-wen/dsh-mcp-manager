@@ -79,6 +79,15 @@ describe('listAllTools', () => {
     expect(discovery.tools).toHaveLength(64)
   })
 
+  it('uses the shortest valid TTL from all discovered pages', async () => {
+    let page = 0
+    const client: LazyClient = {
+      async listTools() { page += 1; return { tools: [{ name: `t${page}` }], ttlMs: page === 1 ? 5000 : 100, ...page === 1 ? { nextCursor: 'second' } : {} } },
+      async callTool() { return {} }, async close() {},
+    }
+    expect((await listAllTools(client, 10)).ttlMs).toBe(100)
+  })
+
   it('forwards the freshness hint the server published', async () => {
     const { client } = pagedClient({ '(first)': ['a'] }, {}, 1_234)
     expect((await listAllTools(client, 10)).ttlMs).toBe(1_234)

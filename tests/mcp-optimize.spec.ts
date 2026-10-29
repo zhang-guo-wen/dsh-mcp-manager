@@ -38,10 +38,9 @@ describe('parseMcpOptimizeFlags', () => {
     expect(parseMcpOptimizeFlags({ pageSize: Number.NaN }).pageSize).toBe(MCP_OPTIMIZE_DEFAULTS.pageSize)
   })
 
-  it('accepts a zero cache lifetime, which means "never reuse"', () => {
-    expect(parseMcpOptimizeFlags({ catalogTtlMs: 0 }).catalogTtlMs).toBe(0)
-    expect(parseMcpOptimizeFlags({ catalogTtlMs: -5 }).catalogTtlMs).toBe(0)
-    expect(parseMcpOptimizeFlags({ catalogTtlMs: 1e12 }).catalogTtlMs).toBe(24 * 60 * 60 * 1_000)
+  it('ignores the removed manual cache lifetime setting', () => {
+    expect(parseMcpOptimizeFlags({ catalogTtlMs: 0 })).toEqual(MCP_OPTIMIZE_DEFAULTS)
+    expect(parseMcpOptimizeFlags({ catalogTtlMs: 1e12 })).not.toHaveProperty('catalogTtlMs')
   })
 })
 

@@ -394,8 +394,9 @@ function McpDescription({ value, disabled, onCommit, t }: {
 }
 
 /** One rendered MCP server row: name, plugin-owned description, scope, status, and row actions. */
-function McpRow({ server, description, suppressed, action, onEditDescription, onEdit, onToggleDisabled, onRetry, actionsDisabled, actionsReason, t }: {
+function McpRow({ server, presetLabel, description, suppressed, action, onEditDescription, onEdit, onToggleDisabled, onRetry, actionsDisabled, actionsReason, t }: {
   readonly server: McpServer
+  readonly presetLabel: string
   readonly description: string
   /**
    * The gate holds this row unmounted because the mode does not preload.
@@ -451,7 +452,7 @@ function McpRow({ server, description, suppressed, action, onEditDescription, on
   // has anything to change at all.
   const editorTab: McpEditorTab = server.secretKeys.length > 0 ? 'credentials' : 'config'
   /** The plane marker's text: the global plane's own name, or the preset's id. */
-  const planeLabel = server.scope === 'global' ? t('mcp.scopeGlobal') : server.presetId ?? ''
+  const planeLabel = server.scope === 'global' ? t('mcp.scopeGlobal') : presetLabel
   const openEditor = (): void => { onEdit(editorTab) }
   // The card itself is the edit affordance. A closed row has nothing to open,
   // so it is not given the pointer, and the controls inside keep working on
@@ -564,11 +565,11 @@ function McpRosterSkeleton({ label }: { readonly label: string }): ReactNode {
   )
 }
 
-/** The MCP management section body: the roster tab and the context-budget tab. */
+/** MCP management with fixed page chrome and an independently scrolling roster. */
 export function McpSection(props: McpSectionProps): ReactNode {
   const {
     useMcpSettings, t, setMcpLoading, addMcp, editMcp, disableMcp, describeMcp, listMcpTools,
-    suppressedMcps, mcps, presets, updateMcpDescription, updateMcpTools,
+    suppressedMcps, mcps, presets, presetName, updateMcpDescription, updateMcpTools,
   } = props
   const state = useMcpSettings(snapshot => snapshot)
   const [tab, setTab] = useState<McpTab>('servers')
@@ -633,9 +634,10 @@ export function McpSection(props: McpSectionProps): ReactNode {
   // set, or a value the options offer would be rejected on the next render.
   const presetChoices = (() => {
     const merged = new Map<string, { id: string; name: string; count: number }>()
-    for (const preset of presetNames) merged.set(preset.id, { id: preset.id, name: preset.name, count: 0 })
-    for (const option of mcpAgentFilterOptions(servers, presetNames)) {
-      merged.set(option.id, { id: option.id, name: option.name, count: option.count })
+    for (const preset of presetNames) merged.set(preset.id, { id: preset.id, name: presetName(preset), count: 0 })
+    for (const option of mcpAgentFilterOptions(servers, presetNames.map(preset => ({ id: preset.id, name: presetName(preset) })))) {
+      const source = presetNames.find(preset => preset.id === option.id) ?? { id: option.id }
+      merged.set(option.id, { id: option.id, name: presetName(source), count: option.count })
     }
     return [...merged.values()]
   })()
@@ -823,6 +825,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
       <McpRow
         key={key}
         server={server}
+        presetLabel={server.presetId === undefined ? '' : presetName(presetNames.find(preset => preset.id === server.presetId) ?? { id: server.presetId })}
         description={descriptionOf(server)}
         suppressed={mcpView.status === 'ready' && mcpView.suppressed.has(key)}
         action={rowAction[key] ?? null}
@@ -896,7 +899,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
 
   const rosterPanel = (
     <>
-      <section className={css.block}>
+      <section className={css.rosterBlock}>
         <div className={css.listHead}>
           <div className={css.listHeadText}>
             <h3 className={css.blockTitle}>{t('mcp.list.title')}</h3>
@@ -953,31 +956,31 @@ export function McpSection(props: McpSectionProps): ReactNode {
               </Button>} />
           ) : null}
         </div>
-        {mcpView.status === 'loading' ? <McpRosterSkeleton label={t('mcp.loading')} /> : null}
-        {mcpView.status === 'error' ? (
-          <div className={css.mcpFailure}>
-            <p role="alert">{t('mcp.error')}</p>
-            <Button variant="outline" size="sm" onClick={refreshMcps}>{t('mcp.retry')}</Button>
-          </div>
-        ) : null}
-        {mcpView.status === 'ready' ? (
-          <div className={css.mcpList}>
-            {/* One flat list, global rows first: the global plane is never
-                filtered away (a session carries its rows whatever agent preset
-                it runs), and its rows are the only ones tagged, so which plane
-                a row belongs to stays readable without a heading per group. */}
-            {visibleGlobal.map(server => rowFor(server))}
-            {visiblePreset.map(server => rowFor(server))}
-            {emptyList()}
-          </div>
-        ) : null}
-        {/* Transient state lives below the list, so a busy line never moves the
-            rows the user is reading. The settled outcome and the refusal that no
-            row can carry float above the page instead: a long roster would scroll
-            them out of view exactly when the reader wants the answer. */}
-        {mcpView.status === 'ready' && mcpView.refreshing ? (
-          <p className={css.mcpStatus} role="status">{t('mcp.refreshing')}</p>
-        ) : null}
+        <div className={css.rosterBody} role="region" aria-label={t('mcp.list.title')} tabIndex={0}>
+          {mcpView.status === 'loading' ? <McpRosterSkeleton label={t('mcp.loading')} /> : null}
+          {mcpView.status === 'error' ? (
+            <div className={css.mcpFailure}>
+              <p role="alert">{t('mcp.error')}</p>
+              <Button variant="outline" size="sm" onClick={refreshMcps}>{t('mcp.retry')}</Button>
+            </div>
+          ) : null}
+          {mcpView.status === 'ready' ? (
+            <div className={css.mcpList}>
+              {/* One flat list, global rows first: the global plane is never
+                  filtered away (a session carries its rows whatever agent preset
+                  it runs), and its rows are the only ones tagged, so which plane
+                  a row belongs to stays readable without a heading per group. */}
+              {visibleGlobal.map(server => rowFor(server))}
+              {visiblePreset.map(server => rowFor(server))}
+              {emptyList()}
+            </div>
+          ) : null}
+          {/* A refresh stays below the mounted rows to preserve their positions;
+              settled outcomes use the floating Toast outside the scroll box. */}
+          {mcpView.status === 'ready' && mcpView.refreshing ? (
+            <p className={css.mcpStatus} role="status">{t('mcp.refreshing')}</p>
+          ) : null}
+        </div>
         {mcpActionError !== null ? <Toast key={`refusal-${String(mcpActionError.seq)}`}
           text={mcpActionError.text}
           holdMs={6000}
@@ -1018,6 +1021,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
         role="tabpanel"
         aria-labelledby={`${tabsId}-settings-tab`}
         className={css.tabPanel}
+        data-scroll="settings"
         hidden={tab !== 'settings'}
       >
         {loadingSection}
@@ -1033,6 +1037,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
         describeMcp={describeMcp}
         listMcpTools={listMcpTools}
         presets={presets}
+        presetName={presetName}
         plane={openedPlane}
         tab={openedTab}
         globalWritable={mcpView.status === 'ready' && mcpView.globalWritable}

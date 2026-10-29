@@ -16,6 +16,8 @@
   flex-direction: column;
   gap: 16px;
   width: 100%;
+  height: 100%;
+  min-height: 0;
   /* The settings column, not a first-level page column: the host panel is
      800px wide and this column is ~564px inside it. The cap only matters on a
      wider shell. */
@@ -27,6 +29,7 @@
 /* ---- Page header and tabs ---- */
 
 .pageHead {
+  flex: none;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -55,8 +58,20 @@
 
 .tabPanel {
   display: flex;
+  flex: 1 1 0;
+  min-height: 0;
   flex-direction: column;
   gap: 16px;
+}
+
+/* Settings keeps its own scroll; roster chrome is outside rosterBody. */
+.tabPanel[data-scroll='settings'] {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+.tabPanel[data-scroll='settings'] > * {
+  flex: none;
 }
 
 /* The panes set their own display, which would otherwise beat the user-agent
@@ -194,6 +209,37 @@
 }
 
 /* ---- Roster ---- */
+
+/* Fill the bounded settings column without changing the host's scroll rules. */
+.rosterBlock {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rosterBlock > .listHead,
+.rosterBlock > .listFilters {
+  flex: none;
+}
+
+/* Reserve the rail in the shell's existing right inset, not in the card width.
+   The small leading inset leaves keyboard focus rings unclipped. */
+.rosterBody {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  margin: -4px calc(-1 * var(--dsh-scrollbar-width)) -4px -4px;
+  padding: 4px 0 4px 4px;
+}
+
+.rosterBody:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
+}
 
 .mcpList {
   display: flex;

@@ -87,6 +87,17 @@ describe('readMcpRoster', () => {
     expect(activating.wasAwaited()).toBe(false)
   })
 
+  it('preserves raw preset names, including authored empty names, for client locale resolution', () => {
+    const ctx = contextWith([], [
+      { id: 'preset-standard', name: AGENT_PRESET, config: { id: 'standard', plugins: [] } },
+      { id: 'preset-ptc', name: AGENT_PRESET, config: { id: 'ptc', name: '', plugins: [] } },
+      { id: 'preset-custom', name: AGENT_PRESET, config: { id: 'custom', name: '研究员', plugins: [] } },
+    ])
+    expect(readMcpRoster(ctx, () => []).presets).toEqual([
+      { id: 'standard', rows: [] }, { id: 'ptc', name: '', rows: [] }, { id: 'custom', name: '研究员', rows: [] },
+    ])
+  })
+
   it('reports every global MCP row with its phase and skips other rows', () => {
     const ctx = contextWith([
       loaderEntry({ id: 'include', name: 'cordis:include' }, { subtree: { filename: '/tmp/cordis.yml', config: {} } }),

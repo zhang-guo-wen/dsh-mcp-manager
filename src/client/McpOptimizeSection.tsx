@@ -12,9 +12,8 @@
  * map through the shared controller, so the same document the Host reads is the
  * one this panel edits, and each row shows its own save state.
  *
- * Settings and state stay apart here: the policy rows are host-style preference
- * rows, and what the discovery cache currently holds is a status block of its
- * own rather than another row in the cache group it belongs to.
+ * Policy rows use host-style preferences. Persisted discovery state and its
+ * remote-refresh / clear actions live inside the tool catalogue cache group.
  * @module @guowenzhang/dsh-mcp-manager/client/McpOptimizeSection
  */
 
@@ -22,15 +21,13 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button, Input, Switch, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import {
-  MCP_CATALOG_TTL_RANGE,
   MCP_MAX_TOOLS_RANGE,
   MCP_PAGE_SIZE_RANGE,
   parseMcpOptimizeFlags,
   type McpOptimizeFlags,
 } from '../mcp-optimize.ts'
-import type { McpCatalogEntryView } from '../types.ts'
+import type { McpCatalogEntryView, RefreshMcpCatalogResult } from '../types.ts'
 import type { McpSectionFace } from './settings-controller.ts'
-import type { McpSectionKey } from './locales.ts'
 import css from './McpOptimizeSection.module.css'
 
 /** Full component props. */
@@ -50,8 +47,14 @@ type CatalogView =
     readonly status: 'ready'
     readonly entries: readonly McpCatalogEntryView[]
     readonly total: number
-    readonly refreshing: boolean
   }
+
+/** One cache action's local feedback; RPC failure details stay visible on retry. */
+type CatalogFeedback = {
+  readonly tone: 'pending' | 'success' | 'warning' | 'error'
+  readonly text: string
+  readonly failed?: RefreshMcpCatalogResult['failed']
+}
 
 /** One row's save state, shown beside its control. */
 type RowState = 'idle' | 'saving' | 'saved' | 'failed'
@@ -78,9 +81,6 @@ export function saveFailureMessage(cause: unknown, t: Translate): string {
 
 /** How long a row keeps its "saved" note before the slot goes quiet again. */
 const SAVED_NOTE_MS = 2_500
-
-/** Settings that must be a whole number of milliseconds per minute in the UI. */
-const MS_PER_MINUTE = 60_000
 
 /**
  * Render one boolean setting row.
@@ -207,9 +207,16 @@ function ageText(ageMs: number, t: Translate): string {
   return t('opt.catalog.age.minutes').replace('{n}', String(Math.round(seconds / 60)))
 }
 
+/** Localize the cache lifetime supplied by the server, never a user preference. */
+function retentionText(entry: McpCatalogEntryView, t: Translate): string {
+  if (entry.transport === 'stdio') return t('opt.catalog.retention.local')
+  if (entry.ttlMs === undefined) return t('opt.catalog.retention.manual')
+  return t('opt.catalog.retention.ttl').replace('{n}', String(entry.ttlMs / 1_000))
+}
+
 /** The MCP context-budget panel body. */
 export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
-  const { useMcpSettings, setOptimize, catalogState, clearCatalog, t } = props
+  const { useMcpSettings, setOptimize, catalogState, refreshCatalog, clearCatalog, t } = props
   const state = useMcpSettings(snapshot => snapshot)
   const policy: McpOptimizeFlags = parseMcpOptimizeFlags(state.optimize)
   const disabled = !state.available || !state.writable
@@ -218,8 +225,11 @@ export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
   const savedTimers = useRef(new Map<string, number>())
   const [failure, setFailure] = useState<string | null>(null)
   const [catalog, setCatalog] = useState<CatalogView>({ status: 'loading' })
-  const [catalogRequest, setCatalogRequest] = useState(0)
-  const [catalogBusy, setCatalogBusy] = useState(false)
+  const [catalogBusy, setCatalogBusy] = useState<'refresh' | 'clear' | null>(null)
+  const catalogAction = useRef<'refresh' | 'clear' | null>(null)
+  const catalogGeneration = useRef(0)
+  const mounted = useRef(true)
+  const [catalogFeedback, setCatalogFeedback] = useState<CatalogFeedback | null>(null)
   /**
    * The settled outcome of the last catalog clear, in the host's floating banner:
    * the catalog list below can be long, so a line under it scrolls out of view
@@ -229,9 +239,14 @@ export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
   const [notice, setNotice] = useState<{ text: string; seq: number } | null>(null)
   const noticeSeq = useRef(0)
 
-  useEffect(() => () => {
-    for (const timer of savedTimers.current.values()) clearTimeout(timer)
-    savedTimers.current.clear()
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      catalogGeneration.current += 1
+      for (const timer of savedTimers.current.values()) clearTimeout(timer)
+      savedTimers.current.clear()
+    }
   }, [])
 
   const markRow = useCallback((field: string, next: RowState): void => {
@@ -263,41 +278,80 @@ export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
   }, [markRow, setOptimize, t])
 
   useEffect(() => {
+    if (catalogAction.current !== null) return
     let current = true
-    // A refresh keeps the rendered catalogue: the read is a plain snapshot of an
-    // in-memory map, so replacing it with a loading line would only flicker.
-    setCatalog(previous => previous.status === 'ready' ? { ...previous, refreshing: true } : { status: 'loading' })
+    const generation = ++catalogGeneration.current
+    // Automatic reads inspect persisted state only: they never reconnect a server.
     void catalogState().then(
       (result) => {
-        if (!current) return
-        setCatalog({ status: 'ready', entries: result.entries, total: result.total, refreshing: false })
+        if (!current || generation !== catalogGeneration.current) return
+        setCatalog({ status: 'ready', entries: result.entries, total: result.total })
       },
-      () => {
-        if (current) {
-          setCatalog(previous => previous.status === 'ready' ? { ...previous, refreshing: false } : { status: 'error' })
-        }
+      (cause: unknown) => {
+        if (!current || generation !== catalogGeneration.current) return
+        setCatalog(previous => previous.status === 'ready' ? previous : { status: 'error' })
+        setCatalogFeedback({ tone: 'error', text: t('opt.catalog.readFailed').replace('{reason}', cause instanceof Error ? cause.message : String(cause)) })
       },
     )
     return () => { current = false }
-  }, [catalogState, catalogRequest])
+  }, [catalogState, t])
 
   const rowState = (field: string): RowState => rowStates[field] ?? 'idle'
   const rowProps = { disabled, t, onWrite: write }
   const entries = catalog.status === 'ready' ? catalog.entries : []
   const toolCount = entries.reduce((total, entry) => total + entry.tools, 0)
 
-  const clear = (): void => {
-    setCatalogBusy(true)
-    setFailure(null)
+  const refresh = async (): Promise<void> => {
+    if (catalogAction.current !== null) return
+    catalogAction.current = 'refresh'
+    const generation = ++catalogGeneration.current
+    setCatalogBusy('refresh')
     setNotice(null)
-    void clearCatalog().then(
-      (result) => {
-        noticeSeq.current += 1
-        setNotice({ text: t('opt.catalog.cleared').replace('{n}', String(result.cleared)), seq: noticeSeq.current })
-        setCatalogRequest(value => value + 1)
-      },
-      (cause: unknown) => { setFailure(cause instanceof Error ? cause.message : String(cause)) },
-    ).finally(() => { setCatalogBusy(false) })
+    setCatalogFeedback({ tone: 'pending', text: t('opt.catalog.refreshing') })
+    try {
+      const outcome = await refreshCatalog()
+      const result = await catalogState()
+      if (!mounted.current || generation !== catalogGeneration.current) return
+      setCatalog({ status: 'ready', entries: result.entries, total: result.total })
+      setCatalogFeedback(outcome.failed.length === 0
+        ? { tone: 'success', text: t('opt.catalog.refreshed').replace('{n}', String(outcome.refreshed)) }
+        : {
+          tone: 'warning',
+          text: t('opt.catalog.refreshPartial').replace('{refreshed}', String(outcome.refreshed)).replace('{failed}', String(outcome.failed.length)),
+          failed: outcome.failed,
+        })
+    } catch (cause: unknown) {
+      if (!mounted.current || generation !== catalogGeneration.current) return
+      setCatalogFeedback({ tone: 'error', text: t('opt.catalog.refreshFailed').replace('{reason}', cause instanceof Error ? cause.message : String(cause)) })
+    } finally {
+      catalogAction.current = null
+      if (mounted.current) setCatalogBusy(null)
+    }
+  }
+
+  const clear = async (): Promise<void> => {
+    if (catalogAction.current !== null) return
+    catalogAction.current = 'clear'
+    const generation = ++catalogGeneration.current
+    setCatalogBusy('clear')
+    setNotice(null)
+    setCatalogFeedback({ tone: 'pending', text: t('opt.catalog.clearing') })
+    try {
+      const outcome = await clearCatalog()
+      const result = await catalogState()
+      if (!mounted.current || generation !== catalogGeneration.current) return
+      setCatalog({ status: 'ready', entries: result.entries, total: result.total })
+      const text = t('opt.catalog.cleared').replace('{n}', String(outcome.cleared))
+      setCatalogFeedback({ tone: 'success', text })
+      noticeSeq.current += 1
+      setNotice({ text, seq: noticeSeq.current })
+    } catch (cause: unknown) {
+      if (!mounted.current || generation !== catalogGeneration.current) return
+      setCatalogFeedback({ tone: 'error', text: t('opt.catalog.clearFailed').replace('{reason}', cause instanceof Error ? cause.message : String(cause)) })
+    } finally {
+      catalogAction.current = null
+      if (mounted.current) setCatalogBusy(null)
+    }
   }
 
   return (
@@ -337,21 +391,60 @@ export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
         />
       </section>
 
-      <section className={css.group}>
+      <section className={css.group} aria-label={t('opt.group.catalog')}>
         <h3 className={css.groupTitle}>{t('opt.group.catalog')}</h3>
         <p className={css.groupHint}>{t('opt.group.catalog.hint')}</p>
-        <NumberRow
-          field="catalogTtlMs"
-          label={t('opt.catalogTtl')}
-          desc={t('opt.catalogTtl.desc')}
-          value={Math.round(policy.catalogTtlMs / MS_PER_MINUTE)}
-          min={Math.round(MCP_CATALOG_TTL_RANGE.min / MS_PER_MINUTE)}
-          max={Math.round(MCP_CATALOG_TTL_RANGE.max / MS_PER_MINUTE)}
-          state={rowState('catalogTtlMs')}
-          onWrite={(field, value) => { write(field, Number(value) * MS_PER_MINUTE) }}
-          disabled={disabled}
-          t={t}
-        />
+        <div className={css.status} aria-label={t('opt.catalog.title')} aria-busy={catalogBusy !== null}>
+          <div className={css.statusHead}>
+            <span className={css.rowLabel}>{t('opt.catalog.title')}</span>
+            <span className={css.catalogSummary}>
+              {catalog.status === 'ready'
+                ? t('opt.catalog.summary').replace('{servers}', String(catalog.total)).replace('{tools}', String(toolCount))
+                : catalog.status === 'error' ? t('mcp.error') : t('mcp.loading')}
+            </span>
+            <span className={css.statusActions}>
+              <Button variant="outline" size="sm" disabled={catalogBusy !== null} onClick={() => { void refresh() }}>
+                {t('opt.catalog.refresh')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={catalogBusy !== null || catalog.status !== 'ready' || catalog.total === 0}
+                onClick={() => { void clear() }}
+              >
+                {t('opt.catalog.clear')}
+              </Button>
+            </span>
+          </div>
+          {catalog.status === 'ready' && entries.length === 0
+            ? <p className={css.catalogEmpty}>{t('opt.catalog.empty')}</p>
+            : null}
+          {entries.length > 0 ? (
+            <ul className={css.catalogList}>
+              {entries.map(entry => (
+                <li key={entry.key} className={css.catalogRow}>
+                  <span className={css.catalogKey}>{entry.key}</span>
+                  <span className={css.catalogMeta}>
+                    <span>{t('opt.catalog.row').replace('{tools}', String(entry.tools)).replace('{age}', ageText(entry.ageMs, t))}</span>
+                    <span>
+                      {retentionText(entry, t)}
+                      {entry.expired ? <span className={css.catalogExpired}> · {t('opt.catalog.expired')}</span> : null}
+                      {entry.truncated ? ` · ${t('opt.catalog.truncated')}` : ''}
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {catalogFeedback === null ? null : (
+            <div className={css.catalogFeedback} data-tone={catalogFeedback.tone} role={catalogFeedback.tone === 'error' || catalogFeedback.tone === 'warning' ? 'alert' : 'status'}>
+              <p>{catalogFeedback.text}</p>
+              {catalogFeedback.failed === undefined ? null : (
+                <ul>{catalogFeedback.failed.map((item, index) => <li key={`${item.serverName}:${index}`}>{item.serverName}: {item.reason}</li>)}</ul>
+              )}
+            </div>
+          )}
+        </div>
       </section>
 
       <section className={css.group}>
@@ -359,56 +452,6 @@ export function McpOptimizeSection(props: McpOptimizeSectionProps): ReactNode {
         <p className={css.groupHint}>{t('opt.group.annotations.hint')}</p>
         <SwitchRow field="annotations" label={t('opt.annotations')} desc={t('opt.annotations.desc')} value={policy.annotations} state={rowState('annotations')} {...rowProps} />
         <SwitchRow field="hideDestructive" label={t('opt.hideDestructive')} desc={t('opt.hideDestructive.desc')} value={policy.hideDestructive} state={rowState('hideDestructive')} {...rowProps} />
-      </section>
-
-      {/* State, not a setting: what the discovery cache currently answers from,
-          and the two actions that change it. It reads as its own block so the
-          cache lifetime above stays a plain preference row. */}
-      <section className={css.status}>
-        <div className={css.statusHead}>
-          <span className={css.rowLabel}>{t('opt.catalog.title')}</span>
-          <span className={css.catalogSummary}>
-            {catalog.status === 'ready'
-              ? t('opt.catalog.summary').replace('{servers}', String(catalog.total)).replace('{tools}', String(toolCount))
-              : catalog.status === 'error' ? t('mcp.error') : t('mcp.loading')}
-          </span>
-          <span className={css.statusActions}>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={catalogBusy}
-              onClick={() => { setCatalogRequest(value => value + 1) }}
-            >
-              {t('opt.catalog.refresh')}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={catalogBusy || catalog.status !== 'ready' || catalog.total === 0}
-              onClick={clear}
-            >
-              {t('opt.catalog.clear')}
-            </Button>
-          </span>
-        </div>
-        {catalog.status === 'ready' && entries.length === 0
-          ? <p className={css.catalogEmpty}>{t('opt.catalog.empty')}</p>
-          : null}
-        {entries.length > 0 ? (
-          <ul className={css.catalogList}>
-            {entries.map(entry => (
-              <li key={entry.key} className={css.catalogRow}>
-                <span className={css.catalogKey}>{entry.key}</span>
-                <span className={css.catalogMeta}>
-                  {t('opt.catalog.row')
-                    .replace('{tools}', String(entry.tools))
-                    .replace('{age}', ageText(entry.ageMs, t))}
-                  {entry.truncated ? ` · ${t('opt.catalog.truncated')}` : ''}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
       </section>
 
       {failure === null ? null : <p className={css.failure} role="alert">{failure}</p>}

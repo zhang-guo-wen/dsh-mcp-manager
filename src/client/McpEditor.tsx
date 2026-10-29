@@ -55,6 +55,7 @@ interface McpEditorProps {
   /** Connect once with a spec and report the tools it publishes. */
   readonly listMcpTools: (request: ListMcpToolsRequest) => Promise<ListMcpToolsResult>
   readonly presets: () => Promise<readonly McpPresetOption[]>
+  readonly presetName: (preset: McpPresetOption) => string
   /**
    * The plane a new row starts in.
    *
@@ -174,7 +175,7 @@ function McpCredentialsPane({ json, kind, baseline, disabled, onPush, t }: {
 }
 
 /** Modal editor split into a pane for the row's fields and a pane for its tools. */
-export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, plane, tab: openTab, globalWritable, preset, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
+export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, presetName, plane, tab: openTab, globalWritable, preset, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
   const [tab, setTab] = useState<McpEditorTab>(openTab)
   const tabId = useId()
   /**
@@ -219,6 +220,22 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
    */
   const [jsonError, setJsonError] = useState<string | null>(null)
   const [configNotice, setConfigNotice] = useState<string | null>(null)
+  const [probe, setProbe] = useState<
+    | { readonly status: 'pending' }
+    | { readonly status: 'success'; readonly count: number; readonly local: boolean }
+    | { readonly status: 'failed'; readonly reason: string }
+    | null
+  >(null)
+  /** Only the current form's request may publish feedback; also guards same-tick clicks. */
+  const probeRun = useRef<object | null>(null)
+  const resetProbe = (): void => {
+    probeRun.current = null
+    setProbe(null)
+  }
+  const close = (): void => {
+    resetProbe()
+    onClose()
+  }
   const [loading, setLoading] = useState(false)
   /**
    * What the rendered listing was taken for, so opening the pane again after the
@@ -268,6 +285,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
   const pushCredential = (kind: CredentialKind, key: string, value: string): void => {
     const next = credentialText(jsonBox.current, kind, key, value)
     if (next === undefined) return
+    resetProbe()
     jsonBox.current = next
     setJson(next)
     syncName(next)
@@ -351,6 +369,35 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
     }
   }
 
+  /** Probe the unsaved connection without admitting tools or saving the MCP row. */
+  const probeConnection = async (): Promise<void> => {
+    if (!open || mode !== 'add' || formDisabled || loading || probeRun.current !== null) return
+    resetProbe()
+    setLocalError(null)
+    const problem = jsonProblem(jsonBox.current)
+    setJsonError(problem)
+    if (problem !== null) return
+    const parsed = parseSpecText(jsonBox.current, t('mcp.form.jsonInvalid'))
+    const serverName = (title.trim() !== '' ? title.trim() : parsed.serverName ?? '').trim()
+    if (serverName === '') {
+      setLocalError(t('mcp.form.required'))
+      return
+    }
+    const run = {}
+    probeRun.current = run
+    setProbe({ status: 'pending' })
+    try {
+      const result = await listMcpTools({ spec: parsed.spec, serverName })
+      if (probeRun.current !== run) return
+      setProbe({ status: 'success', count: result.tools.length, local: parsed.spec.type === 'stdio' })
+    } catch (cause) {
+      if (probeRun.current !== run) return
+      setProbe({ status: 'failed', reason: cause instanceof Error ? cause.message : String(cause) })
+    } finally {
+      if (probeRun.current === run) probeRun.current = null
+    }
+  }
+
   /**
    * The spec and namespace the form currently describes, or null when there is
    * nothing to list.
@@ -389,9 +436,9 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
   }
 
   /**
-   * Opening the tools pane is the only trigger for a listing: connecting spawns
-   * a child process for stdio rows, and a row the user only renames never needs
-   * one. There is no load button, so the pane opens on what the form describes —
+   * Opening the tools pane triggers its own listing: connecting spawns a child
+   * process for stdio rows, and a row the user only renames never needs one.
+   * There is no load button in this pane, so it opens on what the form describes —
    * and lists again when the form changed since the listing it already has.
    * `tools` stays null until a listing was actually shown, which is what keeps
    * the save from rewriting the stored rules with an empty set.
@@ -417,6 +464,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
   }
 
   useEffect(() => {
+    resetProbe()
     if (!open) return
     let current = true
     setLocalError(null)
@@ -491,8 +539,8 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       setJson(text)
       setCredentialBase(text)
     }
-    return () => { current = false }
-  }, [editKey, mode, open, openTab, server, descriptionInitial, presets, t])
+    return () => { current = false; probeRun.current = null }
+  }, [editKey, mode, open, openTab, server, descriptionInitial, presets])
 
   const submit = async (): Promise<void> => {
     try {
@@ -595,12 +643,12 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
     : t('mcp.global.unavailable')
   /** The plane this row is written to, as the dialog states it for an edited row. */
   const scopeLabel = mode === 'edit'
-    ? (server?.scope === 'global' ? t('mcp.scopeGlobal') : `${t('mcp.scopePreset')} · ${server?.presetId ?? ''}`)
+    ? (server?.scope === 'global' ? t('mcp.scopeGlobal') : `${t('mcp.scopePreset')} · ${presetName(presetOptions.find(preset => preset.id === server?.presetId) ?? { id: server?.presetId ?? '' })}`)
     : undefined
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={titleText}
       closeLabel={t('mcp.form.close')}
       description={t('mcp.form.hint')}
@@ -608,7 +656,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
       contentClassName={css.mcpEditorContent ?? ''}
       footer={(
         <div className={css.formActions}>
-          <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>{t('mcp.form.cancel')}</Button>
+          <Button variant="outline" size="sm" onClick={close} disabled={busy}>{t('mcp.form.cancel')}</Button>
           <Button variant="primary" size="sm" onClick={() => { void submit() }} disabled={formDisabled || noTarget}>
             {busy ? t('mcp.form.saving') : t('mcp.form.save')}
           </Button>
@@ -648,6 +696,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
                   label={t('mcp.form.scope')}
                   value={choice}
                   presets={presetOptions}
+                  presetName={presetName}
                   globalWritable={globalWritable}
                   disabled={formDisabled}
                   onChange={(next) => { setChoice(next); setLocalError(null) }}
@@ -675,6 +724,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
               onChange={(event) => {
                 // A name the user typed is theirs: the JSON no longer refills it.
                 nameTouched.current = true
+                resetProbe()
                 setTitle(event.currentTarget.value)
                 setLocalError(null)
               }}
@@ -702,6 +752,7 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
               aria-required="true"
               aria-invalid={jsonError !== null}
               onChange={(event) => {
+                resetProbe()
                 jsonBox.current = event.currentTarget.value
                 setJson(event.currentTarget.value)
                 syncName(event.currentTarget.value)
@@ -715,6 +766,22 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
               onBlur={() => { setJsonError(jsonProblem(jsonBox.current)) }}
             />
           </label>
+          {mode === 'add' ? (
+            <div className={css.formField}>
+              <div>
+                <Button variant="outline" size="sm" disabled={formDisabled || loading || probe?.status === 'pending'} onClick={() => { void probeConnection() }}>
+                  {t('mcp.form.probe')}
+                </Button>
+              </div>
+              {probe === null ? <span className={css.fieldHint}>{t('mcp.form.probeHint')}</span>
+                : probe.status === 'pending' ? <span className={css.fieldHint} role="status">{t('mcp.form.probePending')}</span>
+                  : probe.status === 'success' ? (
+                    <span className={css.fieldHint} role="status">
+                      {t(probe.local ? 'mcp.form.probeSuccessLocal' : 'mcp.form.probeSuccessRemote').replace('{n}', probe.count.toLocaleString())}
+                    </span>
+                  ) : <span className={css.formError} role="alert">{t('mcp.form.probeFailed').replace('{reason}', probe.reason)}</span>}
+            </div>
+          ) : null}
           {loading ? <p className={css.mcpStatus}>{t('mcp.loading')}</p> : null}
         </div>
         <div

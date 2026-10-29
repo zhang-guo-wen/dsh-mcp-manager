@@ -60,7 +60,7 @@ export function listPresetDeclarations(ctx: Context): PresetDeclaration[] {
     if (typeof config?.id !== 'string' || config.id === '') continue
     declared.push({
       id: config.id,
-      ...typeof config.name === 'string' && config.name !== '' ? { name: config.name } : {},
+      ...typeof config.name === 'string' ? { name: config.name } : {},
       entry,
       rows: Array.isArray(config.plugins) ? config.plugins as EntryOptions[] : [],
     })
@@ -120,7 +120,7 @@ export function findPresetDeclaration(ctx: Context, id: string): PresetDeclarati
   const name = (entry.options.config as { name?: unknown } | undefined)?.name
   return {
     id,
-    ...typeof name === 'string' && name !== '' ? { name } : {},
+    ...typeof name === 'string' ? { name } : {},
     entry,
     rows: declaredRows(entry.options.config, id),
   }

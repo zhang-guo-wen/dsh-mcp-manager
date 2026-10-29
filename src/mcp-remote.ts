@@ -30,6 +30,8 @@ import type {
   DescribeMcpResult,
   DisableMcpRequest,
   EditMcpRequest,
+  RefreshMcpCatalogRequest,
+  RefreshMcpCatalogResult,
   ListMcpToolsRequest,
   ListMcpToolsResult,
   ListMcpsRequest,
@@ -42,7 +44,7 @@ import type {
   McpSpec,
   McpTarget,
 } from './types.ts'
-import { McpCatalog } from './mcp-catalog.ts'
+import { McpCatalog, catalogIdentity } from './mcp-catalog.ts'
 import type { LazyTool } from './mcp-carrier.ts'
 import type { GateMount, McpPreloadGate } from './mcp-gate.ts'
 import type { ExternalMcpDefinition, ExternalMcpRegistry } from './external-mcp.ts'
@@ -146,7 +148,6 @@ export class McpManager extends TypertRemoteService {
   @Remote('addMcp')
   async addMcp(request: AddMcpRequest): Promise<McpMutationResult> {
     const result = await this.enqueue(() => this.add(request))
-    this.catalog.clear()
     await this.gate.reconcile()
     return result
   }
@@ -161,7 +162,6 @@ export class McpManager extends TypertRemoteService {
   @Remote('editMcp')
   async editMcp(request: EditMcpRequest): Promise<McpMutationResult> {
     const result = await this.enqueue(() => this.edit(request))
-    this.catalog.clear()
     await this.gate.reconcile()
     return result
   }
@@ -176,7 +176,6 @@ export class McpManager extends TypertRemoteService {
   @Remote('disableMcp')
   async disableMcp(request: DisableMcpRequest): Promise<McpMutationResult> {
     const result = await this.enqueue(() => this.disable(request))
-    this.catalog.clear()
     await this.gate.reconcile()
     return result
   }
@@ -210,6 +209,63 @@ export class McpManager extends TypertRemoteService {
     return { entries: this.catalog.stats(), total: this.catalog.size }
   }
 
+  /** Explicitly re-discover current HTTP rows; local stdio catalogues are untouched. */
+  @Remote('refreshCatalog')
+  async refreshCatalog(request: RefreshMcpCatalogRequest): Promise<RefreshMcpCatalogResult> {
+    void request
+    return this.enqueue(async () => {
+      if (!this.catalog.persistent) throw new RemoteError('mcp/unavailable', 'The catalogue database is unavailable', { reason: 'catalogue database unavailable' })
+      const epoch = this.catalog.epoch
+      const configs = new Map<string, { key: string; config: McpEntryConfig }>()
+      let interrupted = false
+      const failed: { serverName: string; reason: string }[] = []
+      const roster = readMcpRoster(this.ctx, this.mountReader, this.gate.suppressedEntryIds(), this.gate.globalRows?.() ?? [])
+      const rows = [
+        ...roster.entries.map(row => ({ row, target: { scope: 'global' as const } })),
+        ...roster.presets.flatMap(preset => preset.rows.map(row => ({ row, target: { scope: 'preset' as const, agentPreset: preset.id } }))),
+      ]
+      for (const { row, target } of rows) {
+        if (row.entryId === null || row.enabled !== true) continue
+        try {
+          const described = await this.describeMcp({ target, entryId: row.entryId })
+          const config = mcpEntryConfig(described.spec, described.serverName)
+          if (config.transport !== 'streamable-http') continue
+          configs.set(catalogIdentity(config), {
+            key: target.scope === 'global' ? `global:${described.serverName}` : `preset:${target.agentPreset}:${described.serverName}`, config,
+          })
+        } catch { failed.push({ serverName: row.entryId, reason: 'The current connection configuration is unavailable' }) }
+      }
+      for (const row of this.external.rows()) {
+        if (row.config.transport !== 'streamable-http') continue
+        configs.set(catalogIdentity(row.config), { key: `external:${row.owner}:${row.serverName}`, config: row.config })
+      }
+      let refreshed = 0
+      // Bound network concurrency; no local child process is ever spawned here.
+      const pending = [...configs.values()]
+      await Promise.all(Array.from({ length: Math.min(3, pending.length) }, async () => {
+        for (;;) {
+          if (epoch !== this.catalog.epoch) { interrupted = true; return }
+          const next = pending.shift()
+          if (next === undefined) return
+          const { key, config } = next
+          try {
+            const connection = await connectLazyWithin(config, {}, TOOL_LIST_TIMEOUT_MS)
+            try {
+              if (epoch !== this.catalog.epoch) throw new Error('catalogue changed')
+              this.catalog.remember(config, connection, key, Date.now(), epoch)
+              await this.catalog.flush()
+              refreshed += 1
+            } finally { await connection.client.close().catch(() => {}) }
+          } catch { failed.push({ serverName: config.serverName, reason: 'The server did not refresh its tool catalogue or the database write failed' }) }
+        }
+      }))
+      if (interrupted || epoch !== this.catalog.epoch) {
+        throw new RemoteError('mcp/unavailable', 'The catalogue changed during refresh; refresh again', { reason: 'catalogue refresh interrupted' })
+      }
+      return { refreshed, failed }
+    })
+  }
+
   /**
    * Forget every recorded discovery result.
    *
@@ -222,7 +278,9 @@ export class McpManager extends TypertRemoteService {
   @Remote('clearCatalog')
   async clearCatalog(request: ClearMcpCatalogRequest): Promise<ClearMcpCatalogResult> {
     void request
-    return { cleared: this.catalog.clear() }
+    const cleared = this.catalog.clear()
+    await this.catalog.flush()
+    return { cleared }
   }
 
   /**
@@ -291,6 +349,7 @@ export class McpManager extends TypertRemoteService {
       const reason = String(cause)
       throw new RemoteError('mcp/invalid', reason, { reason }, { cause })
     }
+    const epoch = this.catalog.epoch
     let connection: Awaited<ReturnType<typeof connectLazyWithin>>
     try {
       // The listing owns this connection for its whole lifetime either way:
@@ -306,6 +365,18 @@ export class McpManager extends TypertRemoteService {
       )
     }
     try {
+      // A probe has no authored row yet. Its normalized local-config digest is
+      // sufficient for the row to reuse it after Save (and after a host restart).
+      if (epoch !== this.catalog.epoch) {
+        throw new RemoteError('mcp/unavailable', 'The tool catalogue was cleared while probing; test the connection again', { reason: 'catalogue changed during probe' })
+      }
+      this.catalog.remember(config, connection, undefined, Date.now(), epoch)
+      if (!this.catalog.persistent) {
+        throw new RemoteError('mcp/unavailable', 'MCP connected, but the catalogue database is unavailable', { reason: 'catalogue database unavailable' })
+      }
+      try { await this.catalog.flush() } catch {
+        throw new RemoteError('mcp/unavailable', 'MCP connected, but its tool catalogue could not be persisted', { reason: 'catalogue database write failed' })
+      }
       return {
         tools: connection.tools.map(tool => ({
           name: tool.name,

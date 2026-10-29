@@ -1334,3 +1334,174 @@ JSON 旁边，鼠标失焦时才显示。取舍见 [design-decisions.md](design-
 
 改加载、池或闸门行为后：先跑 `npm test` 与 `npm run test:harness`，再按上面的隔离实例协议复跑，并把**新结果与
 日期**写回本页；失败、未覆盖与受阻项如实保留，不要用「应该没问题」替代观察。
+
+
+## 二十一、本地 MCP 工具目录持久化与新增连接探测（2026-10-28，产物 `6C9E5236` / `0C4414B5`）
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 日期 | 2026-10-28T10:18:29+08:00 |
+| 插件 | @guowenzhang/dsh-mcp-manager@1.5.0（HEAD 05234cd，工作树 36 项未提交） |
+| 宿主 | @deepseek-ai/dsh@0.2.1-rc.2（隔离实例） |
+| DSH_HOME | `C:\02-codespace\DeepSeek\.scratch\harness-tests\mcp-local-cache-0.2.1-rc.2-av8lh9` |
+| 端口 / URL | 58857 / `http://127.0.0.1:58857/`（无认证 URL，实际访问 401；实例已停止） |
+| Node | v24.12.0 |
+| lib/index.mjs | `6c9e52361d6aefb6b8f8a069874c2671f8eba180525ca9d4b0cda5f77da4fe63`（222692 字节，2026-10-28T02:17:44.428Z） |
+| lib/client.js | `0c4414b5157d992cf06b17830fda59faeba552553b06efc746636435dfc476df`（190875 字节，2026-10-28T02:17:44.536Z） |
+| 证据文件 | `.scratch/test-system/runs/2026-10-28-101749-dsh-mcp-manager.json` |
+
+### 车道结果
+
+| 车道 | 状态 | 退出码 | 耗时 |
+|---|---|---|---|
+| typecheck | passed | 0 | 1.5s |
+| harness（包含 build） | passed | 0 | 4.1s |
+| unit | passed | 0 | 2.1s |
+| metadata | passed | 0 | 0.5s |
+| static gate | passed（0 error / 0 warning） | 0 | — |
+
+补充证据：`.scratch/test-system/runs/2026-10-28-101743-dsh-mcp-manager.json`（类型）、`2026-10-28-101747-dsh-mcp-manager.json`（构建与组合）、`2026-10-28-101528-dsh-mcp-manager.json`（元数据）、`.scratch/test-system/gate.json`（门禁）。元数据检查后仅源码改动与重建，包元数据未再改。
+
+### 逐项读数
+
+- 单元/组件回归 **27 文件 / 310 项**，真实 Loader/registry/scope 组合回归 **7 文件 / 27 项**。新增持久化测试 21 项、产物 Remote 探测测试 6 项、jsdom 新建探测组件测试 13 项；mcp-load 增补 2 项。
+- 本地 stdio 探测 RPC 返回前磁盘已存在完整目录；保存声明清行内存后、新建 catalog restore 能取回 schema，保留原 fetchedAt。HTTP/SSE/Streamable HTTP（包含 localhost URL）探测只读回内存，测试路径不存在目录文件。
+- TTL=0、服务器短 TTL、过期、命令/参数/cwd/env/namespace/transport 改变 miss；读取损坏/坏版本/未来时间/坏类型工具字段不会进入检索。坏 JSON 未被探测写回覆盖。原配置与凭据不进入持久化文本，工具定义仅投影公开字段。
+- 独立 writer 合并保留双方目录；另一 writer 清空后旧代写入拒绝。手动清空、旧请求 epoch、6 台服务器的排队索引、关闭后晚到发现、clearMemory 后 live invalidation 均覆盖；500 容量与慢盘合并快照覆盖。探测写盘失败不报成功，失败与成功连接均关闭 client。
+- 新建探测组件覆盖本地/三种远端、探测中/成功/失败重试、防重复点击、名称/配置/凭据编辑后的旧响应隔离、关闭重开隔离、直接保存与不自动保存声明/规则。此处是 jsdom 组件证据，不是宿主浏览器证据。
+- 隔离实例安装成功，监听 PID 51008、端口 58857；启动器等待 120 秒但 `boot.out`/`boot.err` 均为空、没有认证 URL。浏览器直接访问实际返回 **401 Unauthorized**，未绕过认证。仅经 isolate stop 核对 DSH_HOME/命令行/端口后停止本轮实例，端口已释放。日常 57370 实例未改动。
+- 首轮类型检查发现新增 RemoteError 缺 reason 字段，补齐后通过；早期排队索引回归用 40ms delay + 50ms waitFor 采样使第二批先启动而失败，改成显式连接 promise gate 后全量通过。门禁不识别 spec.{ts,tsx} 的窄 include，增加显式排除 node:test 文件后通过。以上失败不作为通过证据。
+
+### 本节未覆盖
+
+- **宿主真实浏览器验收受阻**：隔离实例无认证 URL，401。因此新增按钮的真实点击、全部 11 档宽度/深浅色/reduced-motion/真实手机软键盘与安全区均未验证；没有宣称 UI 已达标。
+- 单测使用 SDK doubles，没有实际本地 stdio 子进程或真实云端服务的端到端连通性/重启恢复测量；本轮未使用真实凭据。
+- 不承诺断电 fsync 持久性或 Windows owner-only ACL。跨主机共享 home 的 PID 文件锁不受支持；另一宿主清空后旧宿主写入安全拒绝，需要重新加载插件/宿主再写。
+- 安装开发测试依赖时 npm audit 汇总报告 15 项依赖漏洞（5 moderate / 8 high / 2 critical），本轮未自动执行 audit fix/升级无关依赖，未进行漏洞归因分析。
+
+---
+## 二十三、服务器列表独立滚动与顶部固定（2026-10-28，产物 `6C9E5236` / `7CBDE037`）
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 日期 | 2026-10-28T20:45:23+08:00 |
+| 插件 | @guowenzhang/dsh-mcp-manager@1.5.0（HEAD 4ffdf2a，工作树 26 项未提交） |
+| 宿主 | @deepseek-ai/dsh@0.2.1-rc.2（隔离实例） |
+| DSH_HOME | `C:\02-codespace\DeepSeek\.scratch\harness-tests\mcp-roster-scroll-0.2.1-rc.2-3zpa5t` |
+| 端口 / URL | 40236（未取得认证 URL；该隔离实例已停止，端口已释放） |
+| Node | v24.12.0 |
+| lib/index.mjs | `6c9e52361d6aefb6b8f8a069874c2671f8eba180525ca9d4b0cda5f77da4fe63`（222692 字节，2026-10-28T12:43:35.682Z） |
+| lib/client.js | `7cbde037f40f793297208ad6e5bc69619688b31e788a2ed5784e2f36ae252e05`（192048 字节，2026-10-28T12:53:25Z） |
+| 证据文件 | `.scratch/test-system/runs/2026-10-28-204338-dsh-mcp-manager.json` |
+
+### 车道结果
+
+| 车道 | 状态 | 退出码 | 耗时 |
+|---|---|---|---|
+| typecheck | passed | 0 | 1.5s |
+| build | passed | 0 | 0.7s |
+| unit | passed | 0 | 2.2s |
+
+### 逐项读数
+
+- 类型检查、build、单元/组件 **27 文件 / 310 项**通过；static gate 0 error / 0 warning。修改只涉及 MCP 插件内部：height:100% 获取宿主已限定的内容高度，活动 tabpanel/rosterBlock 以 min-height:0 收缩，列表状态放在固定挂载的 rosterBody 中；页头、页签、服务器标题/新增、全局提示与筛选不在滚动区中。设置页签保留自己的内部滚动。
+- 隔离测试宿主选择 npm latest 的精确版本 `0.2.1-rc.2`（当时 next 是 `0.2.1-rc.4`，未混用）；安装成功，监听 PID 50684、端口 40236。但 boot.out/boot.err 为空，120 秒内没有认证 URL，完整宿主浏览器验收未进入。没有绕过认证。isolate stop 校验命名空间、端口归属与命令行后停止；status 复核 portOwner=null。日常实例未改动。
+- 最终构建证据 `.scratch/test-system/runs/2026-10-28-205325-dsh-mcp-manager.json`；标准 `browser:roster-scroll` 车道通过，最终加强版 76.2 秒，证据 `.scratch/test-system/runs/2026-10-28-210209-dsh-mcp-manager.json`（先前轮次 63.4 秒也通过）。浏览器为已安装 Chrome **156.0.8078.73**，fixture 使用实际 McpSection TSX/CSS、真实宿主 ui-primitives、完整主题表与 SettingsRoot 的 panel/content/header/options 样式，数据每个预设 **80 行**（standard/other）。宿主样式/控件来源为工作区源码包 `0.2.1-alpha.2`，与上面的 npm 隔离宿主不是同一版本。常规窄宽矩阵仅复现 content 列、不渲染188px导航；另有1440px真实导航场景，不把此矩阵宣称为完整宿主手机适配。构建 manifest 对全部输入逐项 SHA256 防过期，fixture artifact `c8a0068e1046ab3a87f3d0902b7a131671c8ae7b4beb9e56d00a289dd5da7110`；这不是完整 Harness 集成测试。
+- 真实 Chromium **49 场景全通过**：320/360/390/430/600/601/760/761/1024/1280/1440px × 浅/深 × motion/reduced（44），另宽窗口 420px 窄面板、真实188px宿主导航、390×560、1440×420、761×560。所有场景标题/说明/页签/服务器标题/新增/搜索/预设选择器在滚轮及键盘滚动前后的 x/y/width/height 变化 **0px**；宿主 options、外祖先和 document scrollTop 都为 **0**；卡片左右缘与页签左右缘差都为 **0px**，无横向溢出，控制台/页面错误 **0**。
+- 1440×900：列表视窗 **518px**、行高 **70px**、末端 scrollTop **5880px**；390×900：视窗 **430px**、堆叠行高 **110px**、末端 scrollTop **9168px**；1440×420 短窗口仍有 **90px** 可滚动视窗。滚轮、PageDown/End、末行可达、到底不链式滚动父级、筛选/预设切换、短列表/空态、切到设置单独滚动/切回保留位置、刷新保留位置均通过。短高下测试短列表为自然能放下的1行（不是强制把两行挤下）。
+- 完整读数：`.scratch/test-system/mcp-roster-scroll/readings-2026-10-28T13-02-09-201Z.json`。截图 `.scratch/test-system/mcp-roster-scroll/1440x900-dark-motion.png`、`390x900-light-motion.png`，浏览器启动明确移除 `--hide-scrollbars`；本轮检查实际滚动与几何，不宣称已做滚动条像素剖面。
+- 浏览器测试已登记到工作区 `tools/testing/registry.mjs` 的 `browser:roster-scroll` 车道，fixture 构建只输出工作区 `.scratch/test-system`，不启动替代应用服务器、不访问日常实例。
+
+### 本节未覆盖
+
+- 完整 npm 宿主内实际设置页未验证：隔离实例未输出认证 URL。fixture 只能证明真实组件与宿主 CSS 的几何/滚动行为，不替代完整 slot/插件装配验收。
+- 真实手机软键盘、安全区、触摸滚动与安装版 GUI 的直接运行未验证；不宣称当前日常界面已自动更新。
+
+---
+## 二十四、Agent 预设名称复用宿主当前语言显示名（2026-10-28，产物 `C757C120` / `CBB6FA6E`）
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 日期 | 2026-10-28T22:20:06+08:00 |
+| 插件 | @guowenzhang/dsh-mcp-manager@1.5.0（HEAD 4ffdf2a，工作树 35 项未提交） |
+| 宿主 | 工作区 Harness 源码 `0.2.1-alpha.2` 组合/字典/控件验证；静态 helper 来自已装 registry `0.1.7-rc.2`，非日常 GUI 实测 |
+| DSH_HOME | （未绑定） |
+| 端口 / URL | （未绑定） |
+| Node | v24.12.0 |
+| lib/index.mjs | `c757c12094241c406936cfdfdd7db3cfd1c44bcd7195e3c86ef0ef9784425360`（222655 字节，2026-10-28T14:19:04.697Z） |
+| lib/client.js | `cbb6fa6e3d8fe3f603d9fb6f31cfbad10c31effdcf0ea2e9b80530b4c384de05`（195837 字节，2026-10-28T14:25:03Z） |
+| 证据文件 | `.scratch/test-system/runs/2026-10-28-222505-dsh-mcp-manager.json`（最终类型/构建/单测）；`2026-10-28-221806-dsh-mcp-manager.json` 为前一轮 |
+
+### 车道结果
+
+| 车道 | 状态 | 退出码 | 耗时 |
+|---|---|---|---|
+| typecheck | passed | 0 | 1.8s |
+| build | passed | 0 | 0.7s |
+| unit | passed | 0 | 2.3s |
+
+### 逐项读数
+
+- 最终类型、构建、单元/组件 **29 文件 / 319 项**通过（`2026-10-28-222505-dsh-mcp-manager.json`；前一轮318项通过后补充切语言不重置编辑草稿的回归）。真实 Harness 组合 **7 文件 / 27 项**通过，证据 `.scratch/test-system/runs/2026-10-28-221908-dsh-mcp-manager.json`；静态门禁 0 error / 0 warning。
+- 根因是 client/index.ts 在读取时把 optional name 改成 name??id，抹掉宿主内置预设判据且把字符串缓存。修复保留 `{id,name?}`，向页面注入稳定的 presetName callback，render时用宿主公共 `presetDisplayText` 与活的 `settings.agentPreset` 翻译函数；不新增 activation audit RPC，不复制内置中文映射。
+- 滤镜菜单、选中显示、卡片预设芯片、新增目标选项和编辑范围共用 resolver，筛选/保存仍用原始 id；自定义名称（含空字符串）保留。旧宿主缺字典时退回 id、不展示 locale key。shared `/display` 无 import 纯 helper 精确内联进产物，产物测试确认没有运行时 require 该宿主子路径。
+- 新增5项 resolver/产物测试、2项组件交互测试及1项名册原始元数据测试：四种内置名称、同一数据切语言、自定义同id覆盖、未知id/缺字典回退、空名称、菜单/卡片一致、新增select value不变，全部通过。另补1项切换 translator 后不重置编辑草稿/目标、不重读预设的回归，移除编辑初始化 effect 的 t 依赖；名称依旧在 render 更新。首次类型检查发现 agent-filter helper要求name必填，改为传render-local本地化投影后通过，没有将其误记为通过。
+- 浏览器首次新增编辑断言在 effect 填充服务器名之前取值，空值断言失败；改为等待输入框完成加载后验证（同时修正卡片点击落在 padding，避免误点描述编辑按钮）。产品名称解析未因此改变；失败记录 `2026-10-28-222709-dsh-mcp-manager.json`、`2026-10-28-223002-dsh-mcp-manager.json` 不计作通过，随后 quick 开发子集已通过，完整最终结果另列。
+
+- 最终真实 Chrome **156.0.8078.73** 浏览器车道 **51/51 场景通过**（保留滚动49场景，增加1440px浅色/390px深色本地化2场景），耗时76.4秒，console/page error **0**。名称精确对照宿主实际字典：中文 `标准模式 / PTC 模式 / 极简模式 / 创造模式`，英文 `Standard mode / PTC mode / Minimal mode / Creator mode`；Research Agent 原样。打开菜单/选中项/卡片芯片/新增目标/编辑范围活切zh↔en，selected id仍ptc/research，新增select values始终原始id，语言切换期间roster reads **1→1**。
+- 最终车道证据 `.scratch/test-system/runs/2026-10-28-224236-dsh-mcp-manager.json`；完整读数 `.scratch/test-system/mcp-roster-scroll/readings-2026-10-28T14-42-36-034Z.json`，输入manifest逐项hash含产品helper、宿主字典/控件/样式。截图 `.scratch/test-system/mcp-roster-scroll/preset-names-390-dark-zh-menu.png`、`preset-names-1440-light-zh-menu.png` 以及对应 en-menu/zh-add-target/en-edit-scope 均已生成。fixture无网络/认证/日常数据，不等同完整宿主集成。
+
+### 本节未覆盖
+
+- 未向日常安装实例安装/重载本次产物，完整认证 GUI 流程没有重新验收；上一节隔离实例不输出认证 URL 的限制仍存在。
+- 真实手机软键盘/安全区、全部旧版宿主的兼容性未验证；只核对已装 helper 与工作区源码契约。
+
+---
+## 二十五、全部 MCP 目录 SQLite 持久化与服务器专属刷新（2026-10-28，产物 `79D5D56D` / `C05B2F61`）
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 日期 | 2026-10-28T23:46:44+08:00 |
+| 插件 | @guowenzhang/dsh-mcp-manager@1.5.0（HEAD 4ffdf2a，工作树 53 项未提交） |
+| 宿主 | 工作区源码组合测试；浏览器fixture使用宿主0.2.1-alpha.2控件/主题/字典，无新的运行宿主实例 |
+| DSH_HOME | （未绑定） |
+| 端口 / URL | （未绑定） |
+| Node | v24.12.0 |
+| lib/index.mjs | `79d5d56d18ab8b99501182382a7fbbea5d2a3bd67e06bc3a0a161abf53de1d6b`（228670 字节，2026-10-28T15:52:03Z） |
+| lib/client.js | `c05b2f61377bf85fb1479b6297c28bc6cfd01d3ba2d61d61981204a353fe54d6`（202011 字节，2026-10-28T15:45:23.204Z） |
+| 证据文件 | `.scratch/test-system/runs/2026-10-28-235056-dsh-mcp-manager.json`（最终类型/构建/单测）与 `2026-10-28-235207-dsh-mcp-manager.json`（最终Harness）；234525为前轮 |
+
+### 车道结果
+
+| 车道 | 状态 | 退出码 | 耗时 |
+|---|---|---|---|
+| typecheck | passed | 0 | 1.6s |
+| build | passed | 0 | 0.7s |
+| unit | passed | 0 | 2.4s |
+
+### 逐项读数
+
+- 用户取消“本地JSON/云端仅内存/自定义TTL”旧模型；运行入口统一 databaseCatalogStorage，所有 stdio/HTTP/SSE 工具目录均写真实SQLite，路径 profile home/cache/dsh-mcp-manager/<profile hash>/catalog.sqlite。没有JSON读取/迁移/回退或手动TTL。旧JSON文件源码已清成无导出能力的空模块，唯一运行入口不再引用；删除操作被file-guard拒绝，未绕过。旧测试已替换成SQLite选型防回归，不再保留HTTP不落盘断言。
+- 类型、构建、单元/组件 **31文件/330项**通过；Harness **7文件/27项**通过（最终`.scratch/test-system/runs/2026-10-28-235207-dsh-mcp-manager.json`；233737为前轮）。数据库套件19项是真实SQLite文件：头部SQLite format 3、两transport重开、共享generation、独立writer merge、空读不创建、公开字段投影、坏库/未知schema拒绝、事务回滚、500行/32MiB UTF8逻辑payload限制。内存目录9项涵盖本地长期、HTTP仅server TTL/无TTL手动、0 TTL、跨重开schema、clear/close晚到拒绝。
+- 产物Remote探测与刷新7项：本地/http/sse/streamable-http全部探测后返回前已写库，刷新只连接HTTP、不启动本地，失败保留已存目录。mcp_load/search套件41项含searchIndex=false下已知过期HTTP自动刷新、无TTL不按时间刷新、clear后排队发现不复活。分页发现取所有有效TTL最短值，本轮补1项断言。
+- 控件8项覆盖TTL控件移除、目录状态cache组内、首屏仅纯状态读取、真正refreshCatalog RPC、防连点/pending/success/partial/失败保持旧内容、clear原RPC、迟到read不覆盖新状态、local/manual/expired显示。
+- 最终真实Chrome156.0.8078.73 **53/53场景通过**（原滚动49+名称2+缓存控制2），76.3秒，console/page错误0。缓存控制在1440px浅色/390px深色实测：状态直接嵌cache组、TTL控件0、页面渲染刷新调用0、按钮后refresh调用1、local/server记录保留、clear后两类均移除。证据 `.scratch/test-system/runs/2026-10-28-234000-dsh-mcp-manager.json`，读数 `.scratch/test-system/mcp-roster-scroll/readings-2026-10-28T15-40-00-023Z.json`，截图对应catalog-controls-1440-light.png/catalog-controls-390-dark.png。数据callbacks为fixture，非真实云端。
+- 首轮类型错误为store工具字段索引断言，换Reflect.get后通过；独立writer测试偶发b先于a提交导致顺序断言失败，改按label比较独立记录集合后全量通过。未把失败记作通过。node:sqlite ExperimentalWarning为Node24内置模块预期提示。
+
+### 本节未覆盖
+
+- 未更新、重启或安装日常实例；完整认证宿主GUI没有重跑，早先隔离实例不输出认证URL的限制仍存在。fixture只验证真实组件/宿主CSS，不替代安装组合验收。
+- 实际云端服务/真实本地子进程连通性未使用真实凭据测试；Remote用SDK double，数据库是真实文件。
+- 未在最低Node22.19或Electron宿主逐版本跑SQLite。只在Node24.12.0验证；POSIX0600不代表Windows ACL。数据库32MiB为逻辑payload不是SQLite页/索引文件大小。
+- 跨进程clear通过数据库generation拒绝旧writer写回；其他已经运行的宿主实例的旧内存快照不会主动实时同步，本轮未宣称多宿主实时共享目录。
+- 本轮没有提交、推送、升版或发布npm，已有其它未提交改动继续保留。
+
+---
