@@ -20,6 +20,7 @@ import { findPresetDeclaration, writePresetRows, type PresetDeclaration } from '
 import { assertServerName, mcpEntryConfig, specFromEntryConfig, type McpEntryConfig } from './mcp-config.ts'
 import { describeMcpConfigIssues, diagnoseRowConfig } from './mcp-diagnostics.ts'
 import { connectLazyWithin } from './lazy-mcp.ts'
+import type { McpOptimizeFlags } from './mcp-optimize.ts'
 import { readMcpRoster } from './mcp-roster.ts'
 import { ensureGlobalInclude } from './mcp-global-include.ts'
 import { estimateToolTokens } from './mcp-tokens.ts'
@@ -124,6 +125,8 @@ export class McpManager extends TypertRemoteService {
    *   roster read to report each preset row's current fiber phase.
    * @param external - the registry of resource-plugin rows.
    * @param loadingMode - live reader of the committed loading mode.
+   * @param optimize - live reader of the policy, so both discovery entry points
+   *   here collect as many tools as `mcp_load` would for the same row.
    * @param catalog - the discovery catalogue the settings page can inspect and clear.
    */
   constructor(
@@ -132,6 +135,7 @@ export class McpManager extends TypertRemoteService {
     private readonly mountReader: (within?: unknown) => readonly GateMount[],
     private readonly external: ExternalMcpRegistry,
     private readonly loadingMode: () => 'eager' | 'dynamic' | 'lazy',
+    private readonly optimize: () => McpOptimizeFlags,
     private readonly catalog: McpCatalog<LazyTool> = new McpCatalog<LazyTool>(),
   ) {
     super(ctx, 'mcpManager')
@@ -333,7 +337,7 @@ export class McpManager extends TypertRemoteService {
           if (next === undefined) return
           const { key, config } = next
           try {
-            const connection = await connectLazyWithin(config, {}, TOOL_LIST_TIMEOUT_MS)
+            const connection = await connectLazyWithin(config, { maxTools: this.optimize().maxTools }, TOOL_LIST_TIMEOUT_MS)
             try {
               if (epoch !== this.catalog.epoch) throw new Error('catalogue changed')
               this.catalog.remember(config, connection, key, Date.now(), epoch)
@@ -438,7 +442,7 @@ export class McpManager extends TypertRemoteService {
     try {
       // The listing owns this connection for its whole lifetime either way:
       // `connectLazyWithin` closes the client a lost race still produces.
-      connection = await connectLazyWithin(config, {}, TOOL_LIST_TIMEOUT_MS)
+      connection = await connectLazyWithin(config, { maxTools: this.optimize().maxTools }, TOOL_LIST_TIMEOUT_MS)
     } catch (cause) {
       const reason = cause instanceof Error ? cause.message : String(cause)
       throw new RemoteError(

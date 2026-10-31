@@ -6,28 +6,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { McpCatalog } from '../src/mcp-catalog.ts'
 import { databaseCatalogStorage } from '../src/mcp-catalog-store.ts'
 import { mcpEntryConfig } from '../src/mcp-config.ts'
+import { MCP_OPTIMIZE_DEFAULTS } from '../src/mcp-optimize.ts'
 import type { LazyTool } from '../src/mcp-carrier.ts'
 import { McpManager } from '../lib/index.mjs'
 
-const sdk = vi.hoisted(() => ({ clients: [] as { closed: number }[], fail: false }))
+const sdk = vi.hoisted(() => ({
+  clients: [] as { closed: number }[],
+  fail: false,
+  tools: null as null | { name: string; description: string; inputSchema: { type: string } }[],
+}))
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({ Client: class {
   closed = 0
   constructor() { sdk.clients.push(this) }
   async connect() { if (sdk.fail) throw new Error('fixture refused') }
-  async listTools() { return { tools: [{ name: 'probe_tool', description: 'A tool', inputSchema: { type: 'object' } }] } }
+  async listTools() { return { tools: sdk.tools ?? [{ name: 'probe_tool', description: 'A tool', inputSchema: { type: 'object' } }] } }
   async close() { this.closed += 1 }
 } }))
 vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({ StdioClientTransport: class {} }))
 vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({ StreamableHTTPClientTransport: class {} }))
 const contexts: Context[] = []
 const root = resolve(import.meta.dirname, '../../.scratch/mcp-probe-tests', randomUUID())
-function manager(catalog: McpCatalog<LazyTool>) {
+function manager(catalog: McpCatalog<LazyTool>, policy = MCP_OPTIMIZE_DEFAULTS) {
   const ctx = new Context()
   contexts.push(ctx)
   ctx.provide('loader', {} as never)
-  return new McpManager(ctx, { reconcile: async () => {} } as never, () => [], {} as never, () => 'dynamic', catalog as never)
+  return new McpManager(ctx, { reconcile: async () => {} } as never, () => [], {} as never, () => 'dynamic', () => policy, catalog as never)
 }
-beforeEach(() => { sdk.clients.length = 0; sdk.fail = false })
+beforeEach(() => { sdk.clients.length = 0; sdk.fail = false; sdk.tools = null })
 afterEach(async () => { for (const ctx of contexts.splice(0)) await ctx.fiber.dispose() })
 
 describe('connection probe database persistence', () => {
@@ -66,6 +71,13 @@ describe('connection probe database persistence', () => {
     }
     expect(sdk.clients.every(client => client.closed === 1)).toBe(true)
   })
+
+  it('collects the same policy cap a load would, instead of the built-in default', async () => {
+    sdk.tools = Array.from({ length: 3 }, (_, index) => ({ name: `tool_${index}`, description: 'A tool', inputSchema: { type: 'object' } }))
+    const catalog = new McpCatalog<LazyTool>(databaseCatalogStorage(join(root, 'capped.sqlite')))
+    const result = await manager(catalog, { ...MCP_OPTIMIZE_DEFAULTS, maxTools: 2 }).listMcpTools({ serverName: 'big', spec: { type: 'stdio', command: 'node' } })
+    expect(result.tools.map(tool => tool.name)).toEqual(['tool_0', 'tool_1'])
+  })
 })
 
 describe('explicit server catalogue refresh', () => {
@@ -78,7 +90,7 @@ describe('explicit server catalogue refresh', () => {
     const ctx = new Context(); contexts.push(ctx)
     ctx.provide('loader', { entries: () => [], } as never)
     const external = { rows: () => [{ owner: 'fixture', serverName: 'local', config: local }, { owner: 'fixture', serverName: 'cloud', config: cloud }] }
-    const service = new McpManager(ctx, { reconcile: async () => {}, suppressedEntryIds: () => [] } as never, () => [], external as never, () => 'dynamic', catalog as never)
+    const service = new McpManager(ctx, { reconcile: async () => {}, suppressedEntryIds: () => [] } as never, () => [], external as never, () => 'dynamic', () => MCP_OPTIMIZE_DEFAULTS, catalog as never)
     const result = await service.refreshCatalog({})
     expect(result).toEqual({ refreshed: 1, failed: [] })
     expect(sdk.clients).toHaveLength(1)
@@ -89,5 +101,19 @@ describe('explicit server catalogue refresh', () => {
     expect(failed.refreshed).toBe(0)
     expect(failed.failed[0]?.serverName).toBe('cloud')
     expect(catalog.getFor('remote', cloud)?.tools[0]?.name).toBe('probe_tool')
+  })
+
+  it('re-discovers a refreshed HTTP row up to the policy cap', async () => {
+    sdk.tools = Array.from({ length: 2 }, (_, index) => ({ name: `cloud_${index}`, description: 'A tool', inputSchema: { type: 'object' } }))
+    const catalog = new McpCatalog<LazyTool>(databaseCatalogStorage(join(root, 'refresh-cap.sqlite')))
+    const cloud = mcpEntryConfig({ type: 'http', url: 'https://example.test' }, 'cloud')
+    const ctx = new Context(); contexts.push(ctx)
+    ctx.provide('loader', { entries: () => [] } as never)
+    const external = { rows: () => [{ owner: 'fixture', serverName: 'cloud', config: cloud }] }
+    const policy = { ...MCP_OPTIMIZE_DEFAULTS, maxTools: 1 }
+    const service = new McpManager(ctx, { reconcile: async () => {}, suppressedEntryIds: () => [] } as never, () => [], external as never, () => 'dynamic', () => policy, catalog as never)
+    expect(await service.refreshCatalog({})).toEqual({ refreshed: 1, failed: [] })
+    expect(catalog.getFor('remote', cloud)?.tools.map(tool => tool.name)).toEqual(['cloud_0'])
+    expect(catalog.getFor('remote', cloud)?.truncated).toBe(true)
   })
 })

@@ -292,7 +292,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   )
   // Register the Remote service before any inventory refresh. Preset rows may
   // depend on it, and activation-sensitive registry diagnostics are never read.
-  new McpManager(ctx, gate, mountReader, external, () => mcpLoading, catalog)
+  new McpManager(ctx, gate, mountReader, external, () => mcpLoading, () => readers.optimize(), catalog)
   activate(mcpLoading)
   /**
    * The registered tool set's identity: what a re-registration is keyed on.
