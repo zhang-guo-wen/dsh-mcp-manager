@@ -1,3 +1,9 @@
+# Install-order independence: a bundle such as @guowenzhang/dsh-agent-manager
+# may already mount this plugin under its own row. Two live instances register
+# the same service twice and fail the whole plugin tree at boot, so this row
+# backs off when an earlier composed row already mounts the package. The
+# mirrored guard in that bundle's patch covers the opposite install order.
 - insert:
     - id: mcp-manager
       name: '@guowenzhang/dsh-mcp-manager'
+      disabled: !!js "[...ctx.loader.entries()].some((e) => e.options.name === '@guowenzhang/dsh-mcp-manager' && e.options.id !== 'mcp-manager' && !e.disabled)"

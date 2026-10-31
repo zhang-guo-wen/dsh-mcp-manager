@@ -32,3 +32,14 @@ test('display metadata exports both languages with an unscoped English fallback'
   assert.equal(titles.zh, zh.title)
   assert.equal(titles.fr ?? titles.en, en.title)
 })
+
+test('bundle patch defers to an earlier row that already mounts this plugin', () => {
+  const patch = readFileSync(resolve(root, manifest.dsh.bundle.patch), 'utf8')
+  const id = /- id: (.+)/u.exec(patch)?.[1]?.trim()
+  assert.ok(id, 'the patch declares its own row id')
+  assert.ok(patch.includes(`name: '${manifest.name}'`), 'the row names this package')
+  assert.match(patch, /disabled: !!js "/u, 'the row carries a !!js guard')
+  assert.ok(patch.includes(`e.options.name === '${manifest.name}'`), 'the guard looks this package up by module name')
+  assert.ok(patch.includes(`e.options.id !== '${id}'`), 'the guard excludes its own row')
+  assert.match(patch, /!e\.disabled/u, 'the guard only defers to a row that is actually mounted')
+})
