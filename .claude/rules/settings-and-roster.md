@@ -118,8 +118,23 @@ HMR/关闭再启用把旧 suppression 当成用户禁用；树销毁后不强持
    兜底标志,且**被用户停用的行必须退出它**;`gate.suppressedEntryIds()` 回答的是"闸门此刻实际扣住了哪些行",
    名册据此报 `held`。把前者当用户意图的后果是:运行中停用一行后开关仍显示"已启用",再点只是把 `disabled: true`
    重复写一次(幂等 no-op),只有重启实例才显示正确(易崩第 43 条)。
-3. **同一批返回 `globalWritable`**:设置页必须在用户填完表单之前就说明全局平面能否写入。判据只有一条 ——
-   组合里是否**恰好挂着一个用户自己的 file-backed Include**(`writableGlobalIncludes`,见下)。
+3. **同一批返回 `globalWritable` 与 `globalReason`**:设置页必须在用户填完表单之前就说明全局平面能否写入。判据只有一条 ——
+   组合里是否**恰好挂着一个用户自己的 file-backed Include**(`writableGlobalIncludes`,见下)。`globalReason` 取
+   `mcp-row-state` 的同一组原因(`no-writable-include` / `several-writable-includes` / `unreadable-include`),
+   供设置页区分「宿主能创建」与「只能解释」。
+
+**没有可写 Include 时由插件创建(D33,2026-10-27)。** 全新 profile 只挂宿主 root anchor,`globalWritable` 恒为 false,
+「全局」永远选不了。`enableGlobalPlane` Remote 在 `globalReason === 'no-writable-include'` 时:
+在 profile 目录写 `mcp.cordis.yml`(`[]`),向 `cordis.patch.yml` 追加一行 `insert`(`cordis:include`,
+`config.path: ./mcp.cordis.yml`、`initial: []`),再经 boot 包 `readProfilePatches` + `reconcileProfilePatches`
+重建组合(有 `hmr` 时用它的 `runExclusive` 串行化),最后以「可写 Include 是否正好 1 个」确认是否已挂载;返回
+`{ includePath, created, patchChanged, mounted }`。**`listMcps` 每进程第一次调用会先自动尝试一次**
+(`globalPlaneAutoTried`),所以打开设置页即可写全局、不必点按钮;失败只记 warn,名册照常返回
+`no-writable-include` 供页面显示重试。**不要**改在 `apply`/boot 阶段创建(重入与时序风险)。
+**只写 profile patch 层**:root anchor 每次启动被重写,`loader.create` 会触发 Include 写回把补丁拍平
+(见 pitfalls 41)。写入用文本追加保留 patch 文件里的注释;patch 文件不是 YAML 序列、或该 loader id 已被别的
+插件占用时拒绝。写后没挂载不抛错,返回 `mounted: false` 由设置页提示重启。`patchChanged: false`(已有一行)
+时不重载、不重复写。
 
 **全局平面的可写判据必须排除宿主的 root anchor Include。** `app-boot` 固定 Loader id `include`,指向
 `$DSH_HOME/profiles/<profile>/cordis.yml`,而且 `prepareProfile` **每次启动都把它重写成空模板**;把它算进来,

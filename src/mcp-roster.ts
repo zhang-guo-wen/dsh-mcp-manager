@@ -255,5 +255,6 @@ export function readMcpRoster(
     entries,
     presets,
     globalWritable: includes.length === 1,
+    ...globalReadOnly === undefined ? {} : { globalReason: globalReadOnly },
   }
 }

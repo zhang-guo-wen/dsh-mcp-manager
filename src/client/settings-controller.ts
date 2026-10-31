@@ -21,6 +21,7 @@ import type {
   DescribeMcpResult,
   DisableMcpRequest,
   EditMcpRequest,
+  EnableGlobalPlaneResult,
   ListMcpToolsRequest,
   ListMcpToolsResult,
   ListMcpsResult,
@@ -136,6 +137,17 @@ export type McpLoadingOption = 'eager' | 'dynamic' | 'lazy'
 /** The MCP loading modes in display order. */
 export const MCP_LOADING_OPTIONS: readonly McpLoadingOption[] = ['eager', 'dynamic', 'lazy']
 
+/**
+ * What asking the Host to create the global plane's file produced.
+ *
+ * `ready` means the plane is writable now, `pending` that the Include row was
+ * written but not mounted (the next host start applies it), and `failed` that
+ * nothing usable was written. The section turns this into its floating notice;
+ * a dialog that triggered the creation uses it to decide whether the global
+ * target became selectable.
+ */
+export type McpGlobalEnableOutcome = 'ready' | 'pending' | 'failed'
+
 /** One agent preset the MCP editor can target. */
 export interface McpPresetOption {
   /** Preset id used in the composition target. */
@@ -162,6 +174,12 @@ export interface McpAuthoringActions {
   refreshCatalog: (request: RefreshMcpCatalogRequest) => Promise<RefreshMcpCatalogResult>
   /** Forget every recorded discovery result. */
   clearCatalog: (request: ClearMcpCatalogRequest) => Promise<ClearMcpCatalogResult>
+  /**
+   * Make the global plane writable. A profile whose composition mounts only the
+   * host's root anchor has no file the settings page may patch, so the Host
+   * creates the user's own Include on demand.
+   */
+  enableGlobalPlane: () => Promise<EnableGlobalPlaneResult>
 }
 
 /** The roster read's answer, as the section consumes it. */
@@ -179,6 +197,12 @@ export interface McpRosterView {
    * reloads the Include, leaving the layers in place.
    */
   readonly globalWritable: boolean
+  /**
+   * Why the global plane is closed, present when it is. `no-writable-include` is
+   * the one reason the Host can fix by creating the user's Include; the page
+   * offers that action instead of only disabling the target.
+   */
+  readonly globalReason?: McpRowReadOnly
 }
 
 /** Snapshot the section renders. */
@@ -235,6 +259,8 @@ export interface McpSectionFace {
   refreshCatalog: () => Promise<RefreshMcpCatalogResult>
   /** Forget every recorded discovery result. */
   clearCatalog: () => Promise<ClearMcpCatalogResult>
+  /** Create the user's own global Include when the profile mounts none. */
+  enableGlobalPlane: () => Promise<EnableGlobalPlaneResult>
   /**
    * Keys of the allowed rows the Host holds unmounted because the loading mode
    * does not preload. The list uses them to tell "disabled by the user" apart
@@ -355,6 +381,7 @@ export class McpSettingsController {
       catalogState: () => this.authoring.catalogState({}),
       refreshCatalog: () => this.authoring.refreshCatalog({}),
       clearCatalog: () => this.authoring.clearCatalog({}),
+      enableGlobalPlane: this.authoring.enableGlobalPlane,
       suppressedMcps: this.suppressed,
       mcps: this.mcps,
       presets: this.presets,

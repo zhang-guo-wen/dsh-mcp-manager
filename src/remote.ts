@@ -78,6 +78,7 @@ export const TYPERT_REMOTE: TypertRemoteContribution = {
     descriptor('disableMcp'),
     descriptor('describeMcp'),
     descriptor('listMcps'),
+    descriptor('enableGlobalPlane'),
     descriptor('listMcpTools'),
     descriptor('gateState'),
     descriptor('catalogState'),

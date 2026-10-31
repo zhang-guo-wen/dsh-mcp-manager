@@ -45,6 +45,8 @@ import type {
   DescribeMcpResult,
   DisableMcpRequest,
   EditMcpRequest,
+  EnableGlobalPlaneRequest,
+  EnableGlobalPlaneResult,
   ListMcpToolsRequest,
   ListMcpToolsResult,
   ListMcpsRequest,
@@ -80,6 +82,7 @@ interface McpManagerNamespace {
   disableMcp(request: DisableMcpRequest): Promise<RemoteResult<McpMutationResult>>
   describeMcp(request: DescribeMcpRequest): Promise<RemoteResult<DescribeMcpResult>>
   listMcps(request: ListMcpsRequest): Promise<RemoteResult<ListMcpsResult>>
+  enableGlobalPlane(request: EnableGlobalPlaneRequest): Promise<RemoteResult<EnableGlobalPlaneResult>>
   listMcpTools(request: ListMcpToolsRequest): Promise<RemoteResult<ListMcpToolsResult>>
   gateState(request: McpGateStateRequest): Promise<RemoteResult<McpGateStateResult>>
   catalogState(request: McpCatalogStateRequest): Promise<RemoteResult<McpCatalogStateResult>>
@@ -125,12 +128,14 @@ export async function apply(ctx: Context): Promise<void> {
       // labels its options without asking the Host a second time.
       presets: roster.presets.map(({ id, name }) => ({ id, ...name === undefined ? {} : { name } })),
       globalWritable: roster.globalWritable,
+      ...roster.globalReason === undefined ? {} : { globalReason: roster.globalReason },
     }
   }
   const authoring: McpAuthoringActions = {
     addMcp: request => unwrapRemote(() => mcpMgr().addMcp(request)),
     editMcp: request => unwrapRemote(() => mcpMgr().editMcp(request)),
     disableMcp: request => unwrapRemote(() => mcpMgr().disableMcp(request)),
+    enableGlobalPlane: () => unwrapRemote(() => mcpMgr().enableGlobalPlane({})),
     describeMcp: request => unwrapRemote(() => mcpMgr().describeMcp(request)),
     listMcpTools: request => unwrapRemote(() => mcpMgr().listMcpTools(request)),
     catalogState: request => unwrapRemote(() => mcpMgr().catalogState(request)),

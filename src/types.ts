@@ -218,6 +218,30 @@ export interface McpCatalogStateResult {
   readonly total: number
 }
 
+/** Request to make the global plane writable; the plane state is host-wide. */
+export interface EnableGlobalPlaneRequest {
+  /** Placeholder field: kept so the gateway derives a one-field descriptor. */
+  readonly unused?: boolean
+}
+
+/**
+ * What enabling the global plane wrote.
+ *
+ * The host creates the user's own file-backed Include when the profile has none:
+ * an entry-list file beside the profile, plus the patch row that mounts it. The
+ * plane is already writable in the supported shape, so the call is a no-op there.
+ */
+export interface EnableGlobalPlaneResult {
+  /** Absolute path of the entry-list file a global write now patches. */
+  readonly includePath: string
+  /** Whether this call created that file. */
+  readonly created: boolean
+  /** Whether this call added the Include row to the profile patch layer. */
+  readonly patchChanged: boolean
+  /** Whether the row is mounted and a global write can land. */
+  readonly mounted: boolean
+}
+
 /** Request to forget every recorded discovery result. */
 export interface ClearMcpCatalogRequest {
   /** Placeholder field: the catalogue is host-wide, so the request carries none. */
@@ -328,6 +352,15 @@ export interface ListMcpsResult {
    * rewrites its file on every start.
    */
   readonly globalWritable: boolean
+  /**
+   * Why the global plane is not writable, present exactly when
+   * {@link globalWritable} is false.
+   *
+   * `no-writable-include` is the state a fresh profile is in: the host can create
+   * the user's Include, so the settings page offers that instead of only closing
+   * the plane. The other reasons leave nothing the settings page can fix.
+   */
+  readonly globalReason?: McpRowReadOnly
 }
 
 /** Failure details owned by the MCP authoring Remote. */declare module '@deepseek-ai/dsh-typert-protocol' {

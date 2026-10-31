@@ -58,10 +58,17 @@ type Manager = {
       fiberPhase: string | null
     }[]
     globalWritable: boolean
+    globalReason?: string
   }>
   gateState(request: object): Promise<{ suppressed: string[] }>
   disableMcp(request: object): Promise<{ entryId: string; disabled: boolean }>
   addMcp(request: object): Promise<{ entryId: string; serverName: string }>
+  enableGlobalPlane(request: object): Promise<{
+    includePath: string
+    created: boolean
+    patchChanged: boolean
+    mounted: boolean
+  }>
 }
 
 /**
@@ -126,6 +133,12 @@ describe('global row authoring through the settings page', () => {
     // addressable file, so the plane is writable and the row has a home.
     const before = await managerOf(ctx).listMcps({})
     expect(before.globalWritable).toBe(true)
+    expect(before.globalReason).toBeUndefined()
+    // Enabling an already-writable plane is a no-op: it addresses the file the
+    // rows already live in instead of creating a second Include.
+    expect(await managerOf(ctx).enableGlobalPlane({})).toEqual({
+      includePath: join(dir, 'mcps.yml'), created: false, patchChanged: false, mounted: true,
+    })
     // A row the mode holds unmounted reports `held`, which the surface shows as
     // an ordinary resting state (no marker), and the gate reports it suppressed.
     expect(before.entries).toMatchObject([{ entryId: ROW, enabled: true, writable: true, fiberPhase: 'held' }])
@@ -265,9 +278,27 @@ describe('global row authoring through the settings page', () => {
 
     const roster = await managerOf(ctx).listMcps({})
     expect(roster.globalWritable).toBe(false)
+    // The plane-level reason is what tells the settings page the Host can create
+    // the missing file, instead of only closing the target.
+    expect(roster.globalReason).toBe('no-writable-include')
     expect(roster.entries).toMatchObject([
       { entryId: ROW, enabled: true, writable: false, readOnly: 'no-writable-include' },
     ])
+
+    // The first read also tries the automatic creation once, and this composition
+    // has no launched profile to create anything in: the read still answers the
+    // same, so the page keeps both its explanation and its retry action.
+    const second = await managerOf(ctx).listMcps({})
+    expect(second.globalWritable).toBe(false)
+    expect(second.globalReason).toBe('no-writable-include')
+    expect(await readFile(join(dir, 'cordis.yml'), 'utf8')).toBe(anchor)
+
+    // Creating the Include needs a launched profile (its patch layer); a bare
+    // Loader composition has none, and the call says so instead of guessing a path.
+    await expect(managerOf(ctx).enableGlobalPlane({})).rejects.toMatchObject({
+      code: 'mcp/unavailable',
+      message: expect.stringMatching(/no profile/),
+    })
 
     await expect(managerOf(ctx).disableMcp({
       target: { scope: 'global' }, entryId: ROW, disabled: true,

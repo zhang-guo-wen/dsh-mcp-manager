@@ -1330,12 +1330,138 @@ JSON 旁边，鼠标失焦时才显示。取舍见 [design-decisions.md](design-
 - **深色、`pointer: coarse`、`prefers-reduced-motion` 未测**：同前几节。
 - **`mcp.form.toolsNeedsName` 的新文案只在中文界面读过**：英文文案未在浏览器里切换验证。
 
+## 十八、全局平面自动创建（2026-10-27，D33，产物 `F6365849…` / `02FBA051…`）
+
+用户反馈「刚安装完选不了全局、也看不到全局 MCP」。取舍见 [design-decisions.md](design-decisions.md) D33。
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 日期 | 2026-10-27 |
+| 插件 | @guowenzhang/dsh-mcp-manager@1.5.0（HEAD 05234cd，工作树有本轮未提交改动） |
+| 宿主 | `@deepseek-ai/dsh@0.2.1-rc.2`（隔离实例；取得当天 `npm view dist-tags` 的 `latest`，用 `--version` 固定） |
+| DSH_HOME / 端口 | `…\harness-tests\mcp-global-e2e-0.2.1-rc.2-m6z9lt` / 56271（主流程）；`…\mcp-global-enable-0.2.1-rc.2-h4szpe` / 24681（弹窗路径）；两个实例跑完都已停止、端口已释放 |
+| Node / 浏览器 | Node v24.12.0；Playwright + `chromium_headless_shell-1228`（显式 `executablePath`，未下载新浏览器） |
+| lib/index.mjs | `f6365849…47d`（207,615 字节，2026-10-27 17:21:51） |
+| lib/client.js | `02fba051…8a2`（187,167 字节，2026-10-27 17:21:51） |
+| 脚本与截图 | `.scratch/mcp-global-enable/e2e.mjs`、`e2e-dialog.mjs`；截图 `01-fresh-profile.png` … `10-dialog-row-added.png` |
+
+### 车道结果（本轮实跑）
+
+| 车道 | 命令 | 结果 |
+|---|---|---|
+| typecheck | `npm run typecheck` | 通过 |
+| build | `npm run build` | 通过（host 207.62 kB；client handoff 写出） |
+| unit | `npm test` | **24 文件 / 268 项**全绿（新增 `tests/mcp-global-include.spec.ts` 10 项） |
+| harness | `DSH_HARNESS_ROOT=…\deepseekharness npm run test:harness` | **6 文件 / 25 项**全绿（新增两条断言：shape A 再启用是 no-op；无 `profileContext` 时以 `mcp/unavailable` 拒绝） |
+| 门禁 | `node tools/testing/gate.mjs` | dsh-mcp-manager 无 error / warning；全仓 3 个 error 都在其他仓，与本轮无关 |
+
+### 逐项读数（真实点击）
+
+| 验收项 | 读数 |
+|---|---|
+| 全新 profile 的说明 | 名册上方显示「当前组合里没有你自己的可写 Include…」，并有「启用全局（自动创建）」按钮 |
+| 创建前磁盘 | profile 目录没有 `mcp.cordis.yml` |
+| 弹窗里的「全局」 | `<option value="">` 没有 `disabled` 属性：可选中，选中即触发创建 |
+| 一键创建 | 3s 内出现「已启用全局平面」提示、说明块消失；同一会话内 Include 已挂载（无需重启） |
+| 写入内容 | `mcp.cordis.yml` = `[]`；`cordis.patch.yml` 末尾追加 `- insert:\n    - id: mcp-manager-global\n      name: cordis:include\n      config:\n        path: ./mcp.cordis.yml\n        initial: []`，原有 `ui-settings-general` 行原样保留 |
+| 新增全局行 | 「配置范围」= 全局，保存后列表出现 `probe-global` 并带「全局」芯片；`mcp.cordis.yml` 出现该行（`transport: streamable-http`） |
+| 行内开关往返 | 关：文件出现 `disabled: true`；开：该键被移除；两次都只改这一个文件 |
+| 弹窗路径 | 第二个全新 profile 里，把新增弹窗的「配置范围」切到「全局」→ 自动创建（8 项断言全过），随后保存 `probe-dialog` 直接进 `mcp.cordis.yml` |
+| 布局 | 1280×900 与 390×844、浅色与深色：`document.scrollWidth - clientWidth = 0`；深色背景 `rgb(21, 21, 23)` |
+| 控制台 | 两轮均 0 条 `error` / `pageerror` |
+
+### 环境备注（工具链，未改脚本）
+
+- `tools/testing/isolate.mjs start` 在本机没取到认证 URL：web 进程确实起来了（401 可探），但 `dsh web: http://…/?token=…` 没有落进 `boot.out`，`status` 的 `url` 为 null。本轮做法是：先用 isolate 建命名空间并安装插件（保留实例记录），停掉它启动的进程，再用同一个 `DSH_HOME` 以受管后台任务启动，从任务输出取 URL；结束时按端口与命令行核对后停止。
+- `isolate.mjs --plugin` 按调用时的工作目录解析相对路径：在工作区里写 `../dsh-mcp-manager` 会指到 `C:\02-codespace\dsh-mcp-manager`（不存在，Node 报 `spawn cmd.exe ENOENT`）；传绝对路径即正常。
+
+### 本节未覆盖（如实）
+
+- 预设平面的新增 / 删除 / 导入行与编辑弹窗逐行保存状态仍未在浏览器里实测。
+- 未验证两个「启用全局」请求并发（Remote 已走 mutation 队列，但没有专门断言）。
+- 没在「宿主没有 `profileContext`」的真实部署里点过这个按钮（harness 里断言了拒绝，但那是合成组合）。
+- 未验证启用后用户把 `cordis.patch.yml` 手工改坏时 UI 的具体提示：代码走「写入成功但未挂载 → 提示重启」分支，仅由阅读确认。
+- 只在 0.2.1-rc.2 上实测；alpha 线与更老宿主未复跑。
+- 未验证 URL 之外的认证路径（token 只在 URL 里）。
+
+## 十九、空态只留一句「还没有」（2026-10-27，D34，client `283A797D…` / host 不变）
+
+用户要求去掉名册空态里那句解释与「新增到 Agent 预设」按钮。取舍见 [design-decisions.md](design-decisions.md) D34。
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 日期 | 2026-10-27 |
+| 插件 | @guowenzhang/dsh-mcp-manager@1.5.0（HEAD 05234cd，工作树有本轮未提交改动） |
+| 宿主 | `@deepseek-ai/dsh@0.2.1-rc.2`（隔离实例，全新 profile） |
+| DSH_HOME / 端口 | `…\harness-tests\mcp-empty-state-0.2.1-rc.2-e7lqmd` / 25578（跑完已停止，端口已释放） |
+| Node / 浏览器 | v24.12.0；Playwright + `chromium_headless_shell-1228`，1280×900 与 390×844 |
+| lib/index.mjs | `f6365849…47d`（207,615 字节；本轮未改 host） |
+| lib/client.js | `283a797d…884`（186,144 字节） |
+| 脚本与截图 | `.scratch/mcp-global-enable/e2e-empty.mjs`；`11-empty-state-1280.png`、`12-no-match-1280.png`、`13-empty-state-390-light.png`、`14-empty-state-1280-dark.png` |
+
+### 逐项读数（真实点击，10 项断言全过）
+
+| 验收项 | 读数 |
+|---|---|
+| 空态文本 | `emptyBlock` 的 textContent 只有「这个筛选下还没有 MCP 服务器」 |
+| 解释句 | 页面不再包含「当前筛选显示」「全局行已在上面列出」 |
+| 空态按钮 | 没有「新增到 Agent 预设」；列表右上的「新增 MCP」仍在（1 个） |
+| 全局平面说明与动作 | 「启用全局（自动创建）」仍在（本次未动） |
+| 搜索无命中分支 | 无命中搜索仍显示「换个关键词，或清空筛选框。」 |
+| 布局 | 390px 无横向溢出（`scrollWidth - clientWidth = 0`）；深色主题正常 |
+| 控制台 | 0 条 `error` / `pageerror` |
+| 静态 | `npm run typecheck` 通过；`npm test` 24 文件 / 268 项全绿 |
+
+### 本节未覆盖
+
+- 只测了全新 profile（0 行）的空态；预设非 `standard`、或全局平面已启用的组合未另测（空态渲染条件与全局平面无关）。
+- 英文界面未在浏览器里切换验证（键集合由 `en: Record<McpSectionKey, string>` 守住）。
+- 空态块的高度变化没有做像素级测量，只做了截图与文本断言。
+
+## 二十、首次读取自动创建全局 Include（2026-10-27，D33 修订，产物 `2A4A2AF8…` / `9BB47956…`）
+
+用户：「这个还要我手动启用，不能插件自己自动启用一次吗」。D33 据此把创建时机改为**每个宿主进程第一次读取名册时自动创建一次**，不再需要点按钮。
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 日期 | 2026-10-27 |
+| 插件 | @guowenzhang/dsh-mcp-manager@1.5.0（HEAD 05234cd，工作树有本轮未提交改动） |
+| 宿主 | `@deepseek-ai/dsh@0.2.1-rc.2`（隔离实例，全新 profile） |
+| DSH_HOME / 端口 | `…\harness-tests\mcp-auto-global-0.2.1-rc.2-r8qbw2` / 30085（跑完已停止，端口已释放） |
+| Node / 浏览器 | v24.12.0；Playwright + `chromium_headless_shell-1228`，1280×900 |
+| lib/index.mjs | `2a4a2af8…d1ad`（209,423 字节，2026-10-27 18:02:41） |
+| lib/client.js | `9bb47956…5bfb`（186,194 字节，2026-10-27 18:02:41） |
+| 脚本与截图 | `.scratch/mcp-global-enable/e2e-auto.mjs`；`15-auto-enabled-1280.png`、`16-auto-global-row.png` |
+
+### 逐项读数（真实点击 + 文件读数，11 项断言全过）
+
+| 验收项 | 读数 |
+|---|---|
+| 打开页面前 | profile 目录没有 `mcp.cordis.yml` |
+| 首次读取 | 打开「MCP 管理」后（未点任何按钮）文件已出现，patch 里 `mcp-manager-global` 恰好 1 处 |
+| 界面 | 不再显示「启用全局（自动创建）」按钮与只读说明 |
+| 落点 | 新增弹窗里「全局」可直接选中（不再需要先启用） |
+| 新增行 | 直接保存 `auto-global` → 列表出现并带「全局」芯片，写入 `mcp.cordis.yml` |
+| 刷新幂等 | 整页 reload、重开设置后：patch 仍只有 1 行、Include 里的行仍在、列表仍显示该行 |
+| 控制台 | 0 条 `error` / `pageerror` |
+| 静态 | `npm run typecheck` 通过；`npm test` **24 文件 / 268 项**；`npm run test:harness` **7 文件 / 27 项**（新增 `tests/global-auto-enable.harness.spec.ts` 2 项：首次读创建一次、无 `profileContext` 时读仍返回只读原因） |
+
+### 本节未覆盖（如实）
+
+- 自动创建**失败**后的降级（名册仍返回 `no-writable-include`、按钮可重试）只在 harness 的「无 profileContext」用例与代码路径上验证，没有在真实实例里故意写坏 patch 文件复现。
+- 只在 0.2.1-rc.2 上实测；更老宿主没有 `enableGlobalPlane`，自动创建不会发生（页面回退到按钮，但按钮会报方法不存在——跨版本混装的预期状态，未专门测）。
+- 空态精简（第十九节）的读数绑定当时 client `283A797D…`；当前 client `9BB47956…` 只多改了回退提示文案 `mcp.global.autoHint`，空态断言未在当前构建重跑。
+
 ## 维护
 
 改加载、池或闸门行为后：先跑 `npm test` 与 `npm run test:harness`，再按上面的隔离实例协议复跑，并把**新结果与
 日期**写回本页；失败、未覆盖与受阻项如实保留，不要用「应该没问题」替代观察。
-
-
 ## 二十一、本地 MCP 工具目录持久化与新增连接探测（2026-10-28，产物 `6C9E5236` / `0C4414B5`）
 
 ### 环境与产物绑定

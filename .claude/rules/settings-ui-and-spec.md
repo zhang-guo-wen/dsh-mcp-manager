@@ -19,6 +19,8 @@ paths:
 
 ## 设置页分区(src/client/McpSection.tsx)
 
+**Agent 显示名复用宿主**：传给页面的预设保留 `{id,name?}`，不可提前 `name ?? id` 抹掉内置预设判据。由 `settings.agentPreset` 字典 + `@deepseek-ai/dsh-agent-preset-registry/display` 的公共纯 helper 在 render 时解析（本包 `preset-name.ts` 仅包缺字典回退），筛选菜单、卡片平面芯片、新增目标与编辑范围共用 resolver，写入/筛选始终用原始 id。自定义 name（含空串）不翻译；缺字典退回 id。不要为显示名调会等待 activation audit 的 registry RPC，不复制中文映射，不 runtime-import UI 插件；构建仅把无 import 的 `/display` 精确内联，不请求宿主动态 ModuleLoader 子路径。
+
 一个 `settings.section`(id `mcp-manager`,order 14)承载插件的两面,**页内用 `SegmentedTabs` 分「服务器」/「设置」**
 (2026-10-16 起两页合并;此前是第二条 `settings.section`,order 15 与内置插件区撞号、在侧栏里排不到一起,
 被读成"同一个插件两个页面";同日第二轮把第二个页签从「上下文」改名「设置」并把加载方式移进它)。
@@ -118,7 +120,8 @@ paths:
    (描述框、筛选框、JSON 框、下拉)提到 16px/24px 免得 iOS 聚焦缩放;`@media (pointer: coarse)` 把行抬到
    44px 触摸目标,并把描述文本按钮抬到 32px(它静止时只有一行字高)。窄屏靠**堆叠**而不是隐藏元数据,所以没有
    需要移出网格与焦点顺序的隐藏控件。
-2. **层级:页头 16/24/500 + 一行 14/22 说明,块标题 14/22/600,行名 14/22/600(代码字体),元数据/说明
+2. **滚动归列表。** `.section` 以 `height:100%` 使用宿主 `.options` 已限定的内容高度；活动 `.tabPanel` 与 `.rosterBlock` 均 `flex:1` + `min-height:0`。页头、页签、服务器标题/新增、提示和筛选保持自然高度，不在 `.rosterBody` 内；只有永远挂载的 `.rosterBody` 滚动，loading/error/list/refreshing 都在其中。刷新不重建滚动节点；设置页签自行滚动，隐藏页签保留 `display:none`。使用宿主滚动条变量补偿 rail，保留卡片焦点环安全间距；不写宿主 hashed selector，不用固定 viewport offset 或列表 max-height。
+3. **层级:页头 16/24/500 + 一行 14/22 说明,块标题 14/22/600,行名 14/22/600(代码字体),元数据/说明
    12/18 三级色。** 「服务器」/「设置」两个页签是页面级的 `SegmentedTabs`,**占满整列宽度、两个页签各占一半**
    (2026-10-16 第三轮按要求去掉原先 320px 的宽度封顶与 `align-self: flex-start`;`box-sizing: border-box`
    保留,否则 8px 内边距会把宽度顶破);同一面里的块标题与页签不要同款,`SegmentedControl`

@@ -24,7 +24,7 @@ import {
 import { formatMcpConfigIssues } from './config-issues.ts'
 import { McpTargetSelect, initialTarget } from './McpTargetSelect.tsx'
 import { MCP_READ_ONLY_REASON, type McpSectionKey } from './locales.ts'
-import type { McpPlane, McpPresetOption, McpServer } from './settings-controller.ts'
+import type { McpGlobalEnableOutcome, McpPlane, McpPresetOption, McpServer } from './settings-controller.ts'
 import css from './McpSection.module.css'
 
 /** Localized `t` bound to this section's dictionary namespace. */
@@ -72,6 +72,14 @@ interface McpEditorProps {
   readonly tab: McpEditorTab
   /** Whether the global plane has a file-backed Include to write. */
   readonly globalWritable: boolean
+  /**
+   * Whether the Host can create that file, which it does when the profile mounts
+   * no writable Include of its own. Choosing the global target then asks the Host
+   * to create it instead of leaving the plane unreachable.
+   */
+  readonly globalCreatable: boolean
+  /** Ask the Host to create the global Include; resolves how it ended. */
+  readonly onEnableGlobal: () => Promise<McpGlobalEnableOutcome>
   /**
    * The agent preset the section is narrowed to, when it is narrowed to one.
    * A new row is written into it, so the dialog's own preset picker opens on it.
@@ -175,7 +183,7 @@ function McpCredentialsPane({ json, kind, baseline, disabled, onPush, t }: {
 }
 
 /** Modal editor split into a pane for the row's fields and a pane for its tools. */
-export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, presetName, plane, tab: openTab, globalWritable, preset, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
+export function McpEditor({ open, mode, server, disabled, busy, error, describeMcp, listMcpTools, presets, presetName, plane, tab: openTab, globalWritable, globalCreatable, onEnableGlobal, preset, descriptionInitial, onUpdateDescription, toolRulesInitial, onUpdateTools, t, onClose, onSubmit }: McpEditorProps): ReactNode {
   const [tab, setTab] = useState<McpEditorTab>(openTab)
   const tabId = useId()
   /**
@@ -184,6 +192,13 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
    * — it keeps its own plane — so the value only decides an add.
    */
   const [choice, setChoice] = useState(initialTarget(plane, preset))
+  /**
+   * Whether this dialog's own creation call opened the global plane. The section
+   * re-reads the roster afterwards, but the answer has to hold in this form even
+   * before that read lands, so the dialog keeps it too.
+   */
+  const [globalEnabled, setGlobalEnabled] = useState(false)
+  const [enablingGlobal, setEnablingGlobal] = useState(false)
   const [presetOptions, setPresetOptions] = useState<readonly McpPresetOption[]>([])
   /** Whether the preset read answered, so an empty list can be told from a pending one. */
   const [presetLoaded, setPresetLoaded] = useState(false)
@@ -482,6 +497,8 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
     // a dependency: the list can refresh while this dialog is open, and re-running
     // this effect would reset the form under the user.
     setChoice(initialTarget(plane, preset))
+    setGlobalEnabled(false)
+    setEnablingGlobal(false)
     setPresetLoaded(false)
     nameTouched.current = false
     setTitle(server?.serverName ?? '')
@@ -632,15 +649,49 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
   // loads. A global row is mounted by the composition, so its tools are in every
   // request already and a rule could not hide them.
   const toolsReadOnly = mode === 'edit' ? server?.scope === 'global' : choice === ''
+  /** The global plane after this dialog's own creation call, before the roster re-read lands. */
+  const globalWritableNow = globalWritable || globalEnabled
+  /**
+   * Whether the picker may name the global plane.
+   *
+   * The Host can create the missing file only when the profile mounts no
+   * writable Include of its own (`globalCreatable`); a composition with several
+   * Includes or an unreadable one stays closed. Choosing the global entry is what
+   * triggers the creation, so the entry is offered when the Host can act on it.
+   */
+  const globalSelectable = globalWritableNow || globalCreatable
   // The only home a new row can fail to have is the global plane with no file to
-  // write: a preset id in the picker always names an addressable preset. The
-  // picker always lists the global plane, so a greyed-out entry is explained by
-  // the hint below it — and only a composition that cannot write global carries
-  // that hint at all.
-  const noTarget = mode === 'add' && choice === '' && !globalWritable
+  // write: a preset id in the picker always names an addressable preset.
+  const noTarget = mode === 'add' && choice === '' && !globalWritableNow
   const noTargetReason = presetLoaded && presetOptions.length === 0
     ? t('mcp.form.noTarget')
     : t('mcp.global.unavailable')
+  /**
+   * Switch a new row's home. Choosing the still-closed global plane first asks
+   * the Host to create the file it needs — that call is the fix for the closed
+   * plane, so the picker does not have to send the user to a second control.
+   * @param next - the chosen home; the empty value is the global plane.
+   */
+  const pickTarget = async (next: string): Promise<void> => {
+    setLocalError(null)
+    if (next !== '' || globalWritableNow) {
+      setChoice(next)
+      return
+    }
+    if (!globalCreatable || enablingGlobal) return
+    setEnablingGlobal(true)
+    try {
+      const outcome = await onEnableGlobal()
+      if (outcome === 'ready') {
+        setGlobalEnabled(true)
+        setChoice('')
+      } else if (outcome === 'pending') {
+        setLocalError(t('mcp.global.createdPending'))
+      }
+    } finally {
+      setEnablingGlobal(false)
+    }
+  }
   /** The plane this row is written to, as the dialog states it for an edited row. */
   const scopeLabel = mode === 'edit'
     ? (server?.scope === 'global' ? t('mcp.scopeGlobal') : `${t('mcp.scopePreset')} · ${presetName(presetOptions.find(preset => preset.id === server?.presetId) ?? { id: server?.presetId ?? '' })}`)
@@ -697,13 +748,19 @@ export function McpEditor({ open, mode, server, disabled, busy, error, describeM
                   value={choice}
                   presets={presetOptions}
                   presetName={presetName}
-                  globalWritable={globalWritable}
-                  disabled={formDisabled}
-                  onChange={(next) => { setChoice(next); setLocalError(null) }}
+                  globalSelectable={globalSelectable}
+                  disabled={formDisabled || enablingGlobal}
+                  onChange={(next) => { void pickTarget(next) }}
                   t={t}
                 />
               </label>
-              {globalWritable ? null : <span className={css.fieldHint}>{noTargetReason}</span>}
+              {globalWritableNow ? null : globalCreatable
+                ? (
+                  <span className={css.fieldHint}>
+                    {enablingGlobal ? t('mcp.global.enabling') : t('mcp.global.selectCreates')}
+                  </span>
+                )
+                : <span className={css.fieldHint}>{noTargetReason}</span>}
             </>
           ) : (
             <label className={css.formField}>

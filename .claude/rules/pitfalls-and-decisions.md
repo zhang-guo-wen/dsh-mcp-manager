@@ -4,7 +4,7 @@ paths:
   - "docs/competitive-landscape.md"
 ---
 
-> 覆盖：44 条易崩清单（每条都是踩过的真实故障）与 D1–D17 技术决策表（自原「工程契约与历史台账」拆出）。何时读：改加载/闸门/池/过滤相关代码前扫一遍踩坑清单，或需要查某条决策的理由与被否决方案时。
+> 覆盖：45 条易崩清单（每条都是踩过的真实故障）与 D1–D33 技术决策表（自原「工程契约与历史台账」拆出）。何时读：改加载/闸门/池/过滤相关代码前扫一遍踩坑清单，或需要查某条决策的理由与被否决方案时。
 
 # 易崩清单与技术决策
 
@@ -88,6 +88,14 @@ paths:
 44. **给全局行写入路径只认 Include 的文件行却不做前置校验** → 补丁层/组合声明的行会先撞上误导性的 `mcp/not-found`
     (消息还错写成 "preset row");必须写前校验"该行 id 在可写 Include 的文件行里",命中不了就抛平面准确的
     **`mcp/read-only`**(见「名册读取」的行级可写判据)。
+45. **把"没有可写 Include"当成只能置灰** → 新装 profile 只有宿主 root anchor,`globalWritable` 恒为 false,
+    「全局」永远选不了、`新增到全局` 永远不出现(用户会当成插件坏了)。缺文件时由 `enableGlobalPlane` 自动创建:
+    profile 目录写 `mcp.cordis.yml`(`[]`)+ 向 `cordis.patch.yml` **追加 `insert` 行**(`cordis:include`,
+    `initial: []`),再经 `@deepseek-ai/dsh-app-boot` 的 `reconcileProfilePatches` 重载。**时机**:
+    `listMcps` 每进程第一次调用先自动尝试一次(用户要求不点按钮),失败只记 warn、名册照常返回
+    `no-writable-include`,页面保留按钮重试;**不要**在 `apply`/boot 阶段创建(重入与时序风险)。**不要写
+    root anchor**(每次启动被 `prepareProfile` 重写)、**不要 `loader.create`**(Include 写回会把补丁拍平,
+    见第 41 条)。见 D33。
 `parseMcpLoadingMode` 收敛回 `dynamic`(见「延迟加载」)。`descriptions` 与 `tools` 归用户设置文档,见「设置命名空间」。
 
 ## 技术决策
@@ -114,6 +122,7 @@ paths:
 | D15 | 配置不完整是独立状态,与加载模式分开 | 「按需可用」是模式的结果,不是用户要处理的状态 |
 | D16 | 优化策略粒度分选择/列表/形态三层,入口是页内「上下文」页签(2026-10-16 合并) | 规范只给分页与 `ttlMs`,检索与只带名称只能在宿主侧做;宿主侧栏不支持分组,同一插件两次 `settings.section` 注册会被读成两个页面 |
 | D17 | 「零拉起 + 宿主级常驻 + 引用计数」是一组取舍(2026-10-15) | 不用就不起、用过就留着、没人用才停(见 design-decisions.md) |
+| D33 | 没有可写 Include 时由插件自动创建(2026-10-27) | 默认 profile 只有宿主 root anchor,置灰等于半个功能不可用;创建自己的 Include 是唯一能落地全局行的形状 |
 
 实现侧的理由与踩坑在 `.claude/rules/` 各文件(「延迟加载」「载体选择」「按需清单」「预加载闸门」「工具过滤」「优化策略」);同类插件对比与
 功能路线图归 [docs/competitive-landscape.md](../docs/competitive-landscape.md)。

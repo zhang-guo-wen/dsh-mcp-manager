@@ -168,6 +168,38 @@
   gap: 8px;
 }
 
+/* The closed global plane, explained where its rows would be. A quiet layer-1
+   surface rather than a warning: a fresh profile is the normal state, not an
+   error, and the button beside it is the fix. */
+.globalCallout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.globalCalloutText {
+  display: flex;
+  flex: 1 1 280px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.globalCalloutText p {
+  margin: 0;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.globalCalloutText .globalCalloutHint {
+  color: var(--dsw-alias-label-tertiary);
+}
+
 /* A compact filter, 36px like the selector beside it (the search tier). */
 .rosterSearch {
   box-sizing: border-box;
@@ -220,6 +252,7 @@
 }
 
 .rosterBlock > .listHead,
+.rosterBlock > .globalCallout,
 .rosterBlock > .listFilters {
   flex: none;
 }

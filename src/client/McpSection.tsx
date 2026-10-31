@@ -24,7 +24,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboard
 import { Button, IconChevronDownOutlineRegular, Menu, SegmentedControl, SegmentedTabs, StateDot, Switch, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { AddMcpRequest, DescribeMcpRequest, DescribeMcpResult, EditMcpRequest } from '../types.ts'
+import type { AddMcpRequest, DescribeMcpRequest, DescribeMcpResult, EditMcpRequest, McpRowReadOnly } from '../types.ts'
 import { MAX_DESCRIPTION_CHARS } from '../mcp-inventory.ts'
 import { toolRuleEntries } from '../mcp-tool-filter.ts'
 import { formatMcpConfigIssues } from './config-issues.ts'
@@ -33,6 +33,7 @@ import { McpOptimizeSection, saveFailureMessage } from './McpOptimizeSection.tsx
 import {
   MCP_LOADING_OPTIONS,
   mcpRowKey,
+  type McpGlobalEnableOutcome,
   type McpLoadingOption,
   type McpPhase,
   type McpPlane,
@@ -102,6 +103,8 @@ type McpView =
     readonly suppressed: ReadonlySet<string>
     /** Whether the global plane has a file-backed Include to write. */
     readonly globalWritable: boolean
+    /** Why the global plane is closed, when it is. */
+    readonly globalReason?: McpRowReadOnly
     /** A refresh is in flight over an already rendered roster. */
     readonly refreshing: boolean
   }
@@ -569,7 +572,7 @@ function McpRosterSkeleton({ label }: { readonly label: string }): ReactNode {
 export function McpSection(props: McpSectionProps): ReactNode {
   const {
     useMcpSettings, t, setMcpLoading, addMcp, editMcp, disableMcp, describeMcp, listMcpTools,
-    suppressedMcps, mcps, presets, presetName, updateMcpDescription, updateMcpTools,
+    suppressedMcps, mcps, presets, presetName, updateMcpDescription, updateMcpTools, enableGlobalPlane,
   } = props
   const state = useMcpSettings(snapshot => snapshot)
   const [tab, setTab] = useState<McpTab>('servers')
@@ -610,6 +613,8 @@ export function McpSection(props: McpSectionProps): ReactNode {
   }
   const [rowAction, setRowAction] = useState<Record<string, RowAction>>({})
   const [modeSave, setModeSave] = useState<ModeSave>({ phase: 'idle' })
+  /** A global-plane enablement in flight: the plane has no file until it lands. */
+  const [enablingGlobal, setEnablingGlobal] = useState(false)
   const [search, setSearch] = useState('')
   /**
    * A failure no single row can carry.
@@ -669,6 +674,14 @@ export function McpSection(props: McpSectionProps): ReactNode {
   // fine; only a composition that mounts no single file-backed Include cannot
   // address one, and then the global row actions are closed.
   const globalUnavailable = mcpView.status === 'ready' && !mcpView.globalWritable
+  /**
+   * Whether the Host can create the missing global file.
+   *
+   * Only `no-writable-include` leaves a file to create: several mounted
+   * Includes or an unreadable one cannot be resolved by writing a new file, so
+   * those stay closed and the notice only explains why.
+   */
+  const globalCreatable = mcpView.status === 'ready' && mcpView.globalReason === 'no-writable-include'
   const unavailableReason = t('mcp.global.unavailable')
 
   useEffect(() => {
@@ -698,6 +711,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
             presets: roster.presets,
             suppressed: new Set(suppressed),
             globalWritable: roster.globalWritable,
+            ...roster.globalReason === undefined ? {} : { globalReason: roster.globalReason },
             refreshing: false,
           })
         },
@@ -762,6 +776,33 @@ export function McpSection(props: McpSectionProps): ReactNode {
 
   const refreshMcps = (): void => {
     setMcpRequest(value => value + 1)
+  }
+
+  /**
+   * Let the Host create the user's own global Include, then re-read the roster.
+   *
+   * The plane has no writable file in a fresh profile, so this is the one action
+   * that opens it; the roster read behind it is what turns every control from
+   * "closed" to usable. A host that wrote the file but could not mount it still
+   * gets an answer, and the notice says a restart is what applies it.
+   * @returns `ready` when the plane is writable now, `pending` when the file was
+   *   written but is not mounted, and `failed` when nothing usable was written.
+   */
+  const enableGlobal = async (): Promise<McpGlobalEnableOutcome> => {
+    if (enablingGlobal) return 'failed'
+    setEnablingGlobal(true)
+    setMcpActionError(null)
+    try {
+      const result = await enableGlobalPlane()
+      refreshMcps()
+      reportNotice(result.mounted ? t('mcp.global.created') : t('mcp.global.createdPending'))
+      return result.mounted ? 'ready' : 'pending'
+    } catch (cause) {
+      reportRefusal(`${t('mcp.global.enableFailed')}${failureText(cause)}`)
+      return 'failed'
+    } finally {
+      setEnablingGlobal(false)
+    }
   }
 
   const submitEditor = async (request: McpEditorRequest): Promise<void> => {
@@ -844,33 +885,22 @@ export function McpSection(props: McpSectionProps): ReactNode {
    *
    * Two different nothings: a search that matched nothing (the roster itself is
    * not what is wrong), and a view whose preset and global planes are both
-   * empty. The second one carries the way out, because a plane with no row is
-   * exactly where a user looks for one — and it only offers the write that
-   * view's plane can take, so a button cannot promise what the Host refuses.
+   * empty. Neither offers a way out any more: creating a row belongs to the
+   * list's own 新增 MCP button, and the preset branch used to repeat that as a
+   * second, plane-specific button under a sentence explaining which rows the
+   * filter shows. The count and the preset picker above already say that, so the
+   * empty block is only the statement that this view holds nothing.
    * @returns the empty-state block, or null when the list has rows.
    */
   const emptyList = (): ReactNode => {
     if (mcpView.status !== 'ready' || visibleGlobal.length + visiblePreset.length > 0) return null
     const searching = needle !== ''
-    const plane: McpPlane = presetServers.length + visiblePreset.length > 0 || presetChoices.length > 0 ? 'agent' : 'global'
-    // An empty view may only offer the write its own plane can take: a preset
-    // row needs a preset to exist, and a global row needs a writable file.
-    const canAdd = plane === 'global' ? !globalUnavailable : presetChoices.length > 0
     return (
       <div className={css.emptyBlock}>
         <p className={css.empty}>
           {searching ? t('mcp.noMatch') : t('mcp.empty.row')}
         </p>
-        <p className={css.emptyHint}>
-          {searching
-            ? t('mcp.noMatch.hint')
-            : t('mcp.empty.row.hint').replace('{name}', activePresetName)}
-        </p>
-        {!searching && !disabled && canAdd ? (
-          <Button variant="outline" size="sm" onClick={() => { openAdd(plane) }}>
-            {plane === 'global' ? t('mcp.empty.addGlobal') : t('mcp.empty.addAgent')}
-          </Button>
-        ) : null}
+        {searching ? <p className={css.emptyHint}>{t('mcp.noMatch.hint')}</p> : null}
       </div>
     )
   }
@@ -927,6 +957,28 @@ export function McpSection(props: McpSectionProps): ReactNode {
             </Button>
           </span>
         </div>
+        {/* A fresh profile has no writable Include, so the plane is closed until
+            the Host creates one. Saying that here — where the list would show the
+            global rows — is what makes the closed scope picker explainable, and
+            the button is the only thing that can change the answer. */}
+        {globalUnavailable ? (
+          <div className={css.globalCallout}>
+            <div className={css.globalCalloutText}>
+              <p>{unavailableReason}</p>
+              {globalCreatable ? <p className={css.globalCalloutHint}>{t('mcp.global.autoHint')}</p> : null}
+            </div>
+            {globalCreatable ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { void enableGlobal() }}
+                disabled={disabled || enablingGlobal}
+              >
+                {enablingGlobal ? t('mcp.global.enabling') : t('mcp.global.enable')}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
         {/* The picker names the preset whose rows the list carries. There is no
             "every preset" entry: the global rows are listed under every value,
             so an option that meant "all of them" would be a second, unnamed
@@ -1041,6 +1093,8 @@ export function McpSection(props: McpSectionProps): ReactNode {
         plane={openedPlane}
         tab={openedTab}
         globalWritable={mcpView.status === 'ready' && mcpView.globalWritable}
+        globalCreatable={globalCreatable}
+        onEnableGlobal={enableGlobal}
         {...activePreset === MCP_ALL_PRESETS ? {} : { preset: activePreset }}
         descriptionInitial={editor.server === undefined
           ? ''

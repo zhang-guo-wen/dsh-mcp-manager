@@ -21,6 +21,7 @@ import { assertServerName, mcpEntryConfig, specFromEntryConfig, type McpEntryCon
 import { describeMcpConfigIssues, diagnoseRowConfig } from './mcp-diagnostics.ts'
 import { connectLazyWithin } from './lazy-mcp.ts'
 import { readMcpRoster } from './mcp-roster.ts'
+import { ensureGlobalInclude } from './mcp-global-include.ts'
 import { estimateToolTokens } from './mcp-tokens.ts'
 import type {
   AddMcpRequest,
@@ -32,6 +33,8 @@ import type {
   EditMcpRequest,
   RefreshMcpCatalogRequest,
   RefreshMcpCatalogResult,
+  EnableGlobalPlaneRequest,
+  EnableGlobalPlaneResult,
   ListMcpToolsRequest,
   ListMcpToolsResult,
   ListMcpsRequest,
@@ -70,6 +73,23 @@ interface IncludeTree extends EntryTree {
 
 type WritableIncludeTree = IncludeTree & { readonly filename: string }
 
+/** Profile facts that decide where a global Include file and its patch row live. */
+interface ProfileFacts {
+  readonly dir: string
+  readonly patchPath: string
+}
+
+/** The boot package surface used to rebuild the composition after a patch write. */
+interface AppBootRuntime {
+  readProfilePatches(binName: string, context: ProfileFacts): PatchOptions[]
+  reconcileProfilePatches(ctx: Context, patches: PatchOptions[], binName: string): Promise<readonly string[]>
+}
+
+/** The HMR service surface that serializes a profile-layer write with automatic reloads. */
+interface HmrService {
+  runExclusive<T>(operation: () => Promise<T>): Promise<T>
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Host owner of the `mcpManager` Remote namespace. */
@@ -86,6 +106,15 @@ export class McpManager extends TypertRemoteService {
   static inject = ['loader']
 
   private mutationQueue: Promise<unknown> = Promise.resolve()
+
+  /**
+   * Whether this process already tried the automatic global-Include creation.
+   *
+   * One attempt per host process: the creation is a composition write, and a
+   * failed attempt leaves the page's explicit action as the retry — repeating it
+   * on every roster read would rewrite a patch layer the user may be fixing.
+   */
+  private globalPlaneAutoTried = false
 
   /**
    * @param ctx - host context.
@@ -125,9 +154,12 @@ export class McpManager extends TypertRemoteService {
    * Report every MCP row the running composition declares, with the planes a
    * mutation can target.
    *
-   * The read answers from declarations and live fibers only, so the settings
-   * page renders immediately while an MCP server is still starting; nothing here
-   * waits for a row's activation.
+   * The first read of a host process also repairs the one state a fresh profile
+   * cannot get out of by itself: no writable Include at all. Repairing on the
+   * read that opens the settings page makes the global plane usable without any
+   * extra click, while every later read is a pure roster read. The attempt is
+   * made once per process; a failure keeps the roster's own read-only reason and
+   * leaves the explicit action in the page for a retry.
    * @param request - empty placeholder; the roster is host-wide.
    * @returns the global rows, every declared preset with its rows, and whether
    *   the global plane accepts writes.
@@ -135,7 +167,59 @@ export class McpManager extends TypertRemoteService {
   @Remote('listMcps')
   async listMcps(request: ListMcpsRequest): Promise<ListMcpsResult> {
     void request
+    await this.autoEnableGlobalPlane()
     return readMcpRoster(this.ctx, this.mountReader, this.gate.suppressedEntryIds(), this.gate.globalRows?.() ?? [])
+  }
+
+  /**
+   * Create the missing global Include on the first roster read of this process.
+   *
+   * The settings page cannot make the plane writable without a click otherwise,
+   * and a fresh profile never has the file. This is the same creation the explicit
+   * {@link enableGlobalPlane} call performs, run once; it never throws into the
+   * read — a failure is logged and the roster reports the read-only reason, so the
+   * page keeps its own retry action.
+   * @returns a promise resolving after the one attempt, success or not.
+   */
+  private async autoEnableGlobalPlane(): Promise<void> {
+    if (this.globalPlaneAutoTried) return
+    this.globalPlaneAutoTried = true
+    // Nothing to repair when a writable Include is already mounted, or when the
+    // plane is closed for a reason creating a file cannot fix.
+    if (this.writableIncludes().length !== 0) return
+    if (this.ctx.get('profileContext') === undefined) return
+    try {
+      const result = await this.enqueue(() => this.ensureGlobalPlane())
+      await this.gate.reconcile()
+      if (!result.mounted) {
+        this.warnPatch('mcp-manager: created the global Include but the composition did not mount it; restart the host to apply it')
+      }
+    } catch (cause) {
+      this.warnPatch('mcp-manager: automatic global Include creation failed: %s', String(cause))
+    }
+  }
+
+  /**
+   * Make the global plane writable, creating the user's own Include when needed.
+   *
+   * A freshly installed profile mounts only the host's root anchor Include, whose
+   * file the host regenerates on every start, so the settings page has nothing it
+   * may patch and offers no global target. This call supplies that file: it
+   * writes an entry-list file beside the profile and appends the patch row that
+   * mounts it, then rebuilds the composition so the plane is writable in the same
+   * session. A composition that already has exactly one writable Include is left
+   * untouched, and one with several stays closed — no single file can be named.
+   * @param request - empty placeholder; the plane is host-wide.
+   * @returns what was written and whether a global write can land now.
+   * @throws a typed MCP error when the profile patch layer cannot be written or
+   *   the Include row does not mount.
+   */
+  @Remote('enableGlobalPlane')
+  async enableGlobalPlane(request: EnableGlobalPlaneRequest): Promise<EnableGlobalPlaneResult> {
+    void request
+    const result = await this.enqueue(() => this.ensureGlobalPlane())
+    await this.gate.reconcile()
+    return result
   }
 
   /**
@@ -553,6 +637,90 @@ export class McpManager extends TypertRemoteService {
     return findPresetDeclaration(this.ctx, target.agentPreset)
   }
 
+  /** The writable Includes the running composition mounts, in composition order. */
+  private writableIncludes() {
+    return writableGlobalIncludes(this.loader().entries())
+  }
+
+  /**
+   * Create the user's global Include when the profile mounts none.
+   *
+   * The row goes into the profile patch layer, which is the only composition
+   * layer that survives `prepareProfile`. Writing it is followed by a rebuild:
+   * the patch layer is read at boot, so an in-session write is invisible until
+   * the composition is reconciled through the boot package.
+   * @returns what was written and whether the Include is mounted now.
+   * @throws a typed MCP error when the plane is ambiguous, the host mounted no
+   *   patch layer, or the patch write itself fails.
+   */
+  private async ensureGlobalPlane(): Promise<EnableGlobalPlaneResult> {
+    const before = this.writableIncludes()
+    if (before.length > 1) {
+      throw new RemoteError('mcp/read-only', 'the global plane has several writable Includes', {
+        target: { scope: 'global' },
+        reason: `${before.length} file-backed Includes of your own are mounted, so no single file can be addressed`,
+      })
+    }
+    if (before.length === 1) {
+      return { includePath: before[0]!.filename, created: false, patchChanged: false, mounted: true }
+    }
+    const profile = this.ctx.get('profileContext') as ProfileFacts | undefined
+    if (profile === undefined) {
+      throw new RemoteError('mcp/unavailable', 'this host launched no profile, so it has no patch layer to declare a global Include in', {
+        reason: 'the profileContext service is unavailable',
+      })
+    }
+    const hmr = this.ctx.get('hmr') as HmrService | undefined
+    const create = async () => ensureGlobalInclude({
+      profileDir: profile.dir,
+      patchPath: profile.patchPath,
+      reconcile: () => this.reloadProfileComposition(profile),
+    })
+    let created: Awaited<ReturnType<typeof ensureGlobalInclude>>
+    try {
+      created = hmr === undefined ? await create() : await hmr.runExclusive(create)
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : String(cause)
+      throw new RemoteError('mcp/invalid', 'the profile patch layer could not be extended with a global Include', {
+        target: { scope: 'global' },
+        reason,
+      }, { cause })
+    }
+    let mounted = this.writableIncludes().length === 1
+    if (!mounted) {
+      // The row is on disk; the live tree may lag when the write's own rebuild
+      // failed or this host hides the boot package. One more rebuild is cheap and
+      // decides between "apply now" and "restart first" for the caller.
+      try {
+        await this.reloadProfileComposition(profile)
+        mounted = this.writableIncludes().length === 1
+      } catch (cause) {
+        this.warnPatch('mcp-manager: global Include reload failed: %s', String(cause))
+      }
+    }
+    return { includePath: created.filename, created: created.created, patchChanged: created.patchChanged, mounted }
+  }
+
+  /**
+   * Rebuild the composition from the profile's patch layers.
+   *
+   * The boot package owns the root Include and the reconciliation, so it is
+   * resolved through the host module loader, the same way this plugin resolves
+   * the other Harness runtime packages it does not bundle.
+   * @param profile - profile facts read from the host.
+   * @throws when the host exposes no loader bridge or no boot package.
+   */
+  private async reloadProfileComposition(profile: ProfileFacts): Promise<void> {
+    const internal = this.loader().internal
+    if (internal === undefined) throw new Error('the Harness module loader is unavailable')
+    const appBoot = await internal.import('@deepseek-ai/dsh-app-boot', this.ctx.baseUrl ?? import.meta.url, {}) as Partial<AppBootRuntime>
+    if (typeof appBoot.readProfilePatches !== 'function' || typeof appBoot.reconcileProfilePatches !== 'function') {
+      throw new Error('the Harness boot package does not expose profile reconciliation')
+    }
+    const patches = appBoot.readProfilePatches('dsh', profile)
+    await appBoot.reconcileProfilePatches(this.ctx.root, patches, 'dsh')
+  }
+
   private async globalInclude(target: Extract<McpTarget, { scope: 'global' }>): Promise<{ entry: Entry; tree: WritableIncludeTree }> {
     const entries = [...this.loader().entries()]
     const mounted = entries.filter(entry => isIncludeRow(entry.options) && entry.subtree !== undefined)
@@ -773,6 +941,8 @@ export class McpManager extends TypertRemoteService {
   private loader() {
     return this.ctx.get('loader') as {
       entries(): IterableIterator<Entry>
+      /** The Harness module bridge, present in a launched host. */
+      readonly internal?: { import(specifier: string, base: string, options: object): Promise<unknown> }
     }
   }
 

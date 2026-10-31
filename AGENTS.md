@@ -24,7 +24,8 @@
   `mcp-pool.ts`、`mcp-inventory.ts`、`mcp-tool-filter.ts`、`mcp-optimize.ts`、`mcp-spec.ts`、
   `mcp-diagnostics.ts`、`mcp-variable-refs.ts`、`mcp-tool-name.ts`。
 - 宿主侧其余：`mcp-gate.ts`（预加载闸门）、`mcp-authoring.ts`（行写入）、`mcp-roster.ts`（名册）、
-  `preset-mounts.ts` / `preset-source.ts`、`external-mcp.ts`、`mcp-tokens.ts`（工具定义 token 估算）、
+  `mcp-global-include.ts`（缺可写 Include 时创建 profile 自己的 `mcp.cordis.yml` 并往 patch 层追加
+  `cordis:include` 行，再触发热重载）、`preset-mounts.ts` / `preset-source.ts`、`external-mcp.ts`、`mcp-tokens.ts`（工具定义 token 估算）、
   `settings.ts`、
   `remote.ts`（手写的客户端 `TYPERT_REMOTE` 贡献对象）、`mcp-modules.ts`（宿主包名常量，gate 与组合读取共用一份拼写）。
 - `lib/` —— 构建产物**已提交进仓库**（`index.mjs` host + `client.js` 浏览器 handoff），别人可直接从 git 安装。
@@ -77,7 +78,7 @@ npm run test:harness   # 先重建分发产物，再跑真实 Loader/registry/sc
 8. **凭据纪律**：不要把 spec / `env` / `headers` 的值打进日志、错误消息或诊断。
 9. **活设置不要靠重建注册**：除加载模式与 `search` 开关外，策略字段一律在调用点读活值。
 10. **没跑过的项不要写成已通过**；改加载、池或闸门行为后按 `docs/testing.md` 复跑并把新结果写回去。
-11. **44 条易崩清单**在 [.claude/rules/pitfalls-and-decisions.md](.claude/rules/pitfalls-and-decisions.md)，动相关代码前先扫一遍。
+11. **45 条易崩清单**在 [.claude/rules/pitfalls-and-decisions.md](.claude/rules/pitfalls-and-decisions.md)，动相关代码前先扫一遍。
 
 ## 详细规则
 
@@ -92,4 +93,4 @@ npm run test:harness   # 先重建分发产物，再跑真实 Loader/registry/sc
 - [settings-ui-and-spec.md](.claude/rules/settings-ui-and-spec.md)：设置页分区与行级只读、行内布局与工具列表 token 估算、MCP JSON 推断；改设置页交互、工具列表或 spec 解析时读。
 - [build-and-contract.md](.claude/rules/build-and-contract.md)：目录与文档分工、构建细节、Cordis 契约、Typert Remote、部署/安装/接线、发版；动构建或通信契约时读。
 - [testing-and-measurements.md](.claude/rules/testing-and-measurements.md)：测试命令与覆盖矩阵、隔离实例测量数据与未覆盖项；跑测试或更新验证记录时读。
-- [pitfalls-and-decisions.md](.claude/rules/pitfalls-and-decisions.md)：44 条易崩清单与 D1–D17 决策表；动相关代码前扫一遍或查决策理由时读。
+- [pitfalls-and-decisions.md](.claude/rules/pitfalls-and-decisions.md)：45 条易崩清单与 D1–D33 决策表；动相关代码前扫一遍或查决策理由时读。

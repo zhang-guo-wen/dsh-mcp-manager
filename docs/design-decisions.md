@@ -46,7 +46,8 @@ kind: "package-reference"
 | D30 | 工具列表按 token 展示、加载态居中；设置页删掉两句说明、加载方式占满整行（2026-10-16） | 工具列表原本只说"默认全部启用"，说不出取消勾选省了多少；等待塞在按钮文字里会把上方提示挤动；两句删除的描述都是控件的复述 |
 | D31 | JSON 配置的校验结果显示在该字段的标签行上，鼠标失焦时才判（2026-10-16） | 一个读不出来的文档是**当场**能改的问题，报在表单底部的共用错误行里（还会被弹窗滚动裁掉）等于让用户去找；写一半的文档不该被判错 |
 | D32 | 工具列表页去掉「加载工具列表」按钮：进页签即列举、表单变了才重列（2026-10-16） | 那一行只有它一个按钮时，下面的说明句会跟着上下掉一行；而"打开这一页"本来就是列举的触发点，按钮只是把同一件事再说一遍 |
-
+| D33 | 没有可写 Include 时由插件自动创建（2026-10-27） | 默认 profile 只有宿主 root anchor，「全局」永远置灰等于半个功能不可用；创建自己的 Include 是唯一能落地全局行的形状，应由插件代劳 |
+| D34 | 空态只留一句「还没有」，删掉解释句与平面按钮（2026-10-27） | 用户点名删掉；计数与落点筛选已经把「这一档是谁」说清，空态再复述一遍并给第二个新增入口是重复 |
 | D35 | 所有 MCP 目录统一 SQLite 持久化，仅服务器类型按声明 TTL 或手动刷新（2026-10-28） | 去掉用户 TTL 偏好，目录状态紧随缓存标题；刷新不能启动本地进程 |
 
 ### D35 统一工具目录数据库
@@ -518,6 +519,36 @@ kind: "package-reference"
   4. **把说明句放进固定高度的容器**：那只是把跳动换成一个更难解释的空白块；根因是那一行本身不需要存在。
 - **实现**：[`src/client/McpEditor.tsx`](../src/client/McpEditor.tsx)（`pickTab` / `listingTarget` / `listedFor` / `loadToolsFromForm`）、`McpSection.module.css`（`.toolsHead` 的 `min-height`）、`locales.ts`（删 `mcp.form.toolsReload`，`toolsNeedsName` 文案改成不再提按钮）。
 - **测试**：`npm test` **23 文件 / 258 项**全绿；浏览器读数（四种状态下提示行都在 y=373、工具行 28px、没有加载按钮、改过表单后重列会进 connecting、新增弹窗也能列举）见 [testing.md](testing.md) 第十七节。
+
+### D33 没有可写 Include 时由插件自动创建（2026-10-27）
+
+- **背景**（用户原话：「我刚安装的，为什么全局置灰，是默认就这些？不能写全局？」）：全新 profile 只挂宿主的 root anchor Include，`globalWritable` 恒为 false，于是「全局」永远置灰、「新增到全局」永远不出现。用户能写预设，却以为整台 MCP 管理只支持预设；这也让插件自述的「全局平面 + 各 agent preset」少了一半。
+- **结论**：
+  1. **远端新增 `enableGlobalPlane`**：没有可写 Include 时，在 profile 目录写 `mcp.cordis.yml`（`[]`），向 `cordis.patch.yml` 追加一行 `insert` 的 `cordis:include`（`initial: []`），随后经 boot 包的 `readProfilePatches` + `reconcileProfilePatches` 重建组合；返回 `includePath / created / patchChanged / mounted`。
+  2. **首次名册读取时自动创建一次**（2026-10-27 晚些的用户要求：「这个还要我手动启用，不能插件自己自动启用一次吗」）：`listMcps` 在每个宿主进程的第一次调用里，若组合没有可写 Include 且存在 `profileContext`，先执行同一次创建再返回名册——打开「MCP 管理」就自动完成，不用点任何按钮。每个进程只试一次；失败只记 warn，名册照常返回 `no-writable-include`，页面保留显式按钮重试。
+  3. **只改 profile patch 层，不动宿主 root**：root anchor 的文件每次启动被 `prepareProfile` 重写，写它等于丢；`loader.create` 会触发 Include 写回并把补丁拍平（D11 的老坑）。patch 层追加是唯一同时满足「持久」「不拍平」「能热重载」的路径。
+  4. **显式入口保留**：名册按钮与「在新增弹窗里把落点切到「全局」」仍执行同一创建，用于自动创建失败、老宿主或手动重试；写成功但没挂载时返回 `mounted: false` 并提示重启后生效。
+- **被否决**：
+  1. **默认组合里预置一个 Include**：等于替所有用户改组合，且安装前的 profile 不受控；插件安装本身不应重写组合。
+  2. **把全局行写到宿主 root Include**：下次启动即丢（D11）。
+  3. **只修文案、让用户自己手改 `cordis.patch.yml`**：这正是用户报的问题本身；能自动做的事不该让用户手工编辑 YAML。
+  4. **在 `apply` / 启动阶段创建**：boot 期间更新 root Include 的补丁层有重入与时序风险，且用户可能从不打开 MCP 管理；「首次 roster 读」既是用户真的要用它的时机，又不需要按钮。
+- **实现**：[`src/mcp-global-include.ts`](../src/mcp-global-include.ts)（纯计划 `planGlobalInclude` + 落盘 `ensureGlobalInclude`）、[`src/mcp-remote.ts`](../src/mcp-remote.ts)（Remote 方法、`listMcps` 的一次性自动创建、boot 重载）、[`src/mcp-roster.ts`](../src/mcp-roster.ts)（名册带 `globalReason`）、[`src/client/McpSection.tsx`](../src/client/McpSection.tsx) / [`McpEditor.tsx`](../src/client/McpEditor.tsx) / [`McpTargetSelect.tsx`](../src/client/McpTargetSelect.tsx)、`locales.ts`。
+- **测试**：`npm test` **24 文件 / 268 项**、`npm run test:harness` **7 文件 / 27 项**全绿（含 `tests/global-auto-enable.harness.spec.ts` 的 2 项自动创建用例）；隔离实例真实点击读数见 [testing.md](testing.md) 第十八、二十节。
+
+### D34 空态只留一句「还没有」（2026-10-27）
+
+- **背景**（用户原话指着名册空态的高亮块说：「然后去掉这个描述和新建按钮」）：预设为空时，空态除了标题「这个筛选下还没有 MCP 服务器」，还有一句解释「当前筛选显示…加上所有全局行（全局行已在上面列出）…」和一个「新增到 Agent 预设」按钮。
+- **结论**：
+  1. **删掉解释句**（`mcp.empty.row.hint` 字典键一并删除）：它把计数与落点筛选已经说清的事再说一遍，而且在全局平面只读时那句「全局行已在上面列出」是错的。
+  2. **删掉空态里的新增按钮**（`mcp.empty.addGlobal` / `mcp.empty.addAgent` 一并删除）：列表右上角的「新增 MCP」是唯一的创建入口，空态不必给第二个，也不该替用户预设落点。
+  3. **搜索无命中的分支保留**：`mcp.noMatch` + 「换个关键词，或清空筛选框。」说的不是同一件事（那是搜索没命中，不是这一档为空），原样保留。
+- **被否决**：
+  1. **保留说明句、只删按钮**：说明句本身就是用户要去掉的「这个描述」，而且它在只读全局时是错的。
+  2. **把说明句改成一句更短的**：计数「0 行 · 已启用 0」与筛选下拉已经把同一信息说完，再加一句仍属重复。
+  3. **保留按钮、把落点做成两个按钮**：正是 D27 收掉的「同一问题两个答案」。
+- **实现**：[`src/client/McpSection.tsx`](../src/client/McpSection.tsx) 的 `emptyList`、`locales.ts`（删三个键）。
+- **测试**：`npm test` **24 文件 / 268 项**、`npm run test:harness` **7 文件 / 27 项**全绿；隔离实例真实点击读数见 [testing.md](testing.md) 第十九节。
 
 ## 先例：Claude 的 MCP 延迟加载
 

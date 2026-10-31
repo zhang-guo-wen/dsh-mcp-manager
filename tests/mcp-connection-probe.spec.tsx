@@ -38,7 +38,7 @@ function props(): EditorProps {
     listMcpTools: vi.fn(async () => result(2)),
     presetName: preset => preset.name ?? preset.id,
     presets: vi.fn(async () => []), plane: 'global', tab: 'config',
-    globalWritable: true,
+    globalWritable: true, globalCreatable: false, onEnableGlobal: vi.fn(async () => 'ready' as const),
     descriptionInitial: '', onUpdateDescription: vi.fn(async () => {}),
     toolRulesInitial: [], onUpdateTools: vi.fn(async () => {}), t,
     onClose: vi.fn(), onSubmit: vi.fn(),
