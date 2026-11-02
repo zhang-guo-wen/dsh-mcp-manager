@@ -690,6 +690,7 @@ export function registerMcpTools(
     agents.delete(agentId)
     const perAgent = views.get(agentId)
     if (perAgent === undefined) return
+    if (perAgent.size === 0) views.delete(agentId)
     for (const serverName of [...perAgent.keys()]) void releaseView(agentId, serverName)
   }
 
@@ -1067,7 +1068,7 @@ export function registerMcpTools(
         const detail = parseDetailLevel(request.detail, policy, wanted !== undefined)
         const page = { cursor: request.cursor, limit }
 
-        const existing = viewsFor(agent.id).get(serverName)
+        const existing = views.get(agent.id)?.get(serverName)
         if (existing !== undefined) {
           // A second load only ever widens what the session already has, so a
           // later query can add tools without taking any away. A load with no
@@ -1199,7 +1200,7 @@ export function registerMcpTools(
         // was connecting or registering. The first view keeps what it registered
         // — a later load only ever widens — so this one undoes its own
         // registrations and claim instead of silently clobbering the winner.
-        const won = viewsFor(agent.id).get(serverName)
+        const won = views.get(agent.id)?.get(serverName)
         if (won !== undefined) {
           for (const dispose of [...definitions.values()].reverse()) dispose()
           definitions.clear()

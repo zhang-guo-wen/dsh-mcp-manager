@@ -1642,7 +1642,7 @@ JSON 旁边，鼠标失焦时才显示。取舍见 [design-decisions.md](design-
 |---|---|
 | 日期 | 2026-11-02T18:52Z |
 | 类型检查 | `npm run typecheck` 通过 |
-| 构建 | `npm run build` 通过；`lib/index.mjs` = `2fe590e8dd3d094cd15f0cb2e4dd0dc4ceed1f993d27dd9b95476d6baca89aeb`（239 kB），`lib/client.js` = `eaa19da9faf456bdf417599543cd395ea8b3a050cf3ef6139d351f709a98b8f1` |
+| 构建 | `npm run build` 通过；`lib/index.mjs` = `b7344865ed4283752c69aed603bf8abaa7b341ea58ff7a656321be8ab5cae498`（239 kB），`lib/client.js` = `eaa19da9faf456bdf417599543cd395ea8b3a050cf3ef6139d351f709a98b8f1` |
 | 单元/组件 | `npm test` **33 文件 / 353 项**通过（修复前基线 31 / 332） |
 | 元数据 | `node --test tests/plugin-metadata.test.mjs` **2/2** 通过 |
 | Harness 回归 | **未运行**：本机没有匹配的 Harness 源码检出，也未设 `DSH_HARNESS_ROOT`；`npm run test:harness` 需要该检出，本轮不把真实 Loader/registry/scope 回归记作通过 |
