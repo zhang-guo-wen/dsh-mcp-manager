@@ -98,11 +98,16 @@ function harness(options: {
   filters?: Record<string, unknown>
   catalog?: McpCatalog<LazyTool>
   http?: boolean
+  /** Reject a second registration of one name, as the real registry does. */
+  strict?: boolean
 }) {
   const rows = options.rows ?? [{ serverName: 'alpha' }]
   const definitions = new Map<string, { name: string; execute(args: unknown, exec: unknown): Promise<never> }>()
   const registry = {
     register(definition: { name: string }) {
+      if (options.strict === true && definitions.has(definition.name)) {
+        throw new Error(`tool "${definition.name}" is already registered in this scope`)
+      }
       definitions.set(definition.name, definition as never)
       return () => { definitions.delete(definition.name) }
     },
@@ -193,7 +198,7 @@ function harness(options: {
     if (definition === undefined) throw new Error(`tool "${name}" is not registered`)
     return await definition.execute(args, exec)
   }
-  return { run, registered: () => [...definitions.keys()], catalog }
+  return { run, registered: () => [...definitions.keys()], catalog, dispose: () => registration.dispose() }
 }
 
 beforeEach(() => {
@@ -694,5 +699,49 @@ describe('a connection whose transport ends on its own', () => {
     // serial queue has settled — and the reload opened a second client.
     expect(sdk.clients[0]?.closed).toBe(1)
     expect(sdk.clients).toHaveLength(2)
+  })
+})
+
+describe('lazy reloading and parallel loads', () => {
+  it('keeps the proxy carrier out of the tool registry when a lazy view widens', async () => {
+    setToolPages([tools('create_issue', 'list_projects')])
+    const h = harness({ mode: 'lazy' })
+    await h.run('mcp_load', { server: 'alpha', query: 'create' })
+    const result = await h.run('mcp_load', { server: 'alpha', query: 'list' })
+    // `lazy` registers nothing by contract: widening only changes what
+    // `mcp_call` admits, never the session's tool list.
+    expect(result.widened).toBe(true)
+    expect(result.loaded).toBe(2)
+    expect(h.registered().filter(name => name.startsWith('mcp__alpha__'))).toEqual([])
+  })
+
+  it('serializes two parallel loads of one server so neither fails a duplicate registration', async () => {
+    setToolPages([tools('a', 'b')])
+    const h = harness({ mode: 'dynamic', strict: true })
+    const [first, second] = await Promise.all([
+      h.run('mcp_load', { server: 'alpha', query: 'a' }),
+      h.run('mcp_load', { server: 'alpha', query: 'b' }),
+    ])
+    // The second load waits, sees the winner's view, and widens it.
+    expect([first.loaded, second.loaded].sort()).toEqual([1, 2])
+    expect(h.registered().filter(name => name.startsWith('mcp__alpha__')).sort())
+      .toEqual(['mcp__alpha__a', 'mcp__alpha__b'])
+    await h.run('mcp_unload', { server: 'alpha' })
+    expect(h.registered().filter(name => name.startsWith('mcp__alpha__'))).toEqual([])
+  })
+
+  it('drops a load whose registration was disposed while the server was starting', async () => {
+    setToolPages([tools('a')])
+    let release!: () => void
+    sdk.connectGate = new Promise<void>(resolve => { release = resolve })
+    const h = harness({ mode: 'dynamic' })
+    const loading = h.run('mcp_load', { server: 'alpha' })
+    // Let the load reach the pool's connect before the registration goes away.
+    await Promise.resolve()
+    await h.dispose()
+    release()
+    await expect(loading).rejects.toThrow(/registration was rebuilt/)
+    expect(h.registered().filter(name => name.startsWith('mcp__alpha__'))).toEqual([])
+    expect(sdk.clients[0]?.closed).toBe(1)
   })
 })

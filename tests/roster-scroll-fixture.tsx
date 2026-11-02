@@ -81,7 +81,7 @@ const common = {
   clearCatalog: async () => { const cleared = catalogEntries.length; catalogEntries = []; return { cleared } },
   refreshCatalog: async () => { refreshCalls += 1; await new Promise(resolve => setTimeout(resolve, 50)); return { refreshed: 1, failed: [] } },
   enableGlobalPlane: async () => ({ includePath: 'fixture-only', created: false, patchChanged: false, mounted: true }),
-  suppressedMcps: async () => [], presets: async () => presets,
+  suppressedMcps: async () => [],
 }
 function Fixture() {
   const [reader, setReader] = useState(() => readRoster)

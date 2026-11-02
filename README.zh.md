@@ -46,7 +46,7 @@ npx @deepseek-ai/dsh plugin --profile web add @guowenzhang/dsh-mcp-manager@^1.1.
 | 设置 | 作用 |
 |---|---|
 | **工具检索**（`search`） | 注册 `mcp_search`：模型用关键词在所有已发现的服务器里找工具，只拿到工具名和一行描述。 |
-| **检索时索引未缓存的服务器**（`searchIndex`） | 允许检索为还没有工具目录的服务器临时连一次（最多同时 3 台、单台 8 秒）。默认关闭，保证检索是一次廉价读取。 |
+| **检索时索引未缓存的服务器**（`searchIndex`） | 允许检索为还没有工具目录的服务器临时连一次（最多同时 3 台、整次检索 8 秒预算）。默认关闭，保证检索是一次廉价读取。 |
 | **每次列出条数**（`pageSize`） | `mcp_load` / `mcp_search` 一次最多列出这么多条，其余用 `nextCursor` 翻页。 |
 | **只列名称与描述**（`namesOnly`） | `mcp_load` 默认不带参数 schema；按名字要某一个工具时仍会返回它的完整参数。 |
 | **单台服务器最多拉取**（`maxTools`） | 给 `tools/list` 翻页设上限，超大服务器不会一次灌满请求。 |

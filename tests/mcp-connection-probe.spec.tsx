@@ -5,7 +5,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { McpEditor } from '../src/client/McpEditor.tsx'
 import { en, zh, type McpSectionKey } from '../src/client/locales.ts'
-import type { ListMcpToolsResult, McpSpec } from '../src/types.ts'
+import type { McpServer } from '../src/client/settings-controller.ts'
+import type { DescribeMcpResult, ListMcpToolsResult, McpSpec } from '../src/types.ts'
 
 // Keep host overlay/focus machinery outside this editor interaction suite.
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
@@ -37,11 +38,28 @@ function props(): EditorProps {
     describeMcp: vi.fn(async () => ({ target: { scope: 'global' as const }, entryId: 'fixture', spec: localSpec, serverName: 'fixture', disabled: false })),
     listMcpTools: vi.fn(async () => result(2)),
     presetName: preset => preset.name ?? preset.id,
-    presets: vi.fn(async () => []), plane: 'global', tab: 'config',
+    presets: [], plane: 'global', tab: 'config',
     globalWritable: true, globalCreatable: false, onEnableGlobal: vi.fn(async () => 'ready' as const),
     descriptionInitial: '', onUpdateDescription: vi.fn(async () => {}),
     toolRulesInitial: [], onUpdateTools: vi.fn(async () => {}), t,
     onClose: vi.fn(), onSubmit: vi.fn(),
+  }
+}
+
+
+/** One roster row the editor can open. */
+function server(overrides: Partial<McpServer> = {}): McpServer {
+  return {
+    entryId: 'fixture', serverName: 'fixture', scope: 'global', presetId: undefined,
+    enabled: true, writable: true, fiberPhase: null, secretKeys: [], ...overrides,
+  }
+}
+
+/** One describe answer for the row named by the request. */
+function describedFor(request: { entryId: string }, overrides: Partial<DescribeMcpResult> = {}): DescribeMcpResult {
+  return {
+    target: { scope: 'global' }, entryId: request.entryId, serverName: 'fixture',
+    spec: localSpec, disabled: false, ...overrides,
   }
 }
 
@@ -212,16 +230,17 @@ describe('new MCP connection probe', () => {
   })
 
   it('keeps the add target and edited JSON when the locale translator changes', async () => {
-    const presets = vi.fn(async () => [{ id: 'standard' }, { id: 'ptc' }])
+    const presets = [{ id: 'standard' }, { id: 'ptc' }]
     await mount({ plane: 'agent', preset: 'ptc', presets })
     await configure({ ...localSpec, args: ['edited.mjs'] }, 'edited-server')
     const target = container.querySelector('select')!
     await act(async () => { target.value = 'standard'; target.dispatchEvent(new Event('change', { bubbles: true })) })
-    const calls = presets.mock.calls.length
     await render({ t: key => zh[key], presetName: preset => preset.id === 'standard' ? '标准模式' : 'PTC 模式' })
     expect(container.querySelector('select')?.value).toBe('standard')
     expect(container.querySelector('textarea')?.value).toContain('edited.mjs')
-    expect(presets.mock.calls.length).toBe(calls)
+    // The roster already carried the presets; the dialog must not fetch again
+    // and reset the form when its translator changes.
+    expect(container.textContent).toContain('标准模式')
   })
 
   it('does not require a probe before saving and never offers the probe in edit mode', async () => {
@@ -236,7 +255,7 @@ describe('new MCP connection probe', () => {
 
   it('does not use the probe result as the tools pane listing or rewrite its filters', async () => {
     const listMcpTools = vi.fn().mockResolvedValueOnce(result(2)).mockResolvedValueOnce(result(1))
-    await mount({ listMcpTools, plane: 'agent', preset: 'assistant', presets: vi.fn(async () => [{ id: 'assistant', name: 'Assistant' }]) })
+    await mount({ listMcpTools, plane: 'agent', preset: 'assistant', presets: [{ id: 'assistant', name: 'Assistant' }] })
     await configure()
     await click(t('mcp.form.probe'))
     await click(t('mcp.form.tabTools'))
@@ -262,5 +281,93 @@ describe('new MCP connection probe', () => {
     await enter(translate('mcp.form.serverName'), 'fixture')
     await click(translate('mcp.form.probe'))
     expect(container.textContent).toContain(translate('mcp.form.probeSuccessLocal').replace('{n}', '2'))
+  })
+})
+
+describe('editing an existing MCP row', () => {
+  it('reports an initial read failure instead of presenting a blank configuration, and can retry', async () => {
+    const describeMcp = vi.fn()
+      .mockRejectedValueOnce(new Error('row disappeared'))
+      .mockResolvedValueOnce(describedFor({ entryId: 'fixture' }))
+    await mount({ mode: 'edit', server: server(), describeMcp })
+    expect(container.textContent).toContain('row disappeared')
+    expect(container.querySelector('textarea')?.value).toBe('')
+    expect(button(t('mcp.form.save')).disabled).toBe(true)
+    await click(t('mcp.retry'))
+    expect(describeMcp).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('textarea')?.value).toContain('"command": "node"')
+    expect(container.textContent).not.toContain('row disappeared')
+    expect(button(t('mcp.form.save')).disabled).toBe(false)
+  })
+
+  it('lists the tools when the tools pane is opened while the row is still being read', async () => {
+    const pending = deferred<DescribeMcpResult>()
+    const listMcpTools = vi.fn(async () => result(2))
+    await mount({
+      mode: 'edit', server: server({ scope: 'preset', presetId: 'standard' }),
+      describeMcp: vi.fn(() => pending.promise), listMcpTools,
+    })
+    await click(t('mcp.form.tabTools'))
+    expect(listMcpTools).not.toHaveBeenCalled()
+    await act(async () => { pending.resolve(describedFor({ entryId: 'fixture' })) })
+    expect(listMcpTools).toHaveBeenCalledWith({ spec: localSpec, serverName: 'fixture' })
+    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(2)
+  })
+
+  it('ignores a tools listing that arrives after another row was opened', async () => {
+    const late = deferred<ListMcpToolsResult>()
+    const listMcpTools = vi.fn()
+      .mockReturnValueOnce(late.promise)
+      .mockRejectedValueOnce(new Error('second row failed'))
+    const describeMcp = vi.fn(async (request: { entryId: string }) => describedFor(request, {
+      serverName: request.entryId,
+      spec: { type: 'stdio', command: `run-${request.entryId}` },
+    }))
+    await mount({
+      mode: 'edit', server: server({ entryId: 'a', serverName: 'a', scope: 'preset', presetId: 'standard' }),
+      describeMcp, listMcpTools,
+    })
+    await click(t('mcp.form.tabTools'))
+    expect(listMcpTools).toHaveBeenCalledTimes(1)
+    // Open row b while row a's listing is still in flight.
+    await render({ server: server({ entryId: 'b', serverName: 'b', scope: 'preset', presetId: 'standard' }) })
+    await click(t('mcp.form.tabTools'))
+    expect(container.textContent).toContain('second row failed')
+    await act(async () => { late.resolve(result(3)) })
+    // Row a's tools must not appear under row b, and saving must not write a's
+    // rules into b's setting key.
+    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(0)
+    expect(container.textContent).not.toContain('tool_0')
+    await click(t('mcp.form.save'))
+    expect(current.onUpdateTools).not.toHaveBeenCalled()
+  })
+
+  it('clears a stored description when the field is emptied', async () => {
+    await mount({
+      mode: 'edit', server: server(), descriptionInitial: 'Old description',
+      describeMcp: vi.fn(async () => describedFor({ entryId: 'fixture' })),
+    })
+    await enter(t('mcp.form.description'), '')
+    await click(t('mcp.form.save'))
+    expect(current.onSubmit).toHaveBeenCalledTimes(1)
+    expect(current.onUpdateDescription).toHaveBeenCalledWith('global:fixture', '')
+  })
+
+  it('uses the configuration owner as the authoritative server name', async () => {
+    await mount({
+      mode: 'edit',
+      server: server({ entryId: 'legacy-entry', serverName: 'legacy-entry' }),
+      describeMcp: vi.fn(async () => describedFor({ entryId: 'legacy-entry' }, { serverName: 'renamed' })),
+    })
+    const name = [...container.querySelectorAll('input')].find(item => item.getAttribute('aria-label') === t('mcp.form.serverName'))
+    expect(name?.value).toBe('renamed')
+  })
+
+  it('refuses to edit a row with no addressable id instead of offering a blank form', async () => {
+    const describeMcp = vi.fn()
+    await mount({ mode: 'edit', server: server({ entryId: null }), describeMcp })
+    expect(container.textContent).toContain(t('mcp.error.unaddressable'))
+    expect(button(t('mcp.form.save')).disabled).toBe(true)
+    expect(describeMcp).not.toHaveBeenCalled()
   })
 })

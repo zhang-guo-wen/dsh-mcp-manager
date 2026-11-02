@@ -13,6 +13,11 @@ function expression(value: unknown): string | undefined {
   return typeof expr === 'string' ? expr : undefined
 }
 
+/** Whether a declared value is a `!!js` expression rather than a literal. */
+export function isDeclaredExpression(value: unknown): boolean {
+  return expression(value) !== undefined
+}
+
 function enablement(values: readonly unknown[], evaluate?: (expr: string) => unknown): boolean | 'conditional' {
   let conditional = false
   for (const value of values) {
@@ -27,6 +32,18 @@ function enablement(values: readonly unknown[], evaluate?: (expr: string) => unk
     }
   }
   return conditional ? 'conditional' : true
+}
+
+/**
+ * Read one disabled value as the Loader would: a literal boolean, or a `!!js`
+ * expression evaluated in the row's own context. An expression this caller
+ * cannot evaluate stays `conditional` and never authorizes a load.
+ * @param value - the row's declared `disabled` value.
+ * @param evaluate - the row's Loader evaluator, when one is available.
+ * @returns whether the row is enabled, disabled, or only conditionally so.
+ */
+export function declaredEnabled(disabled: unknown, evaluate?: (expr: string) => unknown): boolean | 'conditional' {
+  return enablement([disabled], evaluate)
 }
 
 /** Walk group ancestry; an unevaluable expression never authorizes a load. */

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Connection-configuration diagnostics for one MCP row.
  *
  * A row can be authorized by the user and still be unable to start: its
@@ -7,7 +7,7 @@
  * blank. Those are configuration gaps, not loading modes, so they are reported
  * separately from the preload gate's live/unmounted state.
  *
- * The module is pure 鈥?the environment arrives as an argument 鈥?so the settings
+ * The module is pure — the environment arrives as an argument — so the settings
  * page, the roster read, the preload gate, and `mcp_load` all decide from the
  * same rules and vitest can drive it directly.
  *
@@ -172,7 +172,7 @@ export function describeMcpConfigIssues(issues: readonly McpConfigIssue[]): stri
  * Diagnose an authoring SPEC (the Claude-shaped form the editor edits).
  *
  * The editor holds the spec, not the `mcp-client` config, at the moment it
- * decides whether a save may proceed 鈥?and the config builder refuses a blank
+ * decides whether a save may proceed — and the config builder refuses a blank
  * `command`/`url` on its own. This narrows the check to what only the spec can
  * show: `${env:NAME}` references, and credential-shaped env/header fields left
  * empty. The caller supplies the environment, because the browser half has none

@@ -269,8 +269,6 @@ export interface McpSectionFace {
   suppressedMcps: () => Promise<readonly string[]>
   /** Resolve the current MCP roster without waiting for any row's activation. */
   mcps: () => Promise<McpRosterView>
-  /** Resolve the agent presets the editor can target. */
-  presets: () => Promise<readonly McpPresetOption[]>
   /** Resolve a name at render time through the Host's current Agent locale. */
   presetName: (preset: McpPresetOption) => string
 }
@@ -325,7 +323,7 @@ export function mapMcpServers(roster: ListMcpsResult): readonly McpServer[] {
  * headline instead of raw Host text.
  */
 export class McpSaveError extends Error {
-  constructor(readonly code: 'not-writable', message: string) {
+  constructor(readonly code: 'not-writable' | 'refused', message: string) {
     super(message)
     this.name = 'McpSaveError'
   }
@@ -337,14 +335,11 @@ export class McpSettingsController {
   private readonly unsubscribe: () => void
   /** One namespace write at a time: each queued write reads after the last landed. */
   private writeQueue: Promise<void> = Promise.resolve()
-  /** Optimization fields this controller wrote, ahead of a possibly stale snapshot. */
-  private optimizeWritten: Record<string, unknown> = {}
 
   /**
    * @param scope - the `mcp-manager` configuration form.
    * @param mcps - Host-backed MCP roster read.
    * @param authoring - Host-backed MCP mutation callbacks.
-   * @param presets - Host-backed agent-preset options loader.
    * @param suppressed - Host-backed reader of the rows the gate holds unmounted.
    * @param presetName - render-time Host Agent name resolver.
    */
@@ -352,7 +347,6 @@ export class McpSettingsController {
     private readonly scope: ConfigForm<McpSettingsFlags>,
     private readonly mcps: () => Promise<McpRosterView>,
     private readonly authoring: McpAuthoringActions,
-    private readonly presets: () => Promise<readonly McpPresetOption[]>,
     private readonly suppressed: () => Promise<readonly string[]>,
     private readonly presetName: (preset: McpPresetOption) => string,
   ) {
@@ -384,7 +378,6 @@ export class McpSettingsController {
       enableGlobalPlane: this.authoring.enableGlobalPlane,
       suppressedMcps: this.suppressed,
       mcps: this.mcps,
-      presets: this.presets,
       presetName: this.presetName,
     }
   }
@@ -417,9 +410,9 @@ export class McpSettingsController {
    * of that map rather than a separate namespace field. The Host converges every
    * field at read time, which is why nothing here validates the value: a bad one
    * falls back to its default instead of failing the namespace commit. Writes
-   * are serialized and fold in every field this controller already wrote, so
-   * two rows saving at once cannot drop each other's value through a stale
-   * snapshot.
+   * are serialized, and each one starts from the snapshot the previous write
+   * just settled into, so two rows saving at once cannot drop each other's
+   * value.
    * @param field - the policy field name.
    * @param value - the value to store.
    * @throws {@link McpSaveError} when the document is not writable, or when the
@@ -427,9 +420,10 @@ export class McpSettingsController {
    */
   private setOptimize(field: string, value: unknown): Promise<void> {
     return this.enqueueWrite(async () => {
-      const next = { ...await this.readWritable('optimize'), ...this.optimizeWritten, [field]: value }
-      await this.scope.set('optimize', next)
-      this.optimizeWritten = { ...this.optimizeWritten, [field]: value }
+      const next = { ...await this.readWritable('optimize'), [field]: value }
+      if (!await this.scope.set('optimize', next)) {
+        throw new McpSaveError('refused', 'the Host refused the optimization policy write')
+      }
     })
   }
 
@@ -439,7 +433,9 @@ export class McpSettingsController {
       const next = { ...map }
       if (description === '') Reflect.deleteProperty(next, key)
       else next[key] = description
-      await this.scope.set('descriptions', next)
+      if (!await this.scope.set('descriptions', next)) {
+        throw new McpSaveError('refused', 'the Host refused the description write')
+      }
     })
   }
 
@@ -449,17 +445,23 @@ export class McpSettingsController {
       const next = { ...map }
       if (patterns.length === 0) Reflect.deleteProperty(next, key)
       else next[key] = [...patterns]
-      await this.scope.set('tools', next)
+      if (!await this.scope.set('tools', next)) {
+        throw new McpSaveError('refused', 'the Host refused the tool-rule write')
+      }
     })
   }
 
   private async setMcpLoading(mode: McpLoadingOption): Promise<void> {
     const snapshot = this.scope.getSnapshot()
-    if (snapshot.status !== 'ready' || !snapshot.writable) return
+    if (snapshot.status !== 'ready' || !snapshot.writable) {
+      throw new McpSaveError('not-writable', 'the MCP settings document is not writable')
+    }
     if (snapshot.value?.loading === mode) return
-    // The form answers whether the Host accepted the write; the section shows
-    // the committed value through the mirror either way.
-    await this.scope.set('loading', mode)
+    // A refused write must not be reported as saved: the picker shows the
+    // committed value through the mirror, so the caller decides the state.
+    if (!await this.scope.set('loading', mode)) {
+      throw new McpSaveError('refused', 'the Host refused the loading-mode write')
+    }
   }
 
   private projection(): McpSectionState {

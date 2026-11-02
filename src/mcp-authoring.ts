@@ -2,7 +2,7 @@
 
 import { readFileSync } from 'node:fs'
 import { lstat, readFile } from 'node:fs/promises'
-import { dirname, extname, resolve } from 'node:path'
+import { extname, resolve } from 'node:path'
 import { dump, load } from 'js-yaml'
 import { applyEntryPatches, entryListSchema, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
@@ -166,21 +166,30 @@ export function entryIds(rows: readonly EntryOptions[]): Set<string> {
   return ids
 }
 
-/** Reject a preset path that traverses a symbolic link. */
-async function assertNoSymlink(path: string): Promise<void> {
-  let current = resolve(path)
-  for (;;) {
-    try {
-      if ((await lstat(current)).isSymbolicLink()) {
-        throw new Error(`preset composition path contains a symbolic link: ${current}`)
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
-    const parent = dirname(current)
-    if (parent === current) return
-    current = parent
+/**
+ * Refuse to write through a symbolic link.
+ *
+ * Only the final target is checked: an ancestor directory that happens to be a
+ * symlink (`/home` on macOS, a NixOS profile path) is normal and must not close
+ * every write. The atomic replacement writes a fresh sibling and renames it
+ * over the target, so this check is what keeps a planted link from redirecting
+ * that replacement.
+ * @param filename - the entry-list file about to be replaced.
+ * @param target - the Remote target used in the refusal.
+ */
+async function assertWritableTarget(filename: string, target: McpTarget): Promise<void> {
+  let stats
+  try {
+    stats = await lstat(resolve(filename))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
   }
+  if (!stats.isSymbolicLink()) return
+  throw new RemoteError('mcp/read-only', `MCP entry-list file is a symbolic link: ${filename}`, {
+    target,
+    reason: 'the composition file is a symbolic link; replace the link with a real file before editing it here',
+  })
 }
 
 /**
@@ -200,9 +209,9 @@ export async function writeEntryListFile(
   validate: (rows: EntryOptions[]) => void,
   warn: PatchWarning,
 ): Promise<void> {
-  await assertNoSymlink(filename)
+  await assertWritableTarget(filename, target)
   await withFileLock(filename, async () => {
-    await assertNoSymlink(filename)
+    await assertWritableTarget(filename, target)
     let parsed: unknown
     try {
       parsed = load(await readFile(filename, 'utf8'), { schema: entryListSchema })

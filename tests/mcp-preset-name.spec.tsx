@@ -36,7 +36,7 @@ function props(): McpSectionProps {
     useMcpSettings: select => select({ available: true, writable: true, loading: 'dynamic', descriptions: {}, tools: {}, optimize: {} }),
     t: translate(), presetName,
     mcps: vi.fn(async () => ({ presets: raw, globalWritable: true, servers: raw.map(preset => ({ entryId: preset.id, serverName: `server-${preset.id}`, scope: 'preset' as const, presetId: preset.id, enabled: true, writable: true, fiberPhase: null, secretKeys: [] })) })),
-    presets: vi.fn(async () => raw), suppressedMcps: vi.fn(async () => []),
+    suppressedMcps: vi.fn(async () => []),
   } as McpSectionProps
 }
 

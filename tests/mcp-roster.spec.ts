@@ -206,49 +206,69 @@ describe('readMcpRoster', () => {
     ])
   })
 
-  it('reports the global plane writable only for the user\'s own Include file', () => {
-    // The value is written into that file and the Include is reloaded, so its
-    // patch layers stay where they are — a patched Include stays writable.
-    const patched = contextWith([
-      loaderEntry({ id: 'mcps', name: 'cordis:include' }, {
-        subtree: { filename: '/tmp/mcps.yml', config: { patches: [{ id: 'ui-theme' }] } },
-      }),
-    ])
-    expect(readMcpRoster(patched, () => [])).toMatchObject({ globalWritable: true })
+  it('reports the global plane writable only for the user\'s own readable Include file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-roster-writable-'))
+    try {
+      const file = join(dir, 'mcps.yml')
+      writeFileSync(file, '[]\n')
+      // The value is written into that file and the Include is reloaded, so its
+      // patch layers stay where they are — a patched Include stays writable.
+      const patched = contextWith([
+        loaderEntry({ id: 'mcps', name: 'cordis:include' }, {
+          subtree: { filename: file, config: { patches: [{ id: 'ui-theme' }] } },
+        }),
+      ])
+      expect(readMcpRoster(patched, () => [])).toMatchObject({ globalWritable: true })
 
-    const plain = contextWith([
-      loaderEntry({ id: 'mcps', name: 'cordis:include' }, {
-        subtree: { filename: '/tmp/mcps.yml', config: { patches: [] } },
-      }),
-    ])
-    expect(readMcpRoster(plain, () => [])).toMatchObject({ globalWritable: true })
+      const plain = contextWith([
+        loaderEntry({ id: 'mcps', name: 'cordis:include' }, {
+          subtree: { filename: file, config: { patches: [] } },
+        }),
+      ])
+      expect(readMcpRoster(plain, () => [])).toMatchObject({ globalWritable: true })
 
-    // The host's own root anchor is not a write target: `prepareProfile`
-    // rewrites its file on every start. Counting it made a profile that
-    // declares its own Include look like a two-Include composition and closed
-    // the whole plane.
-    const anchorOnly = contextWith([
-      loaderEntry({ id: 'include', name: 'cordis:include' }, { subtree: { filename: '/tmp/cordis.yml' } }),
-    ])
-    expect(readMcpRoster(anchorOnly, () => [])).toMatchObject({ globalWritable: false })
+      // An unreadable file is not a writable plane: the page would offer a
+      // target every write then fails on, and the writable flag used to disagree
+      // with the synchronous reason in exactly this case.
+      const unreadable = contextWith([
+        loaderEntry({ id: 'mcps', name: 'cordis:include' }, {
+          subtree: { filename: join(dir, 'absent.yml') },
+        }),
+      ])
+      expect(readMcpRoster(unreadable, () => [])).toMatchObject({
+        globalWritable: false,
+        globalReason: 'unreadable-include',
+      })
 
-    // Shape A: the host anchor plus the Include the user declared inside it.
-    // Exactly one file is addressable, so the plane is writable.
-    const shapeA = contextWith([
-      loaderEntry({ id: 'include', name: 'cordis:include' }, { subtree: { filename: '/tmp/cordis.yml' } }),
-      loaderEntry({ id: 'include:mcps', name: 'cordis:include' }, { subtree: { filename: '/tmp/mcps.yml' } }),
-    ])
-    expect(readMcpRoster(shapeA, () => [])).toMatchObject({ globalWritable: true })
+      // The host's own root anchor is not a write target: `prepareProfile`
+      // rewrites its file on every start. Counting it made a profile that
+      // declares its own Include look like a two-Include composition and closed
+      // the whole plane.
+      const anchorOnly = contextWith([
+        loaderEntry({ id: 'include', name: 'cordis:include' }, { subtree: { filename: '/tmp/cordis.yml' } }),
+      ])
+      expect(readMcpRoster(anchorOnly, () => [])).toMatchObject({ globalWritable: false })
 
-    // No file-backed Include at all: nothing to write into.
-    expect(readMcpRoster(contextWith([]), () => [])).toMatchObject({ globalWritable: false })
+      // Shape A: the host anchor plus the Include the user declared inside it.
+      // Exactly one file is addressable, so the plane is writable.
+      const shapeA = contextWith([
+        loaderEntry({ id: 'include', name: 'cordis:include' }, { subtree: { filename: '/tmp/cordis.yml' } }),
+        loaderEntry({ id: 'include:mcps', name: 'cordis:include' }, { subtree: { filename: file } }),
+      ])
+      expect(readMcpRoster(shapeA, () => [])).toMatchObject({ globalWritable: true })
 
-    // Two user Includes name no single file to address.
-    const both = contextWith([
-      loaderEntry({ id: 'mcps-a', name: 'cordis:include' }, { subtree: { filename: '/tmp/a.yml' } }),
-      loaderEntry({ id: 'mcps-b', name: 'cordis:include' }, { subtree: { filename: '/tmp/b.yml' } }),
-    ])
-    expect(readMcpRoster(both, () => [])).toMatchObject({ globalWritable: false })
+      // No file-backed Include at all: nothing to write into.
+      expect(readMcpRoster(contextWith([]), () => [])).toMatchObject({ globalWritable: false })
+
+      // Two user Includes name no single file to address.
+      const both = contextWith([
+        loaderEntry({ id: 'mcps-a', name: 'cordis:include' }, { subtree: { filename: join(dir, 'a.yml') } }),
+        loaderEntry({ id: 'mcps-b', name: 'cordis:include' }, { subtree: { filename: join(dir, 'b.yml') } }),
+      ])
+      expect(readMcpRoster(both, () => [])).toMatchObject({ globalWritable: false })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('marks a global row writable exactly when the user Include file declares it', () => {

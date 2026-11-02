@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { McpCatalog } from '../src/mcp-catalog.ts'
 import { databaseCatalogStorage } from '../src/mcp-catalog-store.ts'
 import { mcpEntryConfig } from '../src/mcp-config.ts'
+import { MCP_CLIENT_MODULE } from '../src/mcp-modules.ts'
 import { MCP_OPTIMIZE_DEFAULTS } from '../src/mcp-optimize.ts'
 import type { LazyTool } from '../src/mcp-carrier.ts'
 import { McpManager } from '../lib/index.mjs'
@@ -115,5 +116,23 @@ describe('explicit server catalogue refresh', () => {
     expect(await service.refreshCatalog({})).toEqual({ refreshed: 1, failed: [] })
     expect(catalog.getFor('remote', cloud)?.tools.map(tool => tool.name)).toEqual(['cloud_0'])
     expect(catalog.getFor('remote', cloud)?.truncated).toBe(true)
+  })
+})
+
+describe('global rows mounted directly at the loader root', () => {
+  it('describes a root-level mcp-client row instead of reporting not-found', async () => {
+    const ctx = new Context(); contexts.push(ctx)
+    const config = mcpEntryConfig({ type: 'stdio', command: 'node', args: ['root.mjs'] }, 'root-server')
+    ctx.provide('loader', {
+      entries: () => [{
+        id: 'root-row',
+        options: { id: 'root-row', name: MCP_CLIENT_MODULE, config },
+        disabled: false,
+      }],
+    } as never)
+    const service = new McpManager(ctx, { reconcile: async () => {}, suppressedEntryIds: () => [] } as never, () => [], {} as never, () => 'dynamic', () => MCP_OPTIMIZE_DEFAULTS, new McpCatalog<LazyTool>() as never)
+    const result = await service.describeMcp({ target: { scope: 'global' }, entryId: 'root-row' })
+    expect(result).toMatchObject({ entryId: 'root-row', serverName: 'root-server', disabled: false })
+    expect(result.spec).toMatchObject({ type: 'stdio', command: 'node' })
   })
 })

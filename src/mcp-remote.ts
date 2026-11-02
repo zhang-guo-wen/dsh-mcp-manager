@@ -19,6 +19,7 @@ import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import { findPresetDeclaration, writePresetRows, type PresetDeclaration } from './preset-source.ts'
 import { assertServerName, mcpEntryConfig, specFromEntryConfig, type McpEntryConfig } from './mcp-config.ts'
 import { describeMcpConfigIssues, diagnoseRowConfig } from './mcp-diagnostics.ts'
+import { declaredEnabled, isDeclaredExpression } from './mcp-allowance.ts'
 import { connectLazyWithin } from './lazy-mcp.ts'
 import type { McpOptimizeFlags } from './mcp-optimize.ts'
 import { readMcpRoster } from './mcp-roster.ts'
@@ -397,7 +398,7 @@ export class McpManager extends TypertRemoteService {
         entryId: presetLeafId(entry.options.id),
         serverName,
         spec: specFromEntryConfig(entry.options.config as McpEntryConfig),
-        disabled: entry.options.disabled === true,
+        disabled: this.declaredDisabled(entry),
       }
     }
 
@@ -538,7 +539,7 @@ export class McpManager extends TypertRemoteService {
    * @returns whether the row's own declaration disables it.
    */
   private declaredDisabled(entry: Entry): boolean {
-    return entry.options.disabled === true
+    return declaredEnabled(entry.options.disabled, entry.evaluate?.bind(entry)) === false
   }
 
   private async edit(request: EditMcpRequest): Promise<McpMutationResult> {
@@ -591,7 +592,8 @@ export class McpManager extends TypertRemoteService {
       const written = await this.writeGlobalOne(include, target, {
         id: rowId, name: MCP_CLIENT_MODULE, disabled: request.disabled,
       }, (fileRows) => {
-        this.globalFileRow(fileRows, rowId, target, include.tree.filename)
+        const fileRow = this.globalFileRow(fileRows, rowId, target, include.tree.filename)
+        this.assertLiteralEnablement(fileRow, target, rowId)
       }, rowId)
       return { target, entryId: written.id, serverName, disabled: this.declaredDisabled(written) }
     }
@@ -601,6 +603,7 @@ export class McpManager extends TypertRemoteService {
     let serverName = entryId
     await writePresetRows(this.ctx, preset, { id: entryId, name: MCP_CLIENT_MODULE, disabled: request.disabled }, (rows) => {
       const row = this.presetMcpRow(rows, entryId, target)
+      this.assertLiteralEnablement(row, target, entryId)
       serverName = serverNameOf(row) ?? entryId
       if (!request.disabled) assertRunnableConfig(target, row.config)
     }, this.warnPatch)
@@ -689,6 +692,9 @@ export class McpManager extends TypertRemoteService {
         target: { scope: 'global' },
         reason,
       }, { cause })
+    }
+    if (created.reloadError !== undefined) {
+      this.warnPatch('mcp-manager: global Include written but not mounted yet: %s', created.reloadError)
     }
     let mounted = this.writableIncludes().length === 1
     if (!mounted) {
@@ -853,22 +859,26 @@ export class McpManager extends TypertRemoteService {
     // it by its qualified id, and the root list names the same entry by its leaf
     // id. The row is the same either way, so collect by leaf and answer once.
     const found = new Map<string, Entry>()
-    const visit = (tree: { entries(): Iterable<Entry> }): void => {
-      for (const entry of tree.entries()) {
-        const id = entry.options.id
-        if (id !== leafId && entry.id !== entryId) {
-          const nested = (entry as { readonly subtree?: { entries(): Iterable<Entry> } }).subtree
-          if (nested?.entries !== undefined) visit(nested)
-          continue
-        }
-        found.set(presetLeafId(id), entry)
+    const visit = (entry: Entry): void => {
+      const id = entry.options.id
+      if (id !== leafId && entry.id !== entryId) {
+        const nested = (entry as { readonly subtree?: { entries(): Iterable<Entry> } }).subtree
+        if (nested?.entries !== undefined) visitTree(nested)
+        return
       }
+      found.set(presetLeafId(id), entry)
+    }
+    const visitTree = (tree: { entries(): Iterable<Entry> }): void => {
+      for (const entry of tree.entries()) visit(entry)
     }
     for (const entry of this.loader().entries()) {
+      // A row inserted at the composition's own level is not inside any
+      // subtree, so the entry itself has to answer before its tree is walked.
+      visit(entry)
       if (entry.subtree === undefined) continue
       // A preset's tree carries its own rows; only the composition's own trees
       // answer a global lookup.
-      visit(entry.subtree as { entries(): Iterable<Entry> })
+      visitTree(entry.subtree as { entries(): Iterable<Entry> })
     }
     if (found.size === 0) {
       throw new RemoteError('mcp/not-found', `MCP loader row "${entryId}" was not found`, { target, entryId })
@@ -921,6 +931,28 @@ export class McpManager extends TypertRemoteService {
       throw invalid(target, `preset row "${entryId}" is not an MCP client row`)
     }
     return row
+  }
+
+  /**
+   * Refuse to replace an enablement expression with a literal.
+   *
+   * The settings switch writes `disabled: true|false`; doing that to a row whose
+   * declaration says `disabled: !!js ...` would silently discard the expression
+   * and the user's own gate.
+   * @param row - the file row a toggle would rewrite.
+   * @param target - the plane the error names.
+   * @param entryId - the row id the error names.
+   */
+  private assertLiteralEnablement(row: EntryOptions, target: McpTarget, entryId: string): void {
+    if (!isDeclaredExpression(row.disabled)) return
+    throw new RemoteError(
+      'mcp/read-only',
+      `MCP row "${entryId}" is enabled by a !!js expression, so the settings switch cannot rewrite it`,
+      {
+        target,
+        reason: 'the row\'s disabled field is a Loader !!js expression; edit it in its own composition file',
+      },
+    )
   }
 
   private assertServerNameAvailable(
