@@ -3,6 +3,14 @@ import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { McpEntryConfig } from './mcp-config.ts'
 
+/** A write raced another host's `clear()`; reloading once adopts the new baseline. */
+export class CatalogGenerationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CatalogGenerationError'
+  }
+}
+
 /** Injectable database boundary; discoveries never contain connection credentials. */
 export interface McpCatalogStorage {
   load(): Promise<unknown>
@@ -72,7 +80,10 @@ export function validCatalogRecord(value: unknown): value is StoredRecord<Catalo
     && typeof item.identity === 'string' && /^[a-f0-9]{64}$/.test(item.identity)
     && entry !== null && entry !== undefined
     && entry.transport === item.transport
-    && Number.isFinite(entry.fetchedAt) && entry.fetchedAt >= 0 && entry.fetchedAt <= Date.now()
+    // A clock that was rolled back must not invalidate the whole database: the
+    // age is clamped to zero wherever it is reported, and a future timestamp is
+    // harmless (a past timestamp still expires a TTL record normally).
+    && Number.isSafeInteger(entry.fetchedAt) && entry.fetchedAt >= 0
     && typeof entry.truncated === 'boolean' && Array.isArray(entry.tools) && entry.tools.length <= 2_000
     && entry.tools.every(validTool)
     && (entry.serverTtlMs === undefined || (Number.isFinite(entry.serverTtlMs) && entry.serverTtlMs >= 0))
@@ -113,7 +124,9 @@ export class McpCatalog<T extends CatalogTool = CatalogTool> {
     if (this.closed || epoch !== this.epoch) return
     const identity = catalogIdentity(config)
     const entry: McpCatalogEntry<T> = {
-      tools: record.tools, fetchedAt: now, truncated: record.truncated, transport: config.transport,
+      // Never persist a timestamp ahead of the wall clock: a clock adjustment
+      // between processes would otherwise make the record look corrupt.
+      tools: record.tools, fetchedAt: Math.min(Math.max(0, now), Date.now()), truncated: record.truncated, transport: config.transport,
       ...config.transport === 'stdio' || record.ttlMs === undefined ? {} : { serverTtlMs: record.ttlMs },
     }
     this.records.delete(identity)
@@ -194,6 +207,7 @@ export class McpCatalog<T extends CatalogTool = CatalogTool> {
     if (this.writing) return
     this.writing = true
     this.pending = (async () => {
+      let retriedGeneration = false
       while (this.dirty) {
         this.dirty = false
         const clearing = this.clearing
@@ -208,6 +222,15 @@ export class McpCatalog<T extends CatalogTool = CatalogTool> {
           await this.storage!.save({ version: 1, entries }, clearing)
         } catch (error) {
           if (clearing) this.clearing = true
+          // Another host cleared the catalogue after this process read its
+          // baseline. Adopt the new baseline through one reload and retry the
+          // same snapshot once, so this host does not silently stop persisting.
+          if (!retriedGeneration && error instanceof CatalogGenerationError) {
+            retriedGeneration = true
+            await this.storage!.load()
+            this.dirty = true
+            continue
+          }
           throw error
         }
       }

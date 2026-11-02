@@ -191,4 +191,40 @@ describe('ensureGlobalInclude', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  it('reports a failed post-write reload as written-but-not-mounted, not as a failed write', async () => {
+    const dir = profileDir()
+    const patchPath = join(dir, 'cordis.patch.yml')
+    try {
+      const result = await ensureGlobalInclude({
+        profileDir: dir,
+        patchPath,
+        reconcile: async () => { throw new Error('composition rebuild failed') },
+      })
+      expect(result).toMatchObject({ created: true, patchChanged: true, reloadError: 'composition rebuild failed' })
+      // The files are committed; the caller must not offer to write them again.
+      expect(readFileSync(join(dir, GLOBAL_INCLUDE_FILE), 'utf8')).toBe('[]\n')
+      expect(insertedRow(readFileSync(patchPath, 'utf8'))?.id).toBe(GLOBAL_INCLUDE_ID)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('serializes two concurrent creations without truncating a file or duplicating the patch row', async () => {
+    const dir = profileDir()
+    const patchPath = join(dir, 'cordis.patch.yml')
+    try {
+      const file = join(dir, GLOBAL_INCLUDE_FILE)
+      writeFileSync(file, '- id: kept\n  name: kept\n')
+      await Promise.all([
+        ensureGlobalInclude({ profileDir: dir, patchPath, reconcile: async () => {} }),
+        ensureGlobalInclude({ profileDir: dir, patchPath, reconcile: async () => {} }),
+      ])
+      const patch = readFileSync(patchPath, 'utf8')
+      expect(patch.match(new RegExp(`id: ${GLOBAL_INCLUDE_ID}`, 'g'))).toHaveLength(1)
+      expect(readFileSync(file, 'utf8')).toBe('- id: kept\n  name: kept\n')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

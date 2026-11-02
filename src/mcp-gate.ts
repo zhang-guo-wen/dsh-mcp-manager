@@ -37,7 +37,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { MCP_CLIENT_MODULE, presetLeafId } from './mcp-authoring.ts'
-import { declaredMcpRows } from './mcp-allowance.ts'
+import { declaredEnabled, declaredMcpRows } from './mcp-allowance.ts'
 import { diagnoseRowConfig } from './mcp-diagnostics.ts'
 import { findPresetDeclaration } from './preset-source.ts'
 import type { McpLoadingMode } from './lazy-mcp.ts'
@@ -103,9 +103,11 @@ export interface McpPreloadGate {
   /** Keys of the rows the gate currently suppresses, for the settings UI. */
   suppressedKeys(): readonly string[]
   /**
-   * Entry ids the publication observer held back since the last successful
-   * activation, whether or not a mount tree has been captured for them yet.
-   * This is what keeps the roster from reporting a held row as stopped.
+   * Row identities the gate holds back right now: `mcpRowKey` format for a
+   * preset row (`preset:<id>:<leaf>`), the entry id for a global row. A
+   * preset row held before the mount reader could attribute it is reported by
+   * its bare leaf id until the next reconcile. This is what keeps the roster
+   * from reporting a held row as stopped.
    */
   suppressedEntryIds(): readonly string[]
   /** Release the gate's own bookkeeping (it holds no services). */
@@ -168,7 +170,7 @@ export interface McpGlobalRow {
   /** The Loader's own entry id, which is also what `mcp_load` accepts. */
   readonly entryId: string
   /** The row's effective enablement, inherited from any owning group. */
-  readonly enabled: boolean
+  readonly enabled: boolean | 'conditional'
   /** Whether the gate currently keeps this row from mounting. */
   readonly held: boolean
   /** Whether the row's plugin is running right now. */
@@ -337,6 +339,28 @@ export function createMcpPreloadGate(
   }
 
   /**
+   * The preset that owns a live row, when the mount reader can already see it.
+   *
+   * A pre-mount hook runs before the mount reader necessarily captured the
+   * tree, so an unknown owner falls back to the leaf id; the next reconcile
+   * replaces the key with the full row identity.
+   * @param tree - the row's owning tree.
+   * @param entry - the row entry being held.
+   * @returns the preset id, or undefined when the mount is not readable yet.
+   */
+  const presetIdOf = (tree: unknown, entry: GateEntry): string | undefined => {
+    for (const mount of mountReader(ctx.root.fiber)) {
+      if (mount.tree === tree) return mount.presetId
+      for (const candidate of mount.tree.entries()) if (candidate === entry) return mount.presetId
+    }
+    return undefined
+  }
+
+  /** The identity key one held row reports through {@link suppressedEntryIds}. */
+  const heldKeyOf = (presetId: string | undefined, entryId: string, global: boolean): string =>
+    global || presetId === undefined ? entryId : mcpRowKey({ scope: 'preset', agentPreset: presetId }, entryId)
+
+  /**
    * Hold one row back at the only moment that can: before its plugin callback
    * runs. Disposal is synchronous, so Cordis skips the dependency resolution
    * that would have started the server; the row's own declaration keeps the
@@ -359,8 +383,9 @@ export function createMcpPreloadGate(
     if (mountReader.ownsTree?.(tree) !== true) return
     const entryId = presetLeafId(entry.options.id)
     held.add(entryId)
-    heldRowIds.add(entryId)
-    if (typeof tree?.filename === 'string' && typeof tree.write === 'function') {
+    const fileBacked = typeof tree?.filename === 'string' && typeof tree.write === 'function'
+    heldRowIds.add(heldKeyOf(fileBacked ? undefined : presetIdOf(tree, entry), entryId, fileBacked))
+    if (fileBacked) {
       // The row's tree persists to a file — a nested Include under a preset is
       // still a preset tree to the ownership test — so the fiber must not
       // self-dispose first: the Loader's self-dispose branch writes `disabled`
@@ -370,8 +395,9 @@ export function createMcpPreloadGate(
       const row = entry as unknown as { disabled?: boolean | undefined }
       const previousDisabled = Object.getOwnPropertyDescriptor(row, 'disabled')
       Object.defineProperty(row, 'disabled', { configurable: true, enumerable: false, value: true })
-      preHeld.set(entryId, {
-        entry,
+      preHeld.set(entry, {
+        entryId,
+        key: heldKeyOf(presetIdOf(tree, entry), entryId, true),
         global: true,
         undo: () => {
           if (previousDisabled === undefined) delete row.disabled
@@ -380,14 +406,16 @@ export function createMcpPreloadGate(
       })
     }
     try {
-      void (published.fiber as { dispose(): Promise<void> }).dispose()
+      void Promise.resolve((published.fiber as { dispose(): Promise<void> }).dispose()).catch((error: unknown) => {
+        warn(`mcp-manager: cannot hold MCP row "${entryId}": ${String(error)}`)
+      })
     } catch (error) {
       warn(`mcp-manager: cannot hold MCP row "${entryId}": ${String(error)}`)
     }
     // Keep the declaration in step with the runtime hold, so a later update of
     // this entry returns before importing the plugin again. A shadowed row is
     // exempt: its options must stay exactly as the user wrote them.
-    if (preHeld.has(entryId)) return
+    if (preHeld.has(entry)) return
     if (entry.options.disabled !== true) {
       void Promise.resolve(entry.update({ disabled: true })).catch(error => {
         warn(`mcp-manager: cannot mark MCP row "${entryId}" as held: ${String(error)}`)
@@ -397,12 +425,18 @@ export function createMcpPreloadGate(
   const unsubscribe = observeFiber?.(holdAtPublication)
 
   /**
-   * Entries held before they could mount, keyed by the row id their options
-   * turned out to name, with the override this gate installed on each.
+   * Entries held before they could mount, keyed by the entry itself rather than
+   * its leaf id: two presets commonly declare the same row id, and a leaf-keyed
+   * map let the second row overwrite the first row's undo, leaving that row
+   * permanently disabled after the next eager switch.
    */
-  const preHeld = new Map<string, { entry: GateEntry; undo(): void; global: boolean }>()
-  /** Row ids the pre-mount hook holds back right now. */
-  const heldRowIds = new Set<string>()
+  const preHeld = new Map<GateEntry, { entryId: string; key: string; undo(): void; global: boolean }>()
+  /**
+   * Row identity keys the gate holds back right now (`preset:<id>:<leaf>` for a
+   * preset row, the entry id for a global row). Rebuilt on every reconcile so a
+   * removed or user-disabled row cannot keep reporting a mode hold.
+   */
+  let heldRowIds = new Set<string>()
 
   /** Tagged entries, so the first `update` can be identified before the row is named. */
   const tagged = new WeakSet<GateEntry>()
@@ -460,13 +494,38 @@ export function createMcpPreloadGate(
    * @param entryId - the row whose holds should be released.
    * @returns whether anything was released.
    */
-  const releasePreHeldRow = (entryId: string): boolean => {
-    heldRowIds.delete(entryId)
-    const held = preHeld.get(entryId)
-    if (held === undefined) return false
-    preHeld.delete(entryId)
+  const releasePreHeldEntry = (entry: GateEntry, entryId?: string): boolean => {
+    let held = preHeld.get(entry)
+    let holder: GateEntry | undefined = held === undefined ? undefined : entry
+    if (held === undefined && entryId !== undefined) {
+      // The mount reader could not attribute this row when it was held, so its
+      // key is the bare leaf id. Hand that hold back when the mounted row with
+      // the same leaf is being mounted again; attributed keys never take this
+      // path, which is what keeps two presets' same-name rows independent.
+      for (const [candidate, record] of preHeld) {
+        if (record.entryId === entryId && record.key === entryId && !record.global) {
+          held = record
+          holder = candidate
+          break
+        }
+      }
+    }
+    if (held === undefined || holder === undefined) return false
+    preHeld.delete(holder)
     held.undo()
     return true
+  }
+
+  /**
+   * One global row's held entry, found by the id the reader reports.
+   * @param entryId - the row's leaf id.
+   * @returns the held record, or undefined when this gate holds no such row.
+   */
+  const preHeldGlobal = (entryId: string): { entry: GateEntry; entryId: string; key: string; undo(): void; global: boolean } | undefined => {
+    for (const [entry, held] of preHeld) {
+      if (held.global && held.entryId === entryId) return { entry, ...held }
+    }
+    return undefined
   }
 
   /**
@@ -481,10 +540,10 @@ export function createMcpPreloadGate(
    * @returns whether a global hold was released.
    */
   const releaseGlobalHold = (entryId: string): boolean => {
-    const held = preHeld.get(entryId)
-    if (held?.global !== true) return false
+    const held = preHeldGlobal(entryId)
+    if (held === undefined) return false
     const { entry } = held
-    releasePreHeldRow(entryId)
+    releasePreHeldEntry(entry)
     void entry.update({ disabled: false }, false, true).catch((error: unknown) => {
       warn(`mcp-manager: cannot mount the global MCP row "${entryId}": ${String(error)}`)
     })
@@ -493,7 +552,7 @@ export function createMcpPreloadGate(
 
   /** Hand every pre-held row back to its own declaration. */
   const releasePreHeld = (): void => {
-    for (const entryId of [...preHeld.keys()]) releasePreHeldRow(entryId)
+    for (const entry of [...preHeld.keys()]) releasePreHeldEntry(entry)
     for (const undo of [...pendingPreHeld.values()]) undo()
     pendingPreHeld.clear()
     heldRowIds.clear()
@@ -536,8 +595,8 @@ export function createMcpPreloadGate(
     }
     pendingPreHeld.delete(entry)
     const entryId = presetLeafId(options.id)
-    preHeld.set(entryId, { entry, undo, global })
-    heldRowIds.add(entryId)
+    preHeld.set(entry, { entryId, key: heldKeyOf(global ? undefined : presetIdOf(tree, entry), entryId, global), undo, global })
+    heldRowIds.add(heldKeyOf(global ? undefined : presetIdOf(tree, entry), entryId, global))
     onRowTaken?.()
   }
 
@@ -557,37 +616,46 @@ export function createMcpPreloadGate(
     /** Rows sit either inside a file-backed include or directly in the root tree. */
     const trees: { entries(): Iterable<GateEntry> }[] = []
     const loader = ctx.get('loader') as { entries(): Iterable<IncludeEntry> } | undefined
+    /** Rows mounted directly at the composition's root, outside any Include. */
+    const roots: GateEntry[] = []
     for (const entry of loader?.entries() ?? []) {
+      const options = entry.options as { readonly name?: string; readonly group?: boolean; readonly id?: string } | undefined
+      // A patch layer can insert an mcp-client row at the composition's own
+      // level, naming no composition file. It is still a global row this gate
+      // governs, so it is read directly instead of only through an Include.
+      if (options?.name === MCP_CLIENT_MODULE && options.group !== true && options.id !== undefined) {
+        roots.push(entry)
+      }
       if (isGlobalPlaneTree(entry.subtree)) trees.push(entry.subtree as { entries(): Iterable<GateEntry> })
-      // A patch layer can insert a row at the composition's own level, naming no
-      // composition file; it is still a global row this gate governs.
-      else if ((entry.options as { readonly group?: boolean } | undefined)?.group !== true) continue
-      else if (entry.subtree !== undefined) trees.push(entry.subtree as { entries(): Iterable<GateEntry> })
-    }
-    for (const tree of trees) {
-      for (const entry of walkEntries(tree)) {
-        const options = entry.options as { readonly name?: string; readonly id?: string } | undefined
-        if (options?.name !== MCP_CLIENT_MODULE || options.id === undefined) continue
-        const entryId = presetLeafId(options.id)
-        // The same row answers through its include-qualified id and its leaf id;
-        // report it once.
-        if (seen.has(entryId)) continue
-        seen.add(entryId)
-        rows.push({
-          entryId,
-          // The declaration's own answer, never the instance getter: this gate
-          // shadows `disabled` on the rows it holds, so reading it back would
-          // report its own hold as a user disabling the row.
-          enabled: entry.options.disabled !== true,
-          held: preHeld.get(entryId)?.global === true,
-          mounted: (entry.fiber?.uid ?? null) !== null && entry.fiber?.state !== 4,
-          // Carried so the roster can report this row's configuration issues and
-          // credential field names (the settings page opens its credential
-          // editor from the latter). Read-only: this is the row's own config.
-          config: entry.options.config,
-        })
+      else if (options?.group === true && entry.subtree !== undefined) {
+        trees.push(entry.subtree as { entries(): Iterable<GateEntry> })
       }
     }
+    const read = (entry: GateEntry): void => {
+      const options = entry.options as { readonly name?: string; readonly id?: string } | undefined
+      if (options?.name !== MCP_CLIENT_MODULE || options.id === undefined) return
+      const entryId = presetLeafId(options.id)
+      // The same row answers through its include-qualified id and its leaf id;
+      // report it once.
+      if (seen.has(entryId)) return
+      seen.add(entryId)
+      rows.push({
+        entryId,
+        // The declaration's own answer, never the instance getter this gate
+        // shadows on held rows. A `!!js` expression is evaluated through the
+        // row's own Loader evaluator; one that cannot be evaluated is reported
+        // as conditional and never authorized as enabled.
+        enabled: declaredEnabled(entry.options.disabled, entry.evaluate?.bind(entry)),
+        held: preHeldGlobal(entryId) !== undefined,
+        mounted: (entry.fiber?.uid ?? null) !== null && entry.fiber?.state !== 4,
+        // Carried so the roster can report this row's configuration issues and
+        // credential field names (the settings page opens its credential
+        // editor from the latter). Read-only: this is the row's own config.
+        config: entry.options.config,
+      })
+    }
+    for (const entry of roots) read(entry)
+    for (const tree of trees) for (const entry of walkEntries(tree)) read(entry)
     return rows
   }
 
@@ -606,14 +674,15 @@ export function createMcpPreloadGate(
    */
   const holdMountedGlobal = (entry: GateEntry): boolean => {
     const entryId = presetLeafId(String(entry.options.id))
-    if (preHeld.has(entryId)) return false
+    if (preHeldGlobal(entryId) !== undefined) return false
     const fiber = entry.fiber
     if (fiber === undefined || fiber.uid === null || fiber.dispose === undefined) return false
     const row = entry as unknown as { disabled?: boolean | undefined }
     const previousDisabled = Object.getOwnPropertyDescriptor(row, 'disabled')
     Object.defineProperty(row, 'disabled', { configurable: true, enumerable: false, value: true })
-    preHeld.set(entryId, {
-      entry,
+    preHeld.set(entry, {
+      entryId,
+      key: entryId,
       global: true,
       undo: () => {
         if (previousDisabled === undefined) delete row.disabled
@@ -638,14 +707,19 @@ export function createMcpPreloadGate(
    */
   const globalEntry = (entryId: string): GateEntry | undefined => {
     const loader = ctx.get('loader') as { entries(): Iterable<IncludeEntry> } | undefined
+    const isRow = (candidate: GateEntry): boolean => {
+      const options = candidate.options as { readonly name?: string; readonly group?: boolean | null; readonly id?: string } | undefined
+      return options?.name === MCP_CLIENT_MODULE
+        && options.group !== true
+        && options.id !== undefined
+        && presetLeafId(options.id) === entryId
+    }
     for (const entry of loader?.entries() ?? []) {
+      if (isRow(entry)) return entry
       const tree = entry.subtree
       if (tree === undefined) continue
       for (const candidate of walkEntries(tree as { entries(): Iterable<GateEntry> })) {
-        const options = candidate.options as { readonly name?: string; readonly id?: string } | undefined
-        if (options?.name === MCP_CLIENT_MODULE && options.id !== undefined && presetLeafId(options.id) === entryId) {
-          return candidate
-        }
+        if (isRow(candidate)) return candidate
       }
     }
     return undefined
@@ -662,6 +736,8 @@ export function createMcpPreloadGate(
     const resumed = new Set<string>()
     /** Rows this pass proved still exist, whether or not they could be driven. */
     const liveRows = new Set<string>()
+    /** The mode-held identities this pass actually sees; the old set is replaced. */
+    const nextHeldRowIds = new Set<string>()
     const nextRows: McpPresetRows[] = []
     // The composed global rows are driven on the same rule as a preset row, but
     // through the include's own entries: their options are never rewritten, so
@@ -679,18 +755,23 @@ export function createMcpPreloadGate(
       // suppressed — and its switch, which trusts that flag as a fallback,
       // stayed on. The hold bookkeeping is a separate question: the row stays
       // held unmounted, which the roster reports as `held`.
-      if (!row.enabled) {
+      if (row.enabled !== true) {
         if (!published.has(key)) states.set(key, { allowed: false, suppressed: false })
+        nextHeldRowIds.delete(key)
         continue
       }
       const wantMounted = mode === 'eager'
       if (wantMounted) {
         held.delete(row.entryId)
         resumed.add(row.entryId)
+        nextHeldRowIds.delete(key)
         releaseGlobalHold(row.entryId)
-      } else if (row.held) {
+      } else {
+        nextHeldRowIds.add(row.entryId)
+      }
+      if (!wantMounted && row.held) {
         held.add(row.entryId)
-      } else if (row.mounted) {
+      } else if (!wantMounted && row.mounted) {
         // A row the composition built and imported before this plugin applied:
         // no hook could have reached it, so it is halted here and stays held.
         const entry = globalEntry(row.entryId)
@@ -741,12 +822,15 @@ export function createMcpPreloadGate(
         if (wantMounted) {
           held.delete(leaf)
           resumed.add(leaf)
+          nextHeldRowIds.delete(key)
           // A row the pre-mount hook held has to be handed back before the
           // Loader can mount it: the override is what makes it read as
           // disabled, so `update` below would return without doing anything.
-          releasePreHeldRow(leaf)
+          releasePreHeldEntry(entry, leaf)
+        } else if (allowed) {
+          nextHeldRowIds.add(key)
         } else {
-          heldRowIds.add(leaf)
+          nextHeldRowIds.delete(key)
         }
         const mounted = entry.fiber !== undefined && entry.fiber.uid !== null && entry.fiber.state !== 4 && entry.fiber.state !== 5
         // A stopped row may keep a disposed fiber or a suppressed options flag.
@@ -769,6 +853,7 @@ export function createMcpPreloadGate(
       nextRows.push({ presetId: mount.presetId, ...(mount.scope === undefined ? {} : { scope: mount.scope }), rows: revisionRows })
     }
     presetRows = nextRows
+    heldRowIds = nextHeldRowIds
     // Drop bookkeeping for rows that no longer exist, so a removed preset does
     // not keep reporting a suppression it no longer owns.
     for (const key of [...states.keys()]) if (!seen.has(key)) states.delete(key)

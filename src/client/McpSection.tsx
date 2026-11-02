@@ -572,7 +572,7 @@ function McpRosterSkeleton({ label }: { readonly label: string }): ReactNode {
 export function McpSection(props: McpSectionProps): ReactNode {
   const {
     useMcpSettings, t, setMcpLoading, addMcp, editMcp, disableMcp, describeMcp, listMcpTools,
-    suppressedMcps, mcps, presets, presetName, updateMcpDescription, updateMcpTools, enableGlobalPlane,
+    suppressedMcps, mcps, presetName, updateMcpDescription, updateMcpTools, enableGlobalPlane,
   } = props
   const state = useMcpSettings(snapshot => snapshot)
   const [tab, setTab] = useState<McpTab>('servers')
@@ -758,6 +758,13 @@ export function McpSection(props: McpSectionProps): ReactNode {
   }
 
   const openEdit = (server: McpServer, tab: McpEditorTab = 'config'): void => {
+    // A preset row without an id cannot be addressed by an edit request. Opening
+    // the dialog anyway only produced a blank form whose save was guaranteed to
+    // fail; say why instead.
+    if (server.entryId === null) {
+      reportRefusal(t('mcp.error.unaddressable'))
+      return
+    }
     // The pane is moved before the dialog opens: the dialog keeps whatever pane
     // it is showing while it is closed, so setting it afterwards would leave the
     // first frame on the previous pane.
@@ -1088,7 +1095,7 @@ export function McpSection(props: McpSectionProps): ReactNode {
         error={editorError}
         describeMcp={describeMcp}
         listMcpTools={listMcpTools}
-        presets={presets}
+        presets={presetNames}
         presetName={presetName}
         plane={openedPlane}
         tab={openedTab}

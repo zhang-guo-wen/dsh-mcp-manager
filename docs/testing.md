@@ -1631,3 +1631,52 @@ JSON 旁边，鼠标失焦时才显示。取舍见 [design-decisions.md](design-
 - 本轮没有提交、推送、升版或发布npm，已有其它未提交改动继续保留。
 
 ---
+
+## 二十一、评审修复轮（2026-11-02，Issue #4）
+
+用户要求处理 GitHub Issue #4 的代码评审发现。本轮只改插件自身：3 高危、11 中危与低危清单逐条处理，未触碰日常 Harness 实例。
+
+### 命令与产物
+
+| 项 | 值 |
+|---|---|
+| 日期 | 2026-11-02T18:52Z |
+| 类型检查 | `npm run typecheck` 通过 |
+| 构建 | `npm run build` 通过；`lib/index.mjs` = `b7344865ed4283752c69aed603bf8abaa7b341ea58ff7a656321be8ab5cae498`（239 kB），`lib/client.js` = `eaa19da9faf456bdf417599543cd395ea8b3a050cf3ef6139d351f709a98b8f1` |
+| 单元/组件 | `npm test` **33 文件 / 353 项**通过（修复前基线 31 / 332） |
+| 元数据 | `node --test tests/plugin-metadata.test.mjs` **2/2** 通过 |
+| Harness 回归 | **未运行**：本机没有匹配的 Harness 源码检出，也未设 `DSH_HARNESS_ROOT`；`npm run test:harness` 需要该检出，本轮不把真实 Loader/registry/scope 回归记作通过 |
+
+### 本轮新增的回归覆盖
+
+- **H1**：`tests/mcp-child-env.spec.ts` 固定 stdio 子进程环境以 `scrubbedParentEnv()` 为基座：宿主凭据与 `DSH_*` 不下传，行内显式 `env` 覆盖其上（包括 credential-shaped 名字）。
+- **H2 / M1 / M2**：`tests/mcp-load.spec.ts` 新增 lazy 收窄再放宽不注册原生工具；严格 registry 下两个并行 `mcp_load` 收敛为一条视图；注册在连接途中被 dispose 时释放 claim、撤销定义并报错。
+- **H3**：`tests/mcp-gate.spec.ts` 用两个预设同名行固定「按 entry 身份持有、eager 时两行都恢复」；`heldRowIds` 按 row key 重建。
+- **M3**：`resyncView` 每视图串行链与每次 await 后的存活校验由代码与类型检查覆盖；未做真实 `tools/list_changed` 竞态的进程级测试。
+- **M4**：gate 与 `describeMcp` 都覆盖直接挂在 Loader 根上的 mcp-client 行。
+- **M5 / M9**：roster 的 `globalWritable` 与 `globalReason` 一致（不可读文件为 false + `unreadable-include`）；`settings` 的手改非字符串 description 只丢该值，不连带回滚 `loading`/`tools`/`optimize`。
+- **M6**：控制器四个写入点检查 `ConfigForm.set` 的布尔返回值，拒绝时抛 `McpSaveError('refused')`；控制器本身不能在 Node 测试里加载（`dsh-client-store` 依赖 `zustand`），本轮未加组件级用例。
+- **M7 / M10 / M11**：`tests/mcp-connection-probe.spec.tsx` 新增迟到工具列表隔离、初始读取失败的报错/禁用保存/重试、读取期间切到工具页后补列举；同文件覆盖清空描述与 config `serverName` 权威值。
+- **M8**：目录库遇到另一宿主 clear 的 generation 冲突时 reload 一次并重试同一快照；被驱逐的记录下一轮同内容保存会重新插入；时钟领先的 `fetchedAt` 只影响年龄下限，不整库作废。
+- **低危**：会话结束释放 `agents` 与空视图；`fibers.dispose()` 的异步拒绝被捕获；一次搜索共享 8 秒索引预算；全局行 `!!js` 求值 / 不可求值报 `conditional` / 切换表达式行被拒绝；全局 Include 的 patch 读改写加文件锁与独占创建；reload 失败返回 `reloadError` 而非写成写失败；父目录符号链接不再关闭全部写入，仅拒绝最终目标为符号链接；`mcp-diagnostics.ts` 的 BOM 与乱码已修。
+- **未覆盖**：`mcp_search` 的真实多服务器超时、真实 `tools/list_changed` 并发、活动实例内切换加载模式，以及 M6 的双标签页 revision 冲突都没有在本轮走真实宿主复跑；结论只按单测/组件测试记录。
+
+### 隔离实例 UI 前后对比
+
+为交付「UI 变更必须有 Before / After 证据」的要求，本轮用**隔离实例**截图，未使用、重启或修改日常实例。
+
+| 项 | 值 |
+|---|---|
+| 宿主 | 全局安装的 `@deepseek-ai/dsh@0.2.1-rc.3`，`dsh web --no-open --port 39517/39518` |
+| DSH_HOME | `/tmp/ui-evidence/dsh-home`（修复后）与 `/tmp/ui-evidence/dsh-home-before`（baseline `84aa92a` 的 git worktree） |
+| 插件 | 两个 profile 都以 `link:` 指向对应工作树；全局行 `alpha`、`beta` 指向同一 stdio fixture |
+| 浏览器 / 视口 | Playwright 1.61.1 + Chromium headless-shell 1228，1440×900，浅色主题 |
+| 场景 | 同一操作顺序：设置 → MCP 管理 → 打开 `alpha` 行编辑器；以及行内描述设为 `Alpha server` → 打开编辑器清空描述 → 保存 |
+| 结果 | 修复前：读取失败后显示空白 stdio 骨架、Save 可点；清空描述保存后行仍显示 `Alpha server`。修复后：读取失败显示错误与 Retry、JSON 为空、Save 禁用；清空描述后行回到 `Add a description`。 |
+
+截图（`docs/review-fixes-2026-11/`）：
+
+- [before-editor-read-failure.png](review-fixes-2026-11/before-editor-read-failure.png) / [after-editor-read-failure.png](review-fixes-2026-11/after-editor-read-failure.png)
+- [before-description-cleared.png](review-fixes-2026-11/before-description-cleared.png) / [after-description-cleared.png](review-fixes-2026-11/after-description-cleared.png)
+
+**未做 UI 前后对比的项**：M6 的双标签页写入拒绝、M7 的真实迟到 listing、M11 的慢服务器下工具页补列举，都只有组件级测试；它们没有对应的浏览器截图，不能据此宣称已在真实宿主上验收。本轮也未复跑真实 `npx -y` 冷启动与活动实例内模式切换。

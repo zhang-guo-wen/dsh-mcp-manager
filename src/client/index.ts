@@ -142,10 +142,6 @@ export async function apply(ctx: Context): Promise<void> {
     refreshCatalog: request => unwrapRemote(() => mcpMgr().refreshCatalog(request)),
     clearCatalog: request => unwrapRemote(() => mcpMgr().clearCatalog(request)),
   }
-  const presets = async (): Promise<readonly McpPresetOption[]> => {
-    const roster = await readRoster()
-    return roster.presets.map(({ id, name }) => ({ id, ...name === undefined ? {} : { name } }))
-  }
   const suppressedMcps = async (): Promise<readonly string[]> =>
     unwrapRemote(() => mcpMgr().gateState({}))
       .then(state => state.suppressed)
@@ -153,7 +149,6 @@ export async function apply(ctx: Context): Promise<void> {
     ctx.configForms.get<McpSettingsFlags>(MCP_SETTINGS_NS),
     mcps,
     authoring,
-    presets,
     suppressedMcps,
     presetName,
   )

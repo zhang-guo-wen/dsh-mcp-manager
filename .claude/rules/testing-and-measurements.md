@@ -57,3 +57,10 @@ GUI 里由模型决定的调用路径、`tools/list_changed` 跨会话 resync、
 **行为验证记录在 [docs/testing.md](../docs/testing.md)**：harness 回归的覆盖矩阵与结果、隔离实例实测（启动零拉起 /
 常驻复用 / `eager` 对照）的读数、复现命令与未覆盖项。改加载、池或闸门行为后按它复跑，并把新结果写回去；
 **没跑过的项不要写成已通过**。
+
+
+**2026-11-02 评审修复轮（Issue #4）**：`npm test` **33 文件 / 353 项**通过，`npm run typecheck`、`npm run build`、
+`node --test tests/plugin-metadata.test.mjs`（2/2）通过；产物 `lib/index.mjs` = `b7344865…`、`lib/client.js` =
+`eaa19da9…`。`npm run test:harness` **未跑**（本机没有 Harness 源码检出，也未设 `DSH_HARNESS_ROOT`），
+所以本轮不宣称真实 Loader/registry/scope 回归通过。隔离实例的前后截图与未覆盖项见
+[testing.md](../../docs/testing.md) 第二十一节与 `docs/review-fixes-2026-11/`。

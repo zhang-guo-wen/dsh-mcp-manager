@@ -13,13 +13,13 @@
  * @module @guowenzhang/dsh-mcp-manager/mcp-global-include
  */
 
-import { readFile } from 'node:fs/promises'
+import { open, readFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dump, load } from 'js-yaml'
 import { entryListSchema, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
-import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
+import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 
 /** Loader id of the Include row this module inserts into the profile patch layer. */
 export const GLOBAL_INCLUDE_ID = 'mcp-manager-global'
@@ -59,6 +59,12 @@ export interface GlobalIncludeResult {
   readonly created: boolean
   /** Whether this pass appended the Include row to the profile patch layer. */
   readonly patchChanged: boolean
+  /**
+   * Why the composition did not pick the written configuration up, when the
+   * write succeeded but the immediate rebuild failed. The patch is on disk, so
+   * the caller reports "written, restart to mount" instead of a failed write.
+   */
+  readonly reloadError?: string
 }
 
 /**
@@ -197,10 +203,33 @@ export async function ensureGlobalInclude(options: {
   readonly patchPath: string
   readonly reconcile: () => Promise<void>
 }): Promise<GlobalIncludeResult> {
-  const plan = planGlobalInclude(await readTextOrEmpty(options.patchPath), options.profileDir)
-  const created = !(await exists(plan.filename))
-  if (created) await writeFileAtomic(plan.filename, EMPTY_ENTRY_LIST, { mode: 0o600, dirMode: 0o700 })
-  if (plan.patchChanged) await writeFileAtomic(options.patchPath, plan.patchText, { mode: 0o600 })
-  if (plan.patchChanged) await options.reconcile()
-  return { filename: plan.filename, created, patchChanged: plan.patchChanged }
+  // The patch layer's read-modify-write is cross-process: another host adding
+  // its own Include at the same moment must not be overwritten by a stale
+  // read, and the entry-list file is created exclusively so a file another
+  // process just populated is never truncated back to `[]`.
+  const written = await withFileLock(options.patchPath, async () => {
+    const plan = planGlobalInclude(await readTextOrEmpty(options.patchPath), options.profileDir)
+    let created = false
+    if (!(await exists(plan.filename))) {
+      try {
+        const file = await open(plan.filename, 'wx', 0o600)
+        try { await file.writeFile(EMPTY_ENTRY_LIST) } finally { await file.close() }
+        created = true
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      }
+    }
+    if (plan.patchChanged) await writeFileAtomic(options.patchPath, plan.patchText, { mode: 0o600 })
+    return { filename: plan.filename, created, patchChanged: plan.patchChanged }
+  })
+  if (!written.patchChanged) return written
+  try {
+    await options.reconcile()
+    return written
+  } catch (error) {
+    // The patch is already committed. Reporting this as a write failure would
+    // make the settings page offer a retry of a write that already succeeded;
+    // the caller turns this into `mounted: false` instead.
+    return { ...written, reloadError: error instanceof Error ? error.message : String(error) }
+  }
 }

@@ -110,3 +110,24 @@ describe('durable MCP catalogue', () => {
     expect(writes).toBeLessThanOrEqual(2)
   })
 })
+
+describe('cross-host recovery', () => {
+  it('tolerates a record fetched when the clock was ahead instead of rejecting the database', async () => {
+    const future = Date.now() + 24 * 60 * 60 * 1000
+    const stored = new McpCatalog({
+      load: async () => ({
+        version: 1,
+        entries: [{
+          identity: catalogIdentity(local), label: 'local', transport: 'stdio',
+          entry: { transport: 'stdio', fetchedAt: future, truncated: false, tools: [{ name: 'a' }] },
+        }],
+      }),
+      save: async () => {},
+    })
+    await stored.restore()
+    expect(stored.size).toBe(1)
+    expect(stored.getFor('row', local)?.tools.map(tool => tool.name)).toEqual(['a'])
+    // A future timestamp is not an age: the reported age never goes negative.
+    expect(stored.stats()?.[0]?.ageMs).toBe(0)
+  })
+})

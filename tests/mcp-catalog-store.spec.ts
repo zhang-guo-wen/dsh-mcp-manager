@@ -3,6 +3,8 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { catalogDatabasePath, databaseCatalogStorage } from '../src/mcp-catalog-store.ts'
+import { McpCatalog } from '../src/mcp-catalog.ts'
+import { mcpEntryConfig } from '../src/mcp-config.ts'
 
 // All test files are unique workspace artifacts; no daily DSH_HOME or OS temp is used.
 const root = resolve(import.meta.dirname, '../../.scratch/mcp-catalog-store-tests', randomUUID())
@@ -227,5 +229,38 @@ describe('SQLite MCP catalogue storage', () => {
     expect(first).not.toBe(second)
     expect(first.startsWith(join(root, 'cache', 'dsh-mcp-manager'))).toBe(true)
     expect(first.endsWith('catalog.sqlite')).toBe(true)
+  })
+})
+
+describe('catalogue recovery and eviction bookkeeping', () => {
+  it('reloads and retries once after another host cleared the catalogue', async () => {
+    const filename = path('generation-recovery')
+    const catalog = new McpCatalog<{ name: string }>(databaseCatalogStorage(filename))
+    await catalog.restore()
+    const local = mcpEntryConfig({ type: 'stdio', command: 'fixture' }, 'local')
+    catalog.remember(local, { tools: [{ name: 'first' }], truncated: false }, 'row')
+    await catalog.flush()
+    // Another host clears the profile catalogue; this process still holds its
+    // old in-memory records and a stale clear-generation baseline.
+    await databaseCatalogStorage(filename).save({ version: 1, entries: [] }, true)
+    catalog.remember(local, { tools: [{ name: 'second' }], truncated: false }, 'row')
+    await catalog.flush()
+    const reopened = new McpCatalog<{ name: string }>(databaseCatalogStorage(filename))
+    await reopened.restore()
+    expect(reopened.getFor('row', local)?.tools.map(tool => tool.name)).toEqual(['second'])
+  })
+
+  it('reinserts a record eviction dropped on the next identical save', async () => {
+    const filename = path('eviction-baseline')
+    const storage = databaseCatalogStorage(filename)
+    const records = Array.from({ length: 501 }, (_, index) => record(`server-${index}`))
+    await storage.save(snapshot(...records))
+    // The same caller snapshot comes again: the evicted record must not be
+    // mistaken for "unchanged and still on disk".
+    await storage.save(snapshot(...records))
+    const labels = loaded(await databaseCatalogStorage(filename).load()).entries.map(item => item.label)
+    expect(labels).toHaveLength(500)
+    expect(labels).toContain('server-0')
+    expect(labels).not.toContain('server-1')
   })
 })

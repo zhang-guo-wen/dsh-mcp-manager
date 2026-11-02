@@ -214,7 +214,9 @@ describe('publication-point hold', () => {
     await gate.reconcile()
     const fiber = { dispose: vi.fn(async () => {}) }
     publish({ fiber })
-    expect(gate.suppressedEntryIds()).toEqual(['row'])
+    // The row's mount is already captured, so the hold is reported under its
+    // full identity rather than the bare leaf id two presets could share.
+    expect(gate.suppressedEntryIds()).toEqual(['preset:standard:row'])
     mode = 'eager'
     await gate.reconcile()
     expect(gate.suppressedEntryIds()).toEqual([])
@@ -463,7 +465,9 @@ describe('global plane', () => {
     // The hold is a different question: the row is still held unmounted, which
     // is what the roster reports as `held` — a resting state D15 marks with
     // nothing at all.
-    expect(gate.suppressedEntryIds()).toEqual(['global-server'])
+    // A user-disabled row is no longer a mode suppression; its own `held` flag
+    // still reports the resting state to the roster.
+    expect(gate.suppressedEntryIds()).toEqual([])
     gate.dispose()
   })
 
@@ -493,3 +497,95 @@ describe('global plane', () => {
   })
 })
 
+
+describe('row identity under two presets', () => {
+  it('releases both same-named pre-held rows on the eager switch', async () => {
+    const built = [entryUnderConstruction(), entryUnderConstruction()]
+    const treeA = { ctx: {}, entries: () => [built[0]!.entry] }
+    const treeB = { ctx: {}, entries: () => [built[1]!.entry] }
+    const declaration = [{
+      id: 'row', name: MCP,
+      config: { transport: 'stdio', serverName: 'row', command: 'node', args: [], env: {}, cwd: '' },
+    }]
+    const mounts: GateMount[] = [
+      { presetId: 'a', tree: treeA, declaration },
+      { presetId: 'b', tree: treeB, declaration },
+    ]
+    let mode: 'dynamic' | 'eager' = 'dynamic'
+    const gate = createMcpPreloadGate(
+      ctx,
+      () => mode,
+      Object.assign(() => mounts, { ownsTree: () => true }),
+      vi.fn(),
+    )
+    for (const { entry } of built) {
+      gate.onEntryInit(entry)
+      entry.parent = { tree: entry === built[0]!.entry ? treeA : treeB }
+      await entry.update(rowOptions('row') as never)
+      expect(entry.init).not.toHaveBeenCalled()
+    }
+    expect(gate.suppressedEntryIds()).toEqual(['preset:a:row', 'preset:b:row'])
+    mode = 'eager'
+    await gate.reconcile()
+    // The second hold used to overwrite the first one's undo map entry, leaving
+    // preset a's shadow in place forever after this switch.
+    for (const { entry } of built) {
+      expect(Object.getOwnPropertyDescriptor(entry, 'disabled')).toBeUndefined()
+      expect(entry.fiber).toEqual({ state: 2, uid: 12 })
+    }
+    expect(gate.suppressedEntryIds()).toEqual([])
+    gate.dispose()
+  })
+})
+
+describe('global row enablement expressions', () => {
+  function gateWithRow(options: Record<string, unknown>, evaluate?: (expression: string) => unknown) {
+    const entry = { options, disabled: false, fiber: { state: 2, uid: 7 }, ...evaluate === undefined ? {} : { evaluate } } as unknown as GateEntry
+    const tree = { entries: () => [entry], filename: '/tmp/cordis.yml', write: () => {} }
+    const include = { id: 'global-include', options: { name: 'cordis:include' }, disabled: false, subtree: tree }
+    const ctxWithLoader = {
+      root: { fiber: {} },
+      get: (name: string) => (name === 'loader' ? { entries: () => [include] } : undefined),
+    } as unknown as Context
+    return createMcpPreloadGate(ctxWithLoader, () => 'dynamic', Object.assign(() => [], { ownsTree: () => false }), vi.fn())
+  }
+
+  it('evaluates a !!js disabled expression instead of treating it as enabled', () => {
+    const gate = gateWithRow(
+      { id: 'conditional', name: MCP, disabled: { __jsExpr: 'process.env.OFF' }, config: {} },
+      expression => expression === 'process.env.OFF' ? true : undefined,
+    )
+    expect(gate.globalRows!()[0]?.enabled).toBe(false)
+    gate.dispose()
+  })
+
+  it('reports an expression it cannot evaluate as conditional, never enabled', () => {
+    const gate = gateWithRow({ id: 'conditional', name: MCP, disabled: { __jsExpr: 'process.env.OFF' }, config: {} })
+    expect(gate.globalRows!()[0]?.enabled).toBe('conditional')
+    gate.dispose()
+  })
+})
+
+describe('root-level global rows', () => {
+  it('reads and holds an mcp-client row mounted directly at the loader root', async () => {
+    const entry = {
+      id: 'root-mcp',
+      options: { id: 'root-mcp', name: MCP, config: {} },
+      disabled: false,
+      fiber: { state: 2, uid: 7 },
+      update: vi.fn(async () => {}),
+    } as unknown as GateEntry
+    const ctxWithLoader = {
+      root: { fiber: {} },
+      get: (name: string) => (name === 'loader' ? { entries: () => [entry] } : undefined),
+    } as unknown as Context
+    const gate = createMcpPreloadGate(ctxWithLoader, () => 'dynamic', Object.assign(() => [], { ownsTree: () => false }), vi.fn())
+    expect(gate.globalRows!()).toEqual([
+      { entryId: 'root-mcp', enabled: true, held: false, mounted: true, config: {} },
+    ])
+    await gate.reconcile()
+    expect(gate.stateFor({ scope: 'global' }, 'root-mcp')?.suppressed).toBe(true)
+    expect(gate.suppressedEntryIds()).toEqual(['root-mcp'])
+    gate.dispose()
+  })
+})

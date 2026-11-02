@@ -46,7 +46,7 @@ See [AGENTS.md](https://github.com/zhang-guo-wen/dsh-mcp-manager/blob/master/AGE
 | Setting | Effect |
 |---|---|
 | **Tool search** (`search`) | Registers `mcp_search`: the model finds tools by keyword across every discovered server and gets names plus one-line descriptions only. |
-| **Index uncached servers** (`searchIndex`) | Lets a search connect to a server it has no tool list for (3 at a time, 8 seconds each). Off by default, so a search stays a cheap read. |
+| **Index uncached servers** (`searchIndex`) | Lets a search connect to a server it has no tool list for (3 at a time, one 8-second budget per search). Off by default, so a search stays a cheap read. |
 | **Items per listing** (`pageSize`) | `mcp_load` / `mcp_search` list at most this many items and return `nextCursor` for the rest. |
 | **Names and descriptions only** (`namesOnly`) | `mcp_load` omits argument schemas by default; asking for one tool by name still returns that tool's full schema. |
 | **Tools collected per server** (`maxTools`) | Caps the paginated `tools/list` walk, so an enormous server cannot flood a request. |

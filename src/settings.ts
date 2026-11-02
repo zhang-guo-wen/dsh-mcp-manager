@@ -53,7 +53,7 @@ export interface Config {
   /** Loading mode, read fresh on every commit. */
   loading: Volatile<string>
   /** Authoring descriptions, keyed by row. Published in the model-facing MCP inventory. */
-  descriptions: Volatile<Record<string, string>>
+  descriptions: Volatile<Record<string, unknown>>
   /** Per-row tool filters, keyed by row. */
   tools: Volatile<Record<string, unknown>>
   /** Optimization policy, read fresh at every load and search. */
@@ -68,7 +68,10 @@ export const Config = z.object({
   // last good section. `parseMcpLoadingMode` converges an unrecognized mode at
   // the read site instead.
   loading: z.string().default('dynamic').volatile(),
-  descriptions: z.dict(String).default({}).volatile(),
+  // Same reason once more: the map is hand-editable, so a non-string value must
+  // converge at read time instead of rejecting the whole namespace and silently
+  // rolling back the loading mode, tool rules, and policy with it.
+  descriptions: z.dict(z.any()).default({}).volatile(),
   // Values stay unvalidated by the schema on purpose, for the same reason: a
   // malformed entry must fail that one row's filter at read time rather than
   // rejecting the whole namespace.
@@ -98,10 +101,19 @@ export type McpSettingsSource = () => McpSettingsFlags
  * @returns a thunk returning the flags as they stand at call time.
  */
 export function readMcpSettings(config: Config): McpSettingsSource {
-  return () => ({
-    loading: config.loading.get(),
-    descriptions: { ...config.descriptions.get() },
-    tools: { ...config.tools.get() },
-    optimize: { ...config.optimize.get() },
-  })
+  return () => {
+    // A hand-edited description may be any JSON value. Only strings are
+    // descriptions; everything else is dropped here so no consumer has to
+    // narrow the stored map.
+    const descriptions: Record<string, string> = {}
+    for (const [key, value] of Object.entries(config.descriptions.get())) {
+      if (typeof value === 'string') descriptions[key] = value
+    }
+    return {
+      loading: config.loading.get(),
+      descriptions,
+      tools: { ...config.tools.get() },
+      optimize: { ...config.optimize.get() },
+    }
+  }
 }

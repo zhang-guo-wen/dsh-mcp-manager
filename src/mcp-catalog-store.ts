@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { lstat, mkdir, open } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
-import { validCatalogRecord, type McpCatalogStorage } from './mcp-catalog.ts'
+import { CatalogGenerationError, validCatalogRecord, type McpCatalogStorage } from './mcp-catalog.ts'
 
 const SCHEMA_VERSION = 1
 const MAX_RECORDS = 500
@@ -203,7 +203,9 @@ export function databaseCatalogStorage(filename: string): McpCatalogStorage {
       await enqueue(async () => {
         const saved = await withDatabase(true, db => {
           const currentGeneration = generationOf(db)
-          if (!clear && currentGeneration !== baseline) throw new Error('catalogue cleared by another host; reload before writing')
+          if (!clear && currentGeneration !== baseline) {
+            throw new CatalogGenerationError('catalogue cleared by another host; reload before writing')
+          }
           if (clear && currentGeneration === Number.MAX_SAFE_INTEGER) throw new Error('catalogue generation exhausted')
           const generation = clear ? currentGeneration + 1 : currentGeneration
           const current = readRecords(db)
@@ -232,10 +234,19 @@ export function databaseCatalogStorage(filename: string): McpCatalogStorage {
             remove.run(oldest)
           }
           db.prepare("UPDATE metadata SET value = ? WHERE key = 'clear_generation'").run(generation)
-          return generation
+          // What this writer's snapshot actually left in the database is what
+          // the next incremental write must diff against: other writers' rows
+          // are not ours to delete, and a row eviction dropped must not look
+          // unchanged on the next save (which would leave it only in memory).
+          const retained: RecordIndex = new Map()
+          for (const identity of next.keys()) {
+            const item = merged.get(identity)
+            if (item !== undefined) retained.set(identity, item)
+          }
+          return { generation, entries: retained }
         })
-        baseline = saved!
-        previous = next
+        baseline = saved!.generation
+        previous = saved!.entries
       })
     },
   }

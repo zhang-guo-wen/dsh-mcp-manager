@@ -23,8 +23,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { MCP_CLIENT_MODULE, findEntryRows, presetLeafId, readEntryListRowsSync, writableGlobalIncludes } from './mcp-authoring.ts'
-import type { GateMount, McpGlobalRow } from './mcp-gate.ts'
-import { declaredMcpRows } from './mcp-allowance.ts'
+import { mcpRowKey, type GateMount, type McpGlobalRow } from './mcp-gate.ts'
+import { declaredEnabled, declaredMcpRows } from './mcp-allowance.ts'
 import { storedCredentialKeys } from './mcp-config.ts'
 import { diagnoseRowConfig } from './mcp-diagnostics.ts'
 import { listPresetDeclarations } from './preset-source.ts'
@@ -50,6 +50,8 @@ interface RosterLoaderEntry {
   readonly disabled: boolean
   readonly fiber?: { readonly state: number } | undefined
   readonly subtree?: { readonly filename?: string; readonly config?: { readonly patches?: readonly unknown[] } } | undefined
+  /** Evaluate a `!!js` enablement expression in this row's own Loader context. */
+  evaluate?(expression: string): unknown
 }
 
 /** One MCP row found in a composition, before it is projected for the section. */
@@ -191,7 +193,7 @@ export function readMcpRoster(
         entryId: presetLeafId(entry.id),
         options: entry.options,
         live: true,
-        enabled: entry.options.disabled !== true,
+        enabled: declaredEnabled(entry.options.disabled, entry.evaluate?.bind(entry)),
         state: entry.fiber?.state,
       })))
     }
@@ -236,7 +238,7 @@ export function readMcpRoster(
           live: true,
           enabled: declaredRow?.enabled ?? !row.disabled,
           state: row.fiber?.state,
-          held: held.has(leaf),
+          held: held.has(mcpRowKey({ scope: 'preset', agentPreset: presetId }, leaf)) || held.has(leaf),
         })
       }
     }
@@ -254,7 +256,10 @@ export function readMcpRoster(
   return {
     entries,
     presets,
-    globalWritable: includes.length === 1,
+    // One writable Include is not enough if its file cannot be read: the page
+    // would offer a target every write then fails on. The plane is writable
+    // exactly when no read-only reason applies.
+    globalWritable: globalReadOnly === undefined,
     ...globalReadOnly === undefined ? {} : { globalReason: globalReadOnly },
   }
 }

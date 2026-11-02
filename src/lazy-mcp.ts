@@ -66,6 +66,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type { McpToolDefinitionOptions } from '@deepseek-ai/dsh-mcp-client'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 import { scopeChainOf, scopeOf } from '@deepseek-ai/dsh-scope'
 import { MCP_CLIENT_MODULE } from './mcp-authoring.ts'
 import { McpCatalog } from './mcp-catalog.ts'
@@ -228,7 +229,7 @@ export function listMcpRows(ctx: Context, gate: McpPreloadGate, external?: Exter
       serverName: row.entryId,
       key: mcpRowKey({ scope: 'global' }, row.entryId),
       scopeLabel: 'global',
-      enabled: row.enabled,
+      enabled: row.enabled === true,
       ...(row.held ? { held: true } : {}),
     })
   }
@@ -301,8 +302,8 @@ const MAX_TOOL_PAGES = 64
 /** How many servers one search may connect at once while indexing them. */
 const SEARCH_INDEX_CONCURRENCY = 3
 
-/** How long one indexing connection may take before its server is left unindexed. */
-const SEARCH_INDEX_TIMEOUT_MS = 8_000
+/** How long one whole search may spend indexing uncached servers. */
+const SEARCH_INDEX_BUDGET_MS = 8_000
 
 /** One discovery walk's result: the tools, and what the walk could not see. */
 export interface McpDiscovery {
@@ -377,7 +378,10 @@ export async function connectLazy(
     transport = new StdioClientTransport({
       command: config.command,
       args: [...config.args],
-      env: { ...process.env, ...config.env },
+      // The ambient environment minus credential-shaped names and every
+      // `DSH_*` fact, then the row's explicit `env` on top. A third-party `npx`
+      // server must not inherit the harness's own API keys or identity.
+      env: { ...scrubbedParentEnv(), ...config.env },
       ...(config.cwd === '' ? {} : { cwd: config.cwd }),
       stderr: 'ignore',
     })
@@ -591,6 +595,8 @@ export function registerMcpTools(
   const views = new Map<string, Map<string, LoadedView>>()
   /** Sessions whose claims are already bound to their own context disposal. */
   const scopedAgents = new Set<string>()
+  /** Sessions whose context ended while a load was still in flight. */
+  const endedAgents = new Set<string>()
   /** The agent behind one id, for a re-sync that has no execution context. */
   const agents = new Map<string, { readonly id: string; readonly ctx: Context }>()
   /** Serial behind unique claim tokens: every load claims under its own. */
@@ -609,6 +615,34 @@ export function registerMcpTools(
     const created = new Map<string, LoadedView>()
     views.set(agentId, created)
     return created
+  }
+
+  /** Whether one view is still the session's installed view and the plugin is live. */
+  const liveView = (agentId: string, serverName: string, view: LoadedView): boolean =>
+    !disposed && views.get(agentId)?.get(serverName) === view
+
+  /**
+   * Serialize every operation that changes one session's view of one server.
+   *
+   * Two parallel `mcp_load` calls used to race: both registered the same tool
+   * names, and the real registry rejects the second registration instead of
+   * letting it converge. The loser now waits, re-reads the session's view, and
+   * takes the ordinary widen path.
+   */
+  const viewOperations = new Map<string, Promise<void>>()
+  const serialized = async <T>(key: string, work: () => Promise<T>): Promise<T> => {
+    const prior = viewOperations.get(key) ?? Promise.resolve()
+    let release!: () => void
+    const current = new Promise<void>(resolve => { release = resolve })
+    const tail = prior.then(() => current)
+    viewOperations.set(key, tail)
+    await prior
+    try {
+      return await work()
+    } finally {
+      release()
+      if (viewOperations.get(key) === tail) viewOperations.delete(key)
+    }
   }
 
   /** The harness adapter, resolved once per activation; dynamic loads fail loud without it. */
@@ -652,8 +686,11 @@ export function registerMcpTools(
    */
   const releaseAgent = (agentId: string): void => {
     scopedAgents.delete(agentId)
+    endedAgents.add(agentId)
+    agents.delete(agentId)
     const perAgent = views.get(agentId)
     if (perAgent === undefined) return
+    if (perAgent.size === 0) views.delete(agentId)
     for (const serverName of [...perAgent.keys()]) void releaseView(agentId, serverName)
   }
 
@@ -716,20 +753,36 @@ export function registerMcpTools(
    * session with the tools it already had.
    */
   const resyncView = async (agentId: string, serverName: string, view: LoadedView): Promise<void> => {
-    const selection = admittedTools(view.connection.tools, view.filter, view.admits, policyNow())
-    view.tools = selection.visible
-    view.hidden = selection.hidden
-    view.truncated = view.connection.truncated
-    if (view.carrier === 'proxy') return
-    const agent = agents.get(agentId)
-    const registry = agent?.ctx.get('tools') as ToolRegistry | undefined
-    if (agent === undefined || registry === undefined) return
-    const adapter = await resolveAdapter()
-    view.definitions = swapNativeTools(
-      registry,
-      view.definitions,
-      nativeDefinitions(agent.ctx, adapter, serverName, selection.admitted, view.connection.client),
-    )
+    const apply = async (): Promise<void> => {
+      const selection = admittedTools(view.connection.tools, view.filter, view.admits, policyNow())
+      view.tools = selection.visible
+      view.hidden = selection.hidden
+      view.truncated = view.connection.truncated
+      if (view.carrier === 'proxy') return
+      const agent = agents.get(agentId)
+      const registry = agent?.ctx.get('tools') as ToolRegistry | undefined
+      if (agent === undefined || registry === undefined) return
+      const adapter = await resolveAdapter()
+      // The view can be released while the adapter resolves. Registering now
+      // would put tools into the agent's scope that no `views` entry owns, and
+      // no later `mcp_unload` could reach them.
+      if (!liveView(agentId, serverName, view)) return
+      view.definitions = swapNativeTools(
+        registry,
+        view.definitions,
+        nativeDefinitions(agent.ctx, adapter, serverName, selection.admitted, view.connection.client),
+      )
+    }
+    // One serial chain per view: two `list_changed` notifications, or a change
+    // racing an unload, must not interleave a swap with the release that
+    // follows it.
+    const run = (view.resyncing ?? Promise.resolve()).then(apply, apply)
+    view.resyncing = run
+    try {
+      await run
+    } finally {
+      if (view.resyncing === run) delete view.resyncing
+    }
   }
 
   /** The row keys every live view of one connection was loaded under. */
@@ -791,6 +844,7 @@ export function registerMcpTools(
     }
     views.clear()
     scopedAgents.clear()
+    endedAgents.clear()
     agents.clear()
     await Promise.allSettled(pending)
   }
@@ -834,11 +888,20 @@ export function registerMcpTools(
 
   /** Rebuild one native view's registrations from its current admitted set. */
   const reregister = async (agentId: string, serverName: string, view: LoadedView): Promise<void> => {
+    // The proxy carrier registers nothing by contract: a widened view only
+    // changes what `mcp_call` admits, never the session's tool list.
+    if (view.carrier === 'proxy') {
+      const selection = admittedTools(view.connection.tools, view.filter, view.admits, policyNow())
+      view.tools = selection.visible
+      view.hidden = selection.hidden
+      return
+    }
     const agent = agents.get(agentId)
     const registry = agent?.ctx.get('tools') as ToolRegistry | undefined
     if (agent === undefined || registry === undefined) return
-    const selection = admittedTools(view.connection.tools, view.filter, view.admits, policyNow())
     const adapter = await resolveAdapter()
+    if (!liveView(agentId, serverName, view)) return
+    const selection = admittedTools(view.connection.tools, view.filter, view.admits, policyNow())
     view.definitions = swapNativeTools(
       registry,
       view.definitions,
@@ -994,155 +1057,180 @@ export function registerMcpTools(
         limit?: number
       }
       const serverName = String(request.server)
-      const policy = policyNow()
-      const limit = clampPageSize(request.limit, policy.pageSize)
-      const query = typeof request.query === 'string' ? request.query : ''
-      const wanted = typeof request.tool === 'string' && request.tool.trim() !== '' ? request.tool.trim() : undefined
-      const detail = parseDetailLevel(request.detail, policy, wanted !== undefined)
-      const page = { cursor: request.cursor, limit }
+      return serialized(`mcp:${agent.id}\u0000${serverName}`, async () => {
+        if (disposed) {
+          throw new Error('the MCP tool registration was rebuilt before this load could finish; try again')
+        }
+        const policy = policyNow()
+        const limit = clampPageSize(request.limit, policy.pageSize)
+        const query = typeof request.query === 'string' ? request.query : ''
+        const wanted = typeof request.tool === 'string' && request.tool.trim() !== '' ? request.tool.trim() : undefined
+        const detail = parseDetailLevel(request.detail, policy, wanted !== undefined)
+        const page = { cursor: request.cursor, limit }
 
-      const existing = viewsFor(agent.id).get(serverName)
-      if (existing !== undefined) {
-        // A second load only ever widens what the session already has, so a
-        // later query can add tools without taking any away. A load with no
-        // `query`/`tool` asks for the whole server, so it widens a narrowed view
-        // back to every tool the row's rules leave visible.
+        const existing = views.get(agent.id)?.get(serverName)
+        if (existing !== undefined) {
+          // A second load only ever widens what the session already has, so a
+          // later query can add tools without taking any away. A load with no
+          // `query`/`tool` asks for the whole server, so it widens a narrowed view
+          // back to every tool the row's rules leave visible.
+          const narrowing = narrowingFor(query, wanted)
+          const widened = narrowing === undefined ? widenToWhole(existing) : widen(existing, narrowing)
+          if (widened) await reregister(agent.id, serverName, existing)
+          return reportLoad(
+            existing,
+            serverName,
+            { query, wanted, detail, page, widened },
+            policy,
+            () => toolNamesFor(tools, agent.ctx, serverName, external),
+          )
+        }
+
+        const row = (await allowedRows(external ? external.scopeOf(agent.ctx) : scopeOf(agent.ctx)))
+          .find(candidate => candidate.serverName === serverName)
+        if (row === undefined) {
+          throw new Error(
+            `unknown or disabled MCP server "${serverName}" — load one of the MCP servers listed in your system prompt`,
+          )
+        }
+        const config = row.externalConfig ?? mcpEntryConfig(await describeRow(ctx, row), serverName)
+        // A row with an incomplete connection config cannot start, so the load
+        // fails here with the actual reason instead of letting the client report
+        // "connection failed". The settings page marks the same row as not
+        // configured, and the gate holds it unmounted.
+        const configIssue = diagnoseRowConfig(config)
+        if (configIssue.length > 0) {
+          throw new Error(
+            `MCP server "${serverName}" is not configured and cannot start: ${describeMcpConfigIssues(configIssue)}`,
+          )
+        }
+        const filter = readers.filterFor(row.key)
         const narrowing = narrowingFor(query, wanted)
-        const widened = narrowing === undefined ? widenToWhole(existing) : widen(existing, narrowing)
-        if (widened) await reregister(agent.id, serverName, existing)
-        return reportLoad(
-          existing,
-          serverName,
-          { query, wanted, detail, page, widened },
-          policy,
-          () => toolNamesFor(tools, agent.ctx, serverName, external),
-        )
-      }
-
-      const row = (await allowedRows(external ? external.scopeOf(agent.ctx) : scopeOf(agent.ctx)))
-        .find(candidate => candidate.serverName === serverName)
-      if (row === undefined) {
-        throw new Error(
-          `unknown or disabled MCP server "${serverName}" — load one of the MCP servers listed in your system prompt`,
-        )
-      }
-      const config = row.externalConfig ?? mcpEntryConfig(await describeRow(ctx, row), serverName)
-      // A row with an incomplete connection config cannot start, so the load
-      // fails here with the actual reason instead of letting the client report
-      // "connection failed". The settings page marks the same row as not
-      // configured, and the gate holds it unmounted.
-      const configIssue = diagnoseRowConfig(config)
-      if (configIssue.length > 0) {
-        throw new Error(
-          `MCP server "${serverName}" is not configured and cannot start: ${describeMcpConfigIssues(configIssue)}`,
-        )
-      }
-      const filter = readers.filterFor(row.key)
-      const narrowing = narrowingFor(query, wanted)
-      const carrier = carrierFor(onDemandMode, filter, narrowing !== undefined)
-      if (carrier === undefined) throw new Error('mcp_load is not registered under the "eager" loading mode')
-      const key: PoolKey = { rowKey: row.key, serverName, fingerprint: connectionFingerprint(config) }
-      // The pooled connection is opened once and shared; only the registering
-      // and the claim below are per session. `connectLazy` walks every page of
-      // the server's listing, so what this connection already discovered is what
-      // the catalogue remembers for it.
-      const epoch = catalog.epoch
-      const connection = await pool.acquire(key, config)
-      // Claim before any further work, under a token unique to this load: a
-      // connection no claim holds can be closed under it by any release, and a
-      // token-per-load keeps the count right even when one session loads the
-      // same server twice in parallel. Every exit below releases this token.
-      const claimId = `${agent.id}\u0000${(claimSerial += 1)}`
-      pool.claim(key, connection, claimId)
-      remember(row.key, {
-        tools: connection.tools,
-        truncated: connection.truncated,
-        ...connection.ttlMs === undefined ? {} : { ttlMs: connection.ttlMs },
-      }, config, epoch)
-      const selection = admittedTools(connection.tools, filter, narrowing, policy)
-      // A narrowing that admits nothing must not leave a view behind: an empty
-      // view would answer every later call for that server with an empty tool
-      // list, so the session would be locked out until it unloaded a server it
-      // never really got. The claim is released instead and the answer handed
-      // back: an error when one tool was asked for by name (the model has the
-      // wrong name), and an ordinary empty listing when a query simply matched
-      // nothing (the model should try other words).
-      if (narrowing !== undefined && selection.admitted.length === 0) {
-        await pool.release(connection, claimId)
-        if (wanted === undefined) {
-          return {
-            server: serverName,
-            total: 0,
-            shown: 0,
-            loaded: 0,
-            hidden: selection.hidden,
-            truncated: connection.truncated,
-            tools: [],
+        const carrier = carrierFor(onDemandMode, filter, narrowing !== undefined)
+        if (carrier === undefined) throw new Error('mcp_load is not registered under the "eager" loading mode')
+        const key: PoolKey = { rowKey: row.key, serverName, fingerprint: connectionFingerprint(config) }
+        // The pooled connection is opened once and shared; only the registering
+        // and the claim below are per session. `connectLazy` walks every page of
+        // the server's listing, so what this connection already discovered is what
+        // the catalogue remembers for it.
+        const epoch = catalog.epoch
+        const connection = await pool.acquire(key, config)
+        // Claim before any further work, under a token unique to this load: a
+        // connection no claim holds can be closed under it by any release, and a
+        // token-per-load keeps the count right even when one session loads the
+        // same server twice in parallel. Every exit below releases this token.
+        const claimId = `${agent.id}\u0000${(claimSerial += 1)}`
+        pool.claim(key, connection, claimId)
+        if (disposed) {
+          // The mode changed while the connection was opening. Claiming and
+          // releasing under this load's own token stops the server when nobody
+          // else holds it, instead of leaving an orphan behind the rebuilt tools.
+          await pool.release(connection, claimId)
+          throw new Error('the MCP tool registration was rebuilt before this load could finish; try again')
+        }
+        remember(row.key, {
+          tools: connection.tools,
+          truncated: connection.truncated,
+          ...connection.ttlMs === undefined ? {} : { ttlMs: connection.ttlMs },
+        }, config, epoch)
+        const selection = admittedTools(connection.tools, filter, narrowing, policy)
+        // A narrowing that admits nothing must not leave a view behind: an empty
+        // view would answer every later call for that server with an empty tool
+        // list, so the session would be locked out until it unloaded a server it
+        // never really got. The claim is released instead and the answer handed
+        // back: an error when one tool was asked for by name (the model has the
+        // wrong name), and an ordinary empty listing when a query simply matched
+        // nothing (the model should try other words).
+        if (narrowing !== undefined && selection.admitted.length === 0) {
+          await pool.release(connection, claimId)
+          if (wanted === undefined) {
+            return {
+              server: serverName,
+              total: 0,
+              shown: 0,
+              loaded: 0,
+              hidden: selection.hidden,
+              truncated: connection.truncated,
+              tools: [],
+            }
+          }
+          const publishes = connection.tools.some(tool => tool.name === wanted)
+          throw new Error(
+            publishes
+              ? `MCP server "${serverName}" publishes the tool "${wanted}", but this row's rules or the annotation `
+                + 'policy keep it out of this session'
+              : `MCP server "${serverName}" publishes no tool "${wanted}" — use mcp_search to find the right name, `
+                + 'or call mcp_load without `tool` to list what it does publish',
+          )
+        }
+        const registry = agent.ctx.get('tools') as ToolRegistry | undefined
+        if (registry === undefined) {
+          await pool.release(connection, claimId)
+          throw new Error('mcp_load requires the tools service')
+        }
+        let definitions = new Map<string, () => void>()
+        if (carrier === 'native') {
+          try {
+            const adapter = await resolveAdapter()
+            if (disposed) {
+              await pool.release(connection, claimId)
+              throw new Error('the MCP tool registration was rebuilt before this load could finish; try again')
+            }
+            definitions = swapNativeTools(
+              registry,
+              new Map(),
+              nativeDefinitions(agent.ctx, adapter, serverName, selection.admitted, connection.client),
+            )
+          } catch (error) {
+            await pool.release(connection, claimId)
+            throw error
           }
         }
-        const publishes = connection.tools.some(tool => tool.name === wanted)
-        throw new Error(
-          publishes
-            ? `MCP server "${serverName}" publishes the tool "${wanted}", but this row's rules or the annotation `
-              + 'policy keep it out of this session'
-            : `MCP server "${serverName}" publishes no tool "${wanted}" — use mcp_search to find the right name, `
-              + 'or call mcp_load without `tool` to list what it does publish',
-        )
-      }
-      const registry = agent.ctx.get('tools') as ToolRegistry | undefined
-      if (registry === undefined) {
-        await pool.release(connection, claimId)
-        throw new Error('mcp_load requires the tools service')
-      }
-      let definitions = new Map<string, () => void>()
-      if (carrier === 'native') {
-        try {
-          const adapter = await resolveAdapter()
-          definitions = swapNativeTools(
-            registry,
-            new Map(),
-            nativeDefinitions(agent.ctx, adapter, serverName, selection.admitted, connection.client),
-          )
-        } catch (error) {
+        if (disposed || endedAgents.has(agent.id)) {
+          // The session ended while its server was starting. Its tools must not
+          // be installed now: no view would own them any more, and no unload
+          // could ever reach them.
+          for (const dispose of [...definitions.values()].reverse()) dispose()
+          definitions.clear()
           await pool.release(connection, claimId)
-          throw error
+          throw new Error('the session ended before this MCP server finished loading')
         }
-      }
-      agents.set(agent.id, agent)
-      // A parallel load of the same server may have won the race while this one
-      // was connecting or registering. The first view keeps what it registered
-      // — a later load only ever widens — so this one undoes its own
-      // registrations and claim instead of silently clobbering the winner.
-      const won = viewsFor(agent.id).get(serverName)
-      if (won !== undefined) {
-        for (const dispose of [...definitions.values()].reverse()) dispose()
-        definitions.clear()
-        await pool.release(connection, claimId)
-        const widening = narrowing === undefined ? widenToWhole(won) : widen(won, narrowing)
-        if (widening) await reregister(agent.id, serverName, won)
-        return reportLoad(
-          won,
-          serverName,
-          { query, wanted, detail, page, widened: widening },
-          policy,
-          () => toolNamesFor(tools, agent.ctx, serverName, external),
-        )
-      }
-      const view: LoadedView = {
-        rowKey: row.key,
-        carrier,
-        claimId,
-        connection,
-        filter,
-        tools: selection.visible,
-        hidden: selection.hidden,
-        truncated: connection.truncated,
-        definitions,
-        ...narrowing === undefined ? {} : { admits: narrowing },
-      }
-      viewsFor(agent.id).set(serverName, view)
-      bindAgentScope(agent)
-      return reportLoad(view, serverName, { query, wanted, detail, page }, policy, () => toolNamesFor(tools, agent.ctx, serverName, external))
+        agents.set(agent.id, agent)
+        // A parallel load of the same server may have won the race while this one
+        // was connecting or registering. The first view keeps what it registered
+        // — a later load only ever widens — so this one undoes its own
+        // registrations and claim instead of silently clobbering the winner.
+        const won = views.get(agent.id)?.get(serverName)
+        if (won !== undefined) {
+          for (const dispose of [...definitions.values()].reverse()) dispose()
+          definitions.clear()
+          await pool.release(connection, claimId)
+          const widening = narrowing === undefined ? widenToWhole(won) : widen(won, narrowing)
+          if (widening) await reregister(agent.id, serverName, won)
+          return reportLoad(
+            won,
+            serverName,
+            { query, wanted, detail, page, widened: widening },
+            policy,
+            () => toolNamesFor(tools, agent.ctx, serverName, external),
+          )
+        }
+        const view: LoadedView = {
+          rowKey: row.key,
+          carrier,
+          claimId,
+          connection,
+          filter,
+          tools: selection.visible,
+          hidden: selection.hidden,
+          truncated: connection.truncated,
+          definitions,
+          ...narrowing === undefined ? {} : { admits: narrowing },
+        }
+        viewsFor(agent.id).set(serverName, view)
+        bindAgentScope(agent)
+        return reportLoad(view, serverName, { query, wanted, detail, page }, policy, () => toolNamesFor(tools, agent.ctx, serverName, external))
+      })
     },
   }))
 
@@ -1278,6 +1366,9 @@ export function registerMcpTools(
         const config = configs.get(row.key)
         return cached(row) === undefined && (policy.searchIndex || config !== undefined && catalog.expiredFor(config))
       })
+      // One budget for the whole search, not one per server: three concurrent
+      // connects against thirty cold servers must not hold the call for minutes.
+      const indexDeadline = Date.now() + SEARCH_INDEX_BUDGET_MS
       if (stale.length > 0) {
         await mapLimited(stale, SEARCH_INDEX_CONCURRENCY, async (row) => {
           if (disposed || requestEpoch !== catalog.epoch) return
@@ -1295,10 +1386,12 @@ export function registerMcpTools(
             const config = configs.get(row.key)
             if (config === undefined) return
             const epoch = requestEpoch
+            const remaining = indexDeadline - Date.now()
+            if (remaining <= 0) return
             const { client, tools: listed, truncated, ttlMs } = await connectLazyWithin(
               config,
               { maxTools: policy.maxTools },
-              SEARCH_INDEX_TIMEOUT_MS,
+              remaining,
             )
             try {
               const discovery = { tools: listed, truncated, ...ttlMs === undefined ? {} : { ttlMs } }
@@ -1383,7 +1476,7 @@ export function registerMcpTools(
       const agent = exec.agent
       if (agent === undefined) throw new Error('mcp_call requires an owning agent session')
       const request = args as { server: string; tool: string; arguments: unknown }
-      const view = viewsFor(agent.id).get(request.server)
+      const view = views.get(agent.id)?.get(request.server)
       if (view === undefined) {
         throw new Error(`MCP server "${request.server}" is not loaded for this session — call mcp_load first`)
       }
@@ -1442,11 +1535,15 @@ export function registerMcpTools(
       const agent = exec.agent
       if (agent === undefined) throw new Error('mcp_unload requires an owning agent session')
       const serverName = String((args as { server: string }).server)
-      const view = views.get(agent.id)?.get(serverName)
-      if (view === undefined) return { server: serverName, released: false, stopped: false }
-      const connection = view.connection
-      await releaseView(agent.id, serverName)
-      return { server: serverName, released: true, stopped: connection.claims.size === 0 }
+      // Share the load's serial chain: an unload that ran while its server was
+      // still being registered could miss the view and leave its tools behind.
+      return serialized(`mcp:${agent.id}\u0000${serverName}`, async () => {
+        const view = views.get(agent.id)?.get(serverName)
+        if (view === undefined) return { server: serverName, released: false, stopped: false }
+        const connection = view.connection
+        await releaseView(agent.id, serverName)
+        return { server: serverName, released: true, stopped: connection.claims.size === 0 }
+      })
     },
   }))
 
