@@ -1631,3 +1631,45 @@ JSON 旁边，鼠标失焦时才显示。取舍见 [design-decisions.md](design-
 - 本轮没有提交、推送、升版或发布npm，已有其它未提交改动继续保留。
 
 ---
+## 二十六、发版 1.6.0：目录 SQLite 持久化、全局 Include 自动创建与 maxTools 采集（2026-11-03，产物 `881112F5` / `C05B2F61`）
+
+### 环境与产物绑定
+
+| 项 | 值 |
+|---|---|
+| 日期 | 2026-11-03T22:22:31+08:00 |
+| 插件 | @guowenzhang/dsh-mcp-manager@1.6.0（HEAD 84aa92a，工作树 4 项未提交） |
+| 宿主 | （未绑定隔离实例；如为源码内验证请写明） |
+| DSH_HOME | （未绑定） |
+| 端口 / URL | （未绑定） |
+| Node | v24.12.0 |
+| lib/index.mjs | `881112f5b7f42245dd4270271feb2709f6353e93e1a80c1e7dfb4758e171a922`（228970 字节，2026-11-03T14:22:08.998Z） |
+| lib/client.js | `c05b2f61377bf85fb1479b6297c28bc6cfd01d3ba2d61d61981204a353fe54d6`（202011 字节，2026-11-03T14:22:09.104Z） |
+| 证据文件 | `.scratch/test-system/runs/2026-11-03-222211-dsh-mcp-manager.json` |
+
+### 车道结果
+
+| 车道 | 状态 | 退出码 | 耗时 |
+|---|---|---|---|
+| typecheck | passed | 0 | 1.7s |
+| build | passed | 0 | 0.9s |
+| metadata | passed | 0 | 0.4s |
+| unit | passed | 0 | 2.7s |
+| harness | passed | 0 | 4.0s |
+| artifact | passed | 0 | 2.8s |
+
+### 逐项读数
+
+- `npm run typecheck`：`tsc --noEmit -p tsconfig.json`，退出码 0（1.7s）。
+- `npm run build`：tsdown（host）+ `build-client.mjs`（rolldown handoff），退出码 0；产物 `lib/index.mjs` 228970 字节、`lib/client.js` 202011 字节，SHA256 见上表。重建后 `git status` 无 `lib/` 改动，仓库里已提交的产物与当前工具链重建结果一致。
+- `npm test`（unit 与 artifact 两条车道各跑一次，结果一致）：**31 个文件 / 332 项通过、0 失败**（README 的双语验证状态数字已同步为 31/332）。新增覆盖包括 `mcp-catalog-store.spec.ts` 19 项（SQLite 目录持久化、快照字节上限与逐行淘汰）、`mcp-global-include.spec.ts`、`mcp-catalog-controls.spec.tsx`、`mcp-connection-probe.spec.tsx`、`mcp-preset-name.spec.tsx`、`mcp-probe.spec.ts`。
+- `npm run test:harness`（harness 车道；`DSH_HARNESS_ROOT=C:\02-codespace\DeepSeek\deepseekharness`）：**7 个文件 / 27 项通过、0 失败**，耗时 4.0s。分布：`zero-launch` 4、`plugin-startup` 3、`preset-compat` 6、`global-zero-launch` 5、`global-auto-enable` 2、`on-demand-pool` 4、`global-authoring` 3。
+- `browser:roster-scroll`（真实 Chromium + fixture，第二个证据文件 `.scratch/test-system/runs/2026-11-03-222356-dsh-mcp-manager.json`）：passed，77.1s。读数：1440x420-light 列表 90px / 行 70px / 滚动 6308px；761x560-dark 列表 208px / 滚动 6190px；预设名称在 zh/en 下的菜单、chip、新增/编辑与 raw id 读数一致，名册读取各 1 次；目录控件在 1440-light 与 390-dark 下状态位于缓存标题下、无手动 TTL、只显式刷新。
+- `npm pack --dry-run`：`@guowenzhang/dsh-mcp-manager@1.6.0`，包含 `cordis.patch.yml`（含安装顺序守卫）、`lib/`、`locale/`、双语 README、`docs/` 与 LICENSE，无可疑文件、无 `env`/`headers` 值。
+
+### 本节未覆盖
+
+- 未在本轮重新做隔离实例实测（npm 发布版宿主 + 独立 `DSH_HOME`）；README 里记录的隔离实例读数属于更早产物，本次只复跑了单元、harness 与浏览器 fixture 车道。
+- 未覆盖：真实 `npx -y` 冷启动耗时、GUI 里由模型决定的调用路径、`tools/list_changed` 跨会话重同步、活动实例内运行中切换加载模式、活动实例里的 `lazy` 池复用、`mcp_search` 工具本身、预设平面新增/删除行与导入的浏览器实测、编辑弹窗逐行保存状态、设置写队列单测、用户 Include 的注释保留。
+
+---
