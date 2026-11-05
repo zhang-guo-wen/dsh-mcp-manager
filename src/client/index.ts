@@ -166,7 +166,7 @@ export async function apply(ctx: Context): Promise<void> {
   // used to do, order 15 tying with the built-in Plugins section.
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
-    id: 'mcp-manager',
+    id: 'mcp-manager-ui',
     order: 14,
     label: () => t('nav'),
     locale: NS,

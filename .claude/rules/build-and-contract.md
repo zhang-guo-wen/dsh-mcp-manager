@@ -145,7 +145,7 @@ npx @deepseek-ai/dsh plugin --profile web remove @guowenzhang/dsh-mcp-manager
 
 ```yaml
 - insert:
-    - id: mcp-manager
+    - id: mcp-manager-ui
       name: '@guowenzhang/dsh-mcp-manager'
 ```
 

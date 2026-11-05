@@ -129,7 +129,7 @@ function harness(options: {
       },
     ],
     [
-      'mcpManager',
+      'mcpUiManager',
       { describeMcp: async (request: { entryId: string }) => ({ spec: options.http
         ? { type: 'http', url: `https://${request.entryId}.example.test/mcp` }
         : { type: 'stdio', command: `run-${request.entryId}` } }) },

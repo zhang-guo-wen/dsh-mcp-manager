@@ -17,7 +17,7 @@ paths:
 
 **两件事分两个开关:** composition 行上的 `disabled` = 用户**允不允许用**(禁用 = 完全不用:不进系统提示里的清单,
 `mcp_load` 拒绝);`loading` 模式 = 允许的服务器**什么时候进上下文**。后者是
-`mcp-manager` 用户设置(默认值取自 host 插件的 `Config`)**+ UI 三选一**。三种取值:
+`mcp-manager-ui` 用户设置(默认值取自 host 插件的 `Config`)**+ UI 三选一**。三种取值:
 
 - `eager`:允许的行照常挂载;不注册按需工具。
 - `dynamic`(默认):允许的行**默认不挂载**(见「预加载闸门」);`mcp_load` 用 MCP SDK 直连一条**共享连接**

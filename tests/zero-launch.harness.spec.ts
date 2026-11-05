@@ -53,7 +53,7 @@ async function setup(config: Record<string, unknown>) {
   } as never
   const entry = new Entry(ctx.get('loader'))
   entry.parent = ctx.get('loader').root
-  entry.options = { id: 'mcp-manager', name: '@guowenzhang/dsh-mcp-manager' }
+  entry.options = { id: 'mcp-manager-ui', name: '@guowenzhang/dsh-mcp-manager' }
   await ctx.extend({ [Entry.key]: entry }).plugin(plugin, config)
   return { ctx, fixture }
 }
@@ -71,7 +71,7 @@ async function declare(ctx: Context) {
   })
 }
 
-const gateState = async (ctx: Context) => await (ctx.get('mcpManager') as {
+const gateState = async (ctx: Context) => await (ctx.get('mcpUiManager') as {
   gateState(request: object): Promise<{ suppressed: string[] }>
 }).gateState({})
 
@@ -142,7 +142,7 @@ describe('startup zero-launch in a real Loader composition', () => {
     expect(fixture.applyCalls).toBe(1)
     const entry = new Entry(ctx.get('loader'))
     entry.parent = ctx.get('loader').root
-    entry.options = { id: 'mcp-manager', name: '@guowenzhang/dsh-mcp-manager' }
+    entry.options = { id: 'mcp-manager-ui', name: '@guowenzhang/dsh-mcp-manager' }
     await ctx.extend({ [Entry.key]: entry }).plugin(plugin, {})
     await vi.waitFor(async () => {
       expect((await gateState(ctx)).suppressed).toContain(ROW_KEY)

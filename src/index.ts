@@ -2,7 +2,7 @@
  * MCP management plugin (host) with a browser settings section (client).
  *
  * Host: owns every `@deepseek-ai/dsh-mcp-client` composition row — global ones
- * and each agent preset's — through the `mcpManager` Remote namespace, holds the
+ * and each agent preset's — through the `mcpUiManager` Remote namespace, holds the
  * allowed rows out of every request until a session loads one, and applies the
  * per-row tool filters the settings surface stores. Client: `src/client` bundles
  * the MCP management section into a `window.__ModuleLoader__` handoff artifact
@@ -95,7 +95,7 @@ export const inject = ['loader']
 
 /**
  * Register the on-demand MCP tools, the preload gate that follows the loading
- * mode, the live settings fields, and the `mcpManager` Remote.
+ * mode, the live settings fields, and the `mcpUiManager` Remote.
  * @param ctx - plugin context.
  * @param config - the row's resolved configuration.
  */

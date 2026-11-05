@@ -15,7 +15,7 @@ import type { Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 
 /** Settings namespace owned by this plugin: its Loader row id. */
-export const MCP_SETTINGS_NAMESPACE = 'mcp-manager'
+export const MCP_SETTINGS_NAMESPACE = 'mcp-manager-ui'
 
 /** Every field the MCP management surface persists. */
 export interface McpSettingsFlags {

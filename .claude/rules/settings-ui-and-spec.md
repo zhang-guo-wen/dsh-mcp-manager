@@ -21,7 +21,7 @@ paths:
 
 **Agent 显示名复用宿主**：传给页面的预设保留 `{id,name?}`，不可提前 `name ?? id` 抹掉内置预设判据。由 `settings.agentPreset` 字典 + `@deepseek-ai/dsh-agent-preset-registry/display` 的公共纯 helper 在 render 时解析（本包 `preset-name.ts` 仅包缺字典回退），筛选菜单、卡片平面芯片、新增目标与编辑范围共用 resolver，写入/筛选始终用原始 id。自定义 name（含空串）不翻译；缺字典退回 id。不要为显示名调会等待 activation audit 的 registry RPC，不复制中文映射，不 runtime-import UI 插件；构建仅把无 import 的 `/display` 精确内联，不请求宿主动态 ModuleLoader 子路径。
 
-一个 `settings.section`(id `mcp-manager`,order 14)承载插件的两面,**页内用 `SegmentedTabs` 分「服务器」/「设置」**
+一个 `settings.section`(id `mcp-manager-ui`,order 14)承载插件的两面,**页内用 `SegmentedTabs` 分「服务器」/「设置」**
 (2026-10-16 起两页合并;此前是第二条 `settings.section`,order 15 与内置插件区撞号、在侧栏里排不到一起,
 被读成"同一个插件两个页面";同日第二轮把第二个页签从「上下文」改名「设置」并把加载方式移进它)。
 名册是**一个列表**,两个平面用列表内的分组标题分开,全局恒在最前 **(更早一轮已不再有平面 tab)**。约束:

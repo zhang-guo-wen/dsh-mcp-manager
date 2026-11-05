@@ -26,7 +26,7 @@ async function setup() {
   ctx.loader.internal = { import: async (name: string) => {
     if (name === '@deepseek-ai/dsh-scope') return scopes
     if (name === '@deepseek-ai/dsh-mcp-client') return { name: 'fixture-mcp', apply() {} }
-    if (name === 'pending-manager') return { name: 'pending-manager', inject: ['mcpManager'], apply() {} }
+    if (name === 'pending-manager') return { name: 'pending-manager', inject: ['mcpUiManager'], apply() {} }
     throw new Error(`unexpected fixture module ${name}`)
   } } as never
   return { ctx, definitions, sections }
@@ -47,11 +47,11 @@ async function mountPreset(ctx: Context) {
 async function start(ctx: Context) {
   const entry = new Entry(ctx.get('loader'))
   entry.parent = ctx.get('loader').root
-  entry.options = { id: 'mcp-manager', name: '@guowenzhang/dsh-mcp-manager' }
+  entry.options = { id: 'mcp-manager-ui', name: '@guowenzhang/dsh-mcp-manager' }
   return await ctx.extend({ [Entry.key]: entry }).plugin(plugin, {})
 }
 
-const mcpRows = async (ctx: Context) => await (ctx.get('mcpManager') as any).listMcps({})
+const mcpRows = async (ctx: Context) => await (ctx.get('mcpUiManager') as any).listMcps({})
 
 describe('built plugin import and activation on latest Harness', () => {
   it('imports the distributed artifact and completes activation beside pending manager injection', async () => {
@@ -61,7 +61,7 @@ describe('built plugin import and activation on latest Harness', () => {
       throw new Error('must not wait for registry diagnostics')
     })
     await start(ctx)
-    expect(ctx.get('mcpManager')).toBeDefined()
+    expect(ctx.get('mcpUiManager')).toBeDefined()
     expect(definitions.has('mcp_load')).toBe(true)
     expect(definitions.has('mcp_unload')).toBe(true)
     expect(definitions.has('mcp_call')).toBe(false)
@@ -74,10 +74,10 @@ describe('built plugin import and activation on latest Harness', () => {
     const first = await start(ctx)
     const agent = scopes.createScope(ctx, {})
     await ctx.get('agentPresets').mount(agent.ctx)
-    await (ctx.get('mcpManager') as any).gateState({})
+    await (ctx.get('mcpUiManager') as any).gateState({})
     await first.dispose()
     await start(ctx)
-    expect((await (ctx.get('mcpManager') as any).gateState({})).suppressed).toContain('preset:standard:test-server')
+    expect((await (ctx.get('mcpUiManager') as any).gateState({})).suppressed).toContain('preset:standard:test-server')
     const rows = await ctx.get('agentPresets').compositionInventory()
     expect(rows[0]?.rows.find(row => row.moduleName === '@deepseek-ai/dsh-mcp-client')?.enabled).toBe(false)
   })
@@ -89,7 +89,7 @@ describe('built plugin import and activation on latest Harness', () => {
     const scope = scopes.createScope(ctx, {})
     await ctx.get('agentPresets').mount(scope.ctx)
     await vi.waitFor(async () => {
-      expect((await (ctx.get('mcpManager') as any).gateState({})).suppressed).toContain('preset:standard:test-server')
+      expect((await (ctx.get('mcpUiManager') as any).gateState({})).suppressed).toContain('preset:standard:test-server')
     })
     await vi.waitFor(() => {
       expect(sections[0].text({ scope: scopes.scopeOf(scope.ctx) })).toContain('- test-server')

@@ -93,13 +93,13 @@ interface HmrService {
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    /** Host owner of the `mcpManager` Remote namespace. */
-    mcpManager: McpManager
+    /** Host owner of the `mcpUiManager` Remote namespace. */
+    mcpUiManager: McpManager
   }
 }
 
 /**
- * Host service behind the `mcpManager` Remote namespace. Preset mutations
+ * Host service behind the `mcpUiManager` Remote namespace. Preset mutations
  * update the resolved user's composition file; global mutations use the one
  * unpatched root Include so Loader lifecycle and file state remain aligned.
  */
@@ -138,7 +138,7 @@ export class McpManager extends TypertRemoteService {
     private readonly optimize: () => McpOptimizeFlags,
     private readonly catalog: McpCatalog<LazyTool> = new McpCatalog<LazyTool>(),
   ) {
-    super(ctx, 'mcpManager')
+    super(ctx, 'mcpUiManager')
   }
 
   /** Register MCP definitions supplied by a resource plugin without writing user configuration. */

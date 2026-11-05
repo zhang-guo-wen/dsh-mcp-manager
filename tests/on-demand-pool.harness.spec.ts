@@ -80,7 +80,7 @@ async function setup() {
       child.provide('tools', registry.service as never)
       // `mcp_load` resolves the row through the manager. The fixture's preset
       // rows carry their own config, so the call itself must not be needed.
-      child.provide('mcpManager', {
+      child.provide('mcpUiManager', {
         describeMcp: async () => { throw new Error('the fixture rows carry their own config') },
       } as never)
     },

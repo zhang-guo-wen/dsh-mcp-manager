@@ -11,7 +11,7 @@ paths:
 ## 工具过滤(src/mcp-tool-filter.ts)
 
 一台服务器几十个工具、常用只有几个时,`mcp_load` 一次就把全部 schema 倒进会话历史。过滤规则存在
-`mcp-manager` 设置的 `tools` 字段里,键是 `mcpRowKey(target, serverName)`,值是一个字符串数组:
+`mcp-manager-ui` 设置的 `tools` 字段里,键是 `mcpRowKey(target, serverName)`,值是一个字符串数组:
 
 - 不带 `!` 的条目 = 保留(allow);只要有一个 allow 条目,这台服务器就是**白名单**;
 - `!` 开头的条目 = 隐藏(deny);只有 deny 条目时是**黑名单**;

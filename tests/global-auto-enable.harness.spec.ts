@@ -72,7 +72,7 @@ async function bareProfile(dir: string): Promise<void> {
     },
   })
   const fixture = createMcpClientFixture()
-  const basePatches = [{ insert: [{ id: 'mcp-manager', name: MANAGER }] }]
+  const basePatches = [{ insert: [{ id: 'mcp-manager-ui', name: MANAGER }] }]
   let includeEntry: Entry | undefined
   ctx.loader.internal = {
     import: async (specifier: string) => {
@@ -107,7 +107,7 @@ async function bareProfile(dir: string): Promise<void> {
   await settle()
 }
 
-const managerOf = (ctx: Context): Manager => ctx.get('mcpManager') as Manager
+const managerOf = (ctx: Context): Manager => ctx.get('mcpUiManager') as Manager
 
 describe('automatic global Include creation', () => {
   it('creates the profile Include on the first roster read, once', async () => {
@@ -170,7 +170,7 @@ describe('automatic global Include creation', () => {
     } as never
     await ctx.loader.create({
       id: 'include', name: 'cordis:include',
-      config: { path: './cordis.yml', patches: [{ insert: [{ id: 'mcp-manager', name: MANAGER }] }] },
+      config: { path: './cordis.yml', patches: [{ insert: [{ id: 'mcp-manager-ui', name: MANAGER }] }] },
     } as never)
     await ctx.loader.await()
     await settle()

@@ -8,18 +8,18 @@ paths:
   - "src/preset-source.ts"
 ---
 
-> 覆盖：`mcp-manager` 设置命名空间与畸形值收敛、MCP 行的两条写入路径（改 Include 文件 + `Include.refresh()` / `configEditor.edit`）、配置诊断、名册读取（声明 vs live）与全局/行级可写判据。何时读：改设置命名空间、行写入、配置诊断或名册读取时。
+> 覆盖：`mcp-manager-ui` 设置命名空间与畸形值收敛、MCP 行的两条写入路径（改 Include 文件 + `Include.refresh()` / `configEditor.edit`）、配置诊断、名册读取（声明 vs live）与全局/行级可写判据。何时读：改设置命名空间、行写入、配置诊断或名册读取时。
 
 # 设置命名空间、行编写、诊断与名册
 
 ## 设置命名空间(src/settings.ts)
 
-`mcp-manager` 命名空间属于本插件,字段四个:`loading`(加载模式)、`descriptions`(行描述)、
+`mcp-manager-ui` 命名空间属于本插件,字段四个:`loading`(加载模式)、`descriptions`(行描述)、
 `tools`(每行工具过滤规则)、`optimize`(上下文预算策略,见「优化策略」)。键统一是
 `mcpRowKey(target, serverName)`(`preset:<id>:<name>` / `global:<name>`),`optimize` 例外——它是全局策略,不分行。
 
 **schema 用 `z.dict(z.any())`,不要在设置 schema 里校验规则。** 设置由用户手写在 active profile 的 `cordis.patch.yml` 里,
-schema 拒绝一个字段会让**整个 `mcp-manager` 命名空间**回退到上一次好的值(warn 后静默失效),
+schema 拒绝一个字段会让**整个 `mcp-manager-ui` 命名空间**回退到上一次好的值(warn 后静默失效),
 所以畸形值必须在读取时收敛:`parseMcpToolFilter` 跳过无法解析的条目,空规则不过滤任何东西,
 `parseMcpOptimizeFlags` 把每个 `optimize` 字段收敛到默认值(越界数字夹到区间,类型不对取默认)。
 

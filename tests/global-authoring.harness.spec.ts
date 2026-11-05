@@ -108,7 +108,7 @@ async function shapeA(dir: string, patches: readonly unknown[] = []): Promise<vo
     config: {
       path: './cordis.yml',
       patches: [{ insert: [
-        { id: 'mcp-manager', name: MANAGER },
+        { id: 'mcp-manager-ui', name: MANAGER },
         { id: 'mcps', name: 'cordis:include', config: { path: pathToFileURL(join(dir, 'mcps.yml')).href } },
         ...patches,
       ] }],
@@ -118,7 +118,7 @@ async function shapeA(dir: string, patches: readonly unknown[] = []): Promise<vo
   await settle()
 }
 
-const managerOf = (ctx: Context): Manager => ctx.get('mcpManager') as Manager
+const managerOf = (ctx: Context): Manager => ctx.get('mcpUiManager') as Manager
 
 describe('global row authoring through the settings page', () => {
   it('toggles a row the user Include declares, and leaves the anchor and its patch layer alone', async () => {
@@ -269,7 +269,7 @@ describe('global row authoring through the settings page', () => {
     await ctx.loader.create({
       id: 'include', name: 'cordis:include',
       config: { path: './cordis.yml', patches: [{ insert: [
-        { id: 'mcp-manager', name: MANAGER },
+        { id: 'mcp-manager-ui', name: MANAGER },
         rowOptions(ROW),
       ] }] },
     } as never)

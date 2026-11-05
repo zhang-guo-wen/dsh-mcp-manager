@@ -38,7 +38,7 @@ import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 
 /** Settings namespace registered Host-side by @guowenzhang/dsh-mcp-manager: its Loader row id. */
-export const MCP_SETTINGS_NS = 'mcp-manager'
+export const MCP_SETTINGS_NS = 'mcp-manager-ui'
 
 /** Lifecycle phase of one MCP row, as its owning fiber reports it. */
 export type McpPhase = McpFiberPhase

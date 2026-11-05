@@ -110,13 +110,13 @@ describe('global plane zero-launch with a real file-backed Include', () => {
     // The built artifact, mounted the way the host loads it.
     const entry = new Entry(ctx.get('loader'))
     entry.parent = ctx.get('loader').root
-    entry.options = { id: 'mcp-manager', name: '@guowenzhang/dsh-mcp-manager' }
+    entry.options = { id: 'mcp-manager-ui', name: '@guowenzhang/dsh-mcp-manager' }
     await ctx.extend({ [Entry.key]: entry }).plugin(plugin, {})
     // The composition file mounts after the plugin is active, which is the
     // order a profile uses: the bundle layer declares the manager first.
     await mountInclude(ctx)
     await vi.waitFor(async () => {
-      const state = await (ctx.get('mcpManager') as {
+      const state = await (ctx.get('mcpUiManager') as {
         gateState(request: object): Promise<{ suppressed: string[] }>
       }).gateState({})
       expect(state.suppressed).toContain(ROW_KEY)
@@ -286,11 +286,11 @@ const globalRowEntry = (ctx: Context) => [...(ctx.loader.entries() as Iterable<{
   readonly fiber?: { readonly uid: number | null } | undefined
 }> )].find(entry => entry.options.name === MCP)
 
-const gateState = async (ctx: Context) => await (ctx.get('mcpManager') as {
+const gateState = async (ctx: Context) => await (ctx.get('mcpUiManager') as {
   gateState(request: object): Promise<{ suppressed: string[] }>
 }).gateState({})
 
-const mcpRoster = async (ctx: Context) => await (ctx.get('mcpManager') as {
+const mcpRoster = async (ctx: Context) => await (ctx.get('mcpUiManager') as {
   listMcps(request: object): Promise<Record<string, unknown>>
 }).listMcps({})
 
@@ -347,7 +347,7 @@ async function attachRig(ctx: Context, file: string, fixture: McpClientFixture):
       } as never)
       // A global row has no captured declaration, so `mcp_load` reads its spec
       // through the manager. The stub answers with what the file declares.
-      child.provide('mcpManager', {
+      child.provide('mcpUiManager', {
         describeMcp: async () => ({ spec: {
           type: 'stdio', serverName: ROW, command: 'fixture-server', args: [], env: {},
         } }),

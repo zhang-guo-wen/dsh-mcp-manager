@@ -3,7 +3,13 @@
 # the same service twice and fail the whole plugin tree at boot, so this row
 # backs off when an earlier composed row already mounts the package. The
 # mirrored guard in that bundle's patch covers the opposite install order.
+#
+# The row id is `mcp-manager-ui`, not `mcp-manager`: the shipped DeepSeek
+# Harness Web composition (and 0.2.2+ Desktop) mounts its own
+# `@deepseek-ai/dsh-mcp-manager` on the `mcp-manager` row, and this plugin's
+# Settings namespace is its Loader row id. A distinct id keeps both plugins
+# mountable and keeps `mcp-manager-ui` addressing this plugin's Config.
 - insert:
-    - id: mcp-manager
+    - id: mcp-manager-ui
       name: '@guowenzhang/dsh-mcp-manager'
-      disabled: !!js "[...ctx.loader.entries()].some((e) => e.options.name === '@guowenzhang/dsh-mcp-manager' && e.options.id !== 'mcp-manager' && !e.disabled)"
+      disabled: !!js "[...ctx.loader.entries()].some((e) => e.options.name === '@guowenzhang/dsh-mcp-manager' && e.options.id !== 'mcp-manager-ui' && !e.disabled)"

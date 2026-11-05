@@ -281,10 +281,10 @@ export function listMcpRows(ctx: Context, gate: McpPreloadGate, external?: Exter
 
 /** Read one row's connection spec through the authoring owner. */
 async function describeRow(ctx: Context, row: McpRow): Promise<McpSpec> {
-  const owner = ctx.get('mcpManager') as
+  const owner = ctx.get('mcpUiManager') as
     | { describeMcp(request: { target: McpTarget; entryId: string }): Promise<{ spec: McpSpec }> }
     | undefined
-  if (owner === undefined) throw new Error('mcp_load requires the mcpManager service')
+  if (owner === undefined) throw new Error('mcp_load requires the mcpUiManager service')
   if (row.presetConfig !== undefined) return specFromEntryConfig(row.presetConfig as McpEntryConfig)
   return (await owner.describeMcp({ target: row.target, entryId: row.entryId })).spec
 }

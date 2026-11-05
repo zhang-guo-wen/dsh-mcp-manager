@@ -1,9 +1,9 @@
 /**
- * Typert Remote contribution for the `mcpManager` namespace.
+ * Typert Remote contribution for the `mcpUiManager` namespace.
  *
  * Mirror of the artifact `@deepseek-ai/dsh-typert-generator` emits for a Host
  * Remote owner: the browser half mounts it with `ctx.remote.$mount`, which
- * installs a `remote.mcpManager` service exposing add/edit/disable. The
+ * installs a `remote.mcpUiManager` service exposing add/edit/disable. The
  * codecs are permissive (`parse` passes any value through) because the Host
  * gateway re-derives its own descriptor from the service method signature
  * (`packages/api/gateway` `srcDescriptor`) and validates there; the Client only
@@ -19,7 +19,7 @@ import type {
 } from '@deepseek-ai/dsh-typert-protocol'
 
 /** Wire namespace and Cordis service key of the MCP authoring owner. */
-export const REMOTE_NAMESPACE = 'mcpManager'
+export const REMOTE_NAMESPACE = 'mcpUiManager'
 
 /** Permissive strict codec: accepts any value, returns it unchanged. */
 const passthrough: TypertSchema<unknown> = { parse: value => value }

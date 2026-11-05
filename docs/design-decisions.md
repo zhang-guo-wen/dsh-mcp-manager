@@ -294,7 +294,7 @@ kind: "package-reference"
 
 ### D16 优化策略粒度分三层，页内「上下文」页签（2026-10-15，2026-10-16 合并入口）
 
-- **结论**：上下文预算由 MCP 设置页的第二个页签（设置 → MCP 管理 → 上下文）控制，字段全部存在 `mcp-manager` 命名空间的 `optimize` 开映射里，由 `parseMcpOptimizeFlags` 在读点收敛。粒度分三层，互不替代：
+- **结论**：上下文预算由 MCP 设置页的第二个页签（设置 → MCP 管理 → 上下文）控制，字段全部存在 `mcp-manager-ui` 命名空间的 `optimize` 开映射里，由 `parseMcpOptimizeFlags` 在读点收敛。粒度分三层，互不替代：
   1. **选择**：`mcp_load` 的 `query`（词法匹配，无 embedding）与 `tool`（按名取一个）收窄本次会话**能调用**的集合；**载体不变**——`dynamic` 一律 `native`，收窄只决定注册哪些定义（D8）。已经加载过的服务器再给新 `query` 只会**加宽**（`widen`），永不收窄。
   2. **列表**：`cursor` / `limit` 只分页**结果**，不改变会话能调用的工具（分页是上下文预算，不是能力开关）。默认 `pageSize` 10。
   3. **形态**：`namesOnly` 默认让 `mcp_load` 只带名称与描述；按名字要一个工具（`tool`）时默认 `full`，因为那正是要参数的时机。
@@ -313,7 +313,7 @@ kind: "package-reference"
 
 #### 合并入口（2026-10-16）
 
-- **结论**：策略面与名册面合并为**一个** `settings.section`（id `mcp-manager`，order 14），页内用 `SegmentedTabs` 分「服务器 / 上下文」；第二条注册（id `mcp-manager-optimize`）删除。
+- **结论**：策略面与名册面合并为**一个** `settings.section`（id `mcp-manager-ui`，order 14），页内用 `SegmentedTabs` 分「服务器 / 上下文」；第二条注册（id `mcp-manager-optimize`）删除。
 - **理由**（用户反馈 + 源码核对）：宿主设置壳的 `settings.section` 契约只有 `id` / `order` / `label` 三个选项，没有分组或子级导航，所以一个插件注册两次必然多出一行侧栏入口；而那条注册用的 `order: 15` 与内置插件区（`plugins`）和服务管理（`service-manager`）撞号，稳定排序把「MCP 优化」排到了「内置插件」后面，两个 MCP 入口不相邻；`navIcon()` 只认五个固定 id，两个入口又都拿到同一枚兜底齿轮图标。实现者在注释里写的"正交的另一个问题"是**实现轴**，用户轴是「作用域 × 配置/状态 × 生效时机」，按用户轴这两面属于同一个任务。
 - **代价**：深层链接不再能直接打开策略面（宿主设置壳本来也没有按 section 的 URL）；「上下文」页签在名册读取完成前也会挂载（读的是一次内存快照，开销可忽略）。
 - **被否决**：保留两条注册、只错开 `order` 并改名（侧栏仍是两行、仍需用户自己判断去哪一页）；为页内分区再声明一个子 slot（为插件内部的两页引入 slot 机制，除非将来还要加第三个 MCP 页）。
