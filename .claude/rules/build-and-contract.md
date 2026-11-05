@@ -34,7 +34,7 @@ paths:
   去重、按每会话 claim 计数释放。纯 Map + `node:crypto`,不 import harness 包,vitest 直接跑。
 - `src/mcp-modules.ts` —— 宿主包名常量(`MCP_CLIENT_MODULE` / `AGENT_PRESET_MODULE`),gate 与组合读取共用一份拼写。
 - `lib/` —— 构建产物:**已提交进仓库**(`index.mjs` host + `client.js` 浏览器 handoff),
-  这样别人可以直接从 git 安装。改完源码**记得 `npm run build` 并把 `lib/` 一起提交**。
+  这样别人可以直接从 git 安装。改完源码**记得 `pnpm run build` 并把 `lib/` 一起提交**。
 - `cordis.patch.yml` —— 把插件行插入组合的 bundle 层。
 - `src/remote.ts` —— 手写的客户端 `TYPERT_REMOTE` 贡献对象。
 - `src/client/agent-filter.ts` —— Agent 平面按预设过滤的纯规则(可选值、收窄后的行)。它只认 roster 行的
@@ -50,7 +50,7 @@ paths:
 
 ## 构建
 
-`npm run build` 跑两段打包:
+`pnpm run build` 跑两段打包:
 
 - host:`tsdown` 打 `src/index.ts` → `lib/index.mjs`,所有 `@deepseek-ai/*` 与 `@modelcontextprotocol/*` 保持 external。
 - client:`build-client.mjs`(rolldown)→ `lib/client.js`,包成 `window.__ModuleLoader__.load({ id, factory })`,
@@ -106,7 +106,7 @@ client 产物变了由 Host 的内容 revision 切换 bundle;必要时刷新浏�
 `master` 上的临时提交不会被他们拿到。
 
 1. 改根 `package.json` 的 `version`。
-2. `npm run build`,确认 `lib/index.mjs` 与 `lib/client.js` 是最新的。
+2. `pnpm run build`,确认 `lib/index.mjs` 与 `lib/client.js` 是最新的。
 3. 提交源码与 `lib/`(不要把 `lib/` 落在外面的工作区)。
 4. 打带注释的 tag 并推送:
 
@@ -161,5 +161,5 @@ npx @deepseek-ai/dsh plugin --profile web remove @guowenzhang/dsh-mcp-manager
 ## 类型检查
 
 ```sh
-npm run typecheck   # tsc --noEmit -p tsconfig.json
+pnpm run typecheck   # tsc --noEmit -p tsconfig.json
 ```

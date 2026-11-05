@@ -2,6 +2,7 @@
   "name": "@guowenzhang/dsh-mcp-manager",
   "description": "MCP server management for DeepSeek Harness: author composition rows, choose when an allowed server loads, and filter which of its tools a session may call",
   "version": "1.7.0",
+  "packageManager": "pnpm@11.28.9",
   "type": "module",
   "license": "Apache-2.0",
   "publishConfig": {
@@ -70,7 +71,7 @@
     "test:metadata": "node --test tests/plugin-metadata.test.mjs",
     "build": "tsdown -c tsdown.config.ts && node build-client.mjs",
     "test": "vitest run",
-    "test:harness": "npm run build && vitest run --config vitest.harness.config.ts",
+    "test:harness": "pnpm run build && vitest run --config vitest.harness.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "peerDependencies": {

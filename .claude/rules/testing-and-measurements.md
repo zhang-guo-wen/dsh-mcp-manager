@@ -6,40 +6,40 @@ paths:
   - "docs/testing.md"
 ---
 
-> 覆盖：测试命令与覆盖矩阵、隔离实例的测量数据（启动零拉起 / 常驻复用 / `eager` 对照）与未覆盖项（自原「工程契约与历史台账」拆出）。何时读：跑 `npm test` / `npm run test:harness`、复现实测读数，或更新验证记录时。
+> 覆盖：测试命令与覆盖矩阵、隔离实例的测量数据（启动零拉起 / 常驻复用 / `eager` 对照）与未覆盖项（自原「工程契约与历史台账」拆出）。何时读：跑 `pnpm test` / `pnpm run test:harness`、复现实测读数，或更新验证记录时。
 
 # 测试与测量数据
 
 ## 测试
 
-`npm test` 跑 `vitest run`,配置在仓根 `vitest.config.ts`。**必须带这份本地配置**:本仓是 harness checkout
+`pnpm test` 跑 `vitest run`,配置在仓根 `vitest.config.ts`。**必须带这份本地配置**:本仓是 harness checkout
 的**兄弟目录**而不是它的 workspace,裸 `vitest run` 会继承 harness 根配置,一个 spec 都收不到
 (`No test files found`)。配置把 `root` 钉在本仓，排除需要真实源码的 `*.harness.spec.ts`。
 
-`npm run test:harness` 先重建分发产物，再跑真实 Loader/registry/scope 的兼容测试。
+`pnpm run test:harness` 先重建分发产物，再跑真实 Loader/registry/scope 的兼容测试。
 默认宿主位置为 `../../deepseek-harness`，可用 `DSH_HARNESS_ROOT` 指定其它 checkout。
 覆盖导入/启动、pending Host injection、分组与表达式禁用、旧代/子代理、manager-only 重载和清单隔离。
 
-`npm test` 现在是 **21 个 spec 文件 / 219 项**：合并进来的 UI 规范收敛一侧新增 `tests/client-css.spec.ts`
+`pnpm test` 现在是 **21 个 spec 文件 / 219 项**：合并进来的 UI 规范收敛一侧新增 `tests/client-css.spec.ts`
 （TSX↔CSS 类名双向、token/圆角/焦点环/字号成对）与 `tests/config-issues.spec.ts`（诊断文案进字典）；本轮新增
 `tests/mcp-pool.spec.ts`、`tests/fiber-publication.spec.ts`、
 `tests/mcp-gate.spec.ts` 的 6 项**挂载前拦截**用例（`update` 直接返回、`init` 从未调用、`fiber` 保持 undefined；
 非本插件的行与 `eager` 下立即还原；切回 `eager` 能撤销遮蔽并真正挂载）、全局平面的读取/拦截单测，以及
 **`tests/mcp-row-state.spec.ts`（`rowAllowed`：明确 `false` 压过 `suppressed` 兜底）与全局写入目标/行级只读的单测**。
-`npm run test:harness` 是 **6 个 harness spec / 25 项**（`zero-launch`（4 项）、`global-zero-launch`（**5 项**：
+`pnpm run test:harness` 是 **6 个 harness spec / 25 项**（`zero-launch`（4 项）、`global-zero-launch`（**5 项**：
 全局行在 `dynamic`/`lazy` 下不被 import、`eager` 下照常挂载、被 hold 的行能按需加载、组合已挂载的行由 late hold 接管、
 切回 `eager` 后连用户文件一起完好）、`on-demand-pool`、`plugin-startup`、`preset-compat`、`global-toggle`）。
-**2026-10-16 快照(合并 + 全局行开关修复后，最终产物)**：`npm test` **19/204 通过**、`npm run test:harness` **6/25 通过**、
-`npm run typecheck` 与 `npm run build` 通过；产物 `lib/index.mjs` = `121B8C0A…`、`lib/client.js` = `E1B1051A…`。
-**2026-10-16 合并快照（UI 规范收敛 + 「MCP 优化」设置页，当前工作树）**：`npm test` **21/219 通过**、
-`npm run test:harness` **6/25 通过**、`npm run test:metadata` 通过、`npm run typecheck` 与 `npm run build` 通过、
+**2026-10-16 快照(合并 + 全局行开关修复后，最终产物)**：`pnpm test` **19/204 通过**、`pnpm run test:harness` **6/25 通过**、
+`pnpm run typecheck` 与 `pnpm run build` 通过；产物 `lib/index.mjs` = `121B8C0A…`、`lib/client.js` = `E1B1051A…`。
+**2026-10-16 合并快照（UI 规范收敛 + 「MCP 优化」设置页，当前工作树）**：`pnpm test` **21/219 通过**、
+`pnpm run test:harness` **6/25 通过**、`pnpm run test:metadata` 通过、`pnpm run typecheck` 与 `pnpm run build` 通过、
 `node _team/audit-ui-standard.mjs dsh-mcp-manager` **0 项**；产物 `lib/index.mjs` = `121B8C0A…`、
 `lib/client.js` = `1D0FC432…`（合并后重建）。上一条与 `docs/testing.md` 里的 `E1B1051A…` client 产物是**合并前**
 main 侧的历史读数。
-**2026-10-16 名册与弹窗 UI 七轮改（D26–D32，当前产物）**：`npm test` **23/258 通过**（新增
+**2026-10-16 名册与弹窗 UI 七轮改（D26–D32，当前产物）**：`pnpm test` **23/258 通过**（新增
 `tests/mcp-spec.spec.ts` 5 项：服务器名推断；`tests/mcp-tokens.spec.ts` 5 项：工具 token 估算；删
-`tests/claude-import.spec.ts` 11 项：导入功能已按需求移除）、`npm run test:harness` **6/25 通过**、
-`npm run test:metadata` 通过、`npm run typecheck` / `npm run build` 通过；产物 `lib/index.mjs` = `2771BA61…`、
+`tests/claude-import.spec.ts` 11 项：导入功能已按需求移除）、`pnpm run test:harness` **6/25 通过**、
+`pnpm run test:metadata` 通过、`pnpm run typecheck` / `pnpm run build` 通过；产物 `lib/index.mjs` = `2771BA61…`、
 `lib/client.js` = `4FEC5E73…`。浏览器实测（名册行右侧对齐与上下居中、平面标记芯片、页签全宽、新增弹窗一个落点
 下拉、全局不可写时的灰项与原因、必填 `*` 与自动命名、工具列表 token 与居中 loading、设置页无残留描述、名册无导入
 按钮、JSON 校验落在字段标签行且失焦才判、工具页签无加载按钮且进页签即列举）见 [docs/testing.md](../docs/testing.md)

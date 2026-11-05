@@ -37,15 +37,15 @@
 ## 构建与测试
 
 ```sh
-npm run build          # host:tsdown 打 src/index.ts → lib/index.mjs（@deepseek-ai/* 与 @modelcontextprotocol/* 保持 external）
+pnpm run build          # host:tsdown 打 src/index.ts → lib/index.mjs（@deepseek-ai/* 与 @modelcontextprotocol/* 保持 external）
                        # client:build-client.mjs(rolldown) → lib/client.js，包成 window.__ModuleLoader__.load({ id, factory })
-npm run typecheck      # tsc --noEmit -p tsconfig.json
-npm test               # vitest run，配置在仓根 vitest.config.ts，排除需要真实源码的 *.harness.spec.ts
-npm run test:harness   # 先重建分发产物，再跑真实 Loader/registry/scope 兼容测试；默认宿主 ../../deepseek-harness，
+pnpm run typecheck      # tsc --noEmit -p tsconfig.json
+pnpm test               # vitest run，配置在仓根 vitest.config.ts，排除需要真实源码的 *.harness.spec.ts
+pnpm run test:harness   # 先重建分发产物，再跑真实 Loader/registry/scope 兼容测试；默认宿主 ../../deepseek-harness，
                        # 可用 DSH_HARNESS_ROOT 指定其它 checkout
 ```
 
-- **改完源码必须 `npm run build`，并把 `lib/` 与源码一起提交** —— `lib/` 落在工作区外面就等于没交付。
+- **改完源码必须 `pnpm run build`，并把 `lib/` 与源码一起提交** —— `lib/` 落在工作区外面就等于没交付。
 - **Node 不解析 TC39 装饰器**：`tsdown.config.ts` 的 `lowerDecorators` transform（用 `typescript` 的
   `transpileModule`）负责降级含 `@装饰器` 的文件；少了它 `McpManager` 的 `@Remote` 会以原始语法留在
   `lib/index.mjs`，host 加载即崩。
