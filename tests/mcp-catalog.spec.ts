@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { McpCatalog, catalogIdentity, type McpCatalogStorage } from '../src/mcp-catalog.ts'
 import { mcpEntryConfig } from '../src/mcp-config.ts'
 
@@ -60,6 +60,9 @@ describe('durable MCP catalogue', () => {
 
   it('changes identity for local configuration and remote URL/headers without storing raw configuration', async () => {
     expect(catalogIdentity({ ...local, command: 'other' } as typeof local)).not.toBe(catalogIdentity(local))
+    expect(catalogIdentity({ ...local, args: ['--other'] } as typeof local)).not.toBe(catalogIdentity(local))
+    expect(catalogIdentity({ ...local, cwd: 'sub' } as typeof local)).not.toBe(catalogIdentity(local))
+    expect(catalogIdentity({ ...local, env: { TOKEN: 'secret' } } as typeof local)).not.toBe(catalogIdentity(local))
     expect(catalogIdentity({ ...remote, headers: { Authorization: 'other' } } as typeof remote)).not.toBe(catalogIdentity(remote))
     const db = storage()
     const catalog = new McpCatalog(db)
@@ -70,6 +73,27 @@ describe('durable MCP catalogue', () => {
     expect(text).not.toContain('Authorization')
     expect(text).not.toContain('secret')
     expect(text).not.toContain('example.test')
+  })
+
+  // Regression: the digest used to fold in `process.env` and the host's
+  // `process.cwd()`, so one unchanged stdio row produced a second record (and a
+  // duplicate row under the same name in the settings page) after the host was
+  // relaunched with any environment or working-directory difference.
+  it('keeps one identity for one unchanged row across host environment and working-directory changes', () => {
+    const config = { ...local, env: { TOKEN: 'secret' } } as typeof local
+    const before = catalogIdentity(config)
+    const previous = process.env.DSH_CATALOG_IDENTITY_PROBE
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue('D:\\another-host-cwd')
+    try {
+      process.env.DSH_CATALOG_IDENTITY_PROBE = 'changed'
+      expect(catalogIdentity(config)).toBe(before)
+      expect(catalogIdentity({ ...config, env: { TOKEN: 'rotated' } } as typeof local)).not.toBe(before)
+      expect(catalogIdentity({ ...config, cwd: 'sub' } as typeof local)).not.toBe(before)
+    } finally {
+      cwd.mockRestore()
+      if (previous === undefined) delete process.env.DSH_CATALOG_IDENTITY_PROBE
+      else process.env.DSH_CATALOG_IDENTITY_PROBE = previous
+    }
   })
 
   it('retains live invalidation bindings across declaration mutations and removes all aliases', async () => {

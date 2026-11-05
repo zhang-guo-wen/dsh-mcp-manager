@@ -9,11 +9,17 @@ export interface McpCatalogStorage {
   save(value: unknown, clear?: boolean): Promise<void>
 }
 
-/** Configuration digest; transport, credentials and effective local cwd/env participate. */
+/**
+ * Configuration digest; transport, credentials and the declared local cwd
+ * participate. The host process environment and working directory stay out of
+ * it: a stdio row inherits both, but they belong to the host launch rather than
+ * to the row, so they turn one unchanged server into a fresh identity — and
+ * therefore a duplicate record next to the old one — on the next launch.
+ */
 export function catalogIdentity(config: McpEntryConfig): string {
   const source = config.transport === 'stdio'
-    ? ['stdio', config.serverName, config.command, config.args, resolve(config.cwd || process.cwd()),
-      Object.entries({ ...process.env, ...config.env }).sort(([a], [b]) => a.localeCompare(b))]
+    ? ['stdio', config.serverName, config.command, config.args, config.cwd === '' ? '' : resolve(config.cwd),
+      Object.entries(config.env).sort(([a], [b]) => a.localeCompare(b))]
     : ['streamable-http', config.serverName, config.url, Object.entries(config.headers).sort(([a], [b]) => a.localeCompare(b))]
   return createHash('sha256').update(JSON.stringify(source)).digest('hex')
 }

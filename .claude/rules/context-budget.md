@@ -70,7 +70,7 @@ what they do without loading a server, and call \`mcp_load\` …`。
 - **`listAllTools(client, maxTools)` 是唯一的发现入口。** 游标按规范当**不透明字符串**:空串是合法游标,
   只有 `nextCursor === undefined` 才是结束(写成 `if (!next)` 会静默丢掉第二页);页数封顶 `MAX_TOOL_PAGES=64`,
   采集量封顶 `maxTools`,被截断时结果带 `truncated: true`。
-- **全部工具目录进 SQLite**：stdio 与 HTTP/SSE 统一以工具公开定义 + SHA-256配置摘要存入宿主 home/cache 下 profile 隔离的 catalog.sqlite。不读旧JSON、不双写、不保留云端memory-only流程。探测成功须 await flush；配置声明单独保存，失败探测不挡保存。
+- **全部工具目录进 SQLite**：stdio 与 HTTP/SSE 统一以工具公开定义 + SHA-256配置摘要存入宿主 home/cache 下 profile 隔离的 catalog.sqlite（摘要只含该行声明的配置，**不含宿主 `process.env` / `process.cwd()`**，否则重启换环境就会长出同名重复记录）。不读旧JSON、不双写、不保留云端memory-only流程。探测成功须 await flush；配置声明单独保存，失败探测不挡保存。
 - **新鲜度只有服务器声明**：删除catalogTtlMs设置、默认值、范围、控件和文案。本地stdio不按时间过期；HTTP有ttlMs时按该值过期、下一次检索限并发重新发现（即使searchIndex关闭）；HTTP无TTL长期保留，显式refreshCatalog只刷新当前启用HTTP/SSE、不spawn本地。通知list_changed依旧invalidate对应数据库记录；clear全部目录并await flush，epoch+DB generation防旧发现回写。
 - **`searchIndex` 只控制尚无目录的冷发现**（3并发、8秒预算）；关闭时仍允许刷新已知过期HTTP，未知服务器以pending返回。缓存必须先按当前允许行与连接摘要检索，不能从数据库恢复凭据或调用授权。
 - **收窄到空的加载不建立 mount。** `query` 没命中时返回空结果并关掉连接;`tool` 给的名字不存在时直接报错。

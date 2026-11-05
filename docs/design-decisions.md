@@ -54,7 +54,8 @@ kind: "package-reference"
 
 - **结论**：stdio 与 HTTP/SSE 全部写入 `profileContext.home/cache/dsh-mcp-manager/<sha256(profile.dir)>/catalog.sqlite`。不读旧JSON、不迁移/双写、不保留云端memory-only分支。探测成功须在RPC返回前写完，不保存声明；失败不影响用户直接保存。
 - **新鲜度**：删除手动catalogTtlMs。stdio长期保存；HTTP仅按服务器ttlMs过期，下一次检索可限并发重新发现；没有ttlMs则由refreshCatalog按钮显式刷新当前启用HTTP/SSE，绝不启动本地进程。tools/list_changed仍使目录失效，重启不重置fetchedAt。0 TTL本次发现可回答当前请求，但不复用下一请求。
-- **身份与安全**：SHA-256覆盖传输、namespace及连接配置，stdio纳入实际cwd/合并环境，HTTP纳入URL/排序headers；数据库只存摘要和公开工具定义，不存原始凭据。目录只供检索，实际调用仍开真实连接、仍先校验允许行与过滤规则。
+- **身份与安全**：SHA-256覆盖传输、namespace及连接配置——stdio 取 command/args/声明的 `cwd`/**行内** `env`，HTTP 取 URL/排序 headers；数据库只存摘要和公开工具定义，不存原始凭据。目录只供检索，实际调用仍开真实连接、仍先校验允许行与过滤规则。
+- **身份稳定性（2026-11-05 修正上一条）**：原实现把 `{...process.env, ...config.env}` 与 `resolve(cwd || process.cwd())` 折进摘要，于是宿主**换一次进程环境或工作目录**，同一行配置就算出一个新身份；`remember` 按身份插入，而全仓没有任何地方删除"同一行的旧身份"，设置页 `stats()` 一条记录一行、绑定缺失时回退成 `local:<label>`，于是同一台服务器显示成两行、总数虚高（实测 `profiles/desktop` 的 7 条记录里有 3 对 stdio 记录工具负载逐字节相同，仅身份不同；697 个工具 = 200+24+59 ×2 + 131）。现改为**纯配置摘要**：一行配置在任何一次启动里恒得同一身份，重新发现即原地更新。代价：宿主 PATH 之类变化不再自动失效目录（下次发现本来就会覆盖）。改行内 args/env/cwd 仍会留下一条旧记录（跨重启无法按行回收），靠「清空缓存」或后续按名清理收掉；旧记录永远命中不了 `getFor`，只是占 500 条 / 32 MiB 配额。
 - **写入**：Node内置SQLite，schema/user_version校验、短BEGIN IMMEDIATE事务与busy timeout，previous snapshot差异合并、共享clear generation拒绝旧writer复活；clear不删除数据库文件。500目录/32MiB逻辑payload上限，不承诺物理数据库页大小上限。坏库/未知schema拒绝覆盖、失败不假报成功，POSIX权限不等于Windows ACL。
 - **UI**：目录状态直接位于工具目录缓存标题下；catalogState纯状态不联网，refreshCatalog才刷新服务器，clearCatalog清全部。失败保留旧目录并逐台提示；没有TTL输入和额外兼容开关。
 
